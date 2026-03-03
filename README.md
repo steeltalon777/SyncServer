@@ -1,288 +1,113 @@
-# Server Sync API
+# SyncServer
 
-FastAPI приложение для синхронизации данных между серверами и устройствами. Система предназначена для отслеживания событий, управления устройствами и сайтами.
+FastAPI-сервис для синхронизации событий между устройствами и сервером. Проект использует асинхронный SQLAlchemy и ориентирован на работу с PostgreSQL. В текущем состоянии реализованы базовые модели (`sites`, `devices`, `events`), схемы для `push` и репозитории для CRUD/синхронизации.
 
-## 🚀 Быстрый старт
+## Что уже реализовано
 
-### Предварительные требования
-- Python 3.8+
-- PostgreSQL (или другая поддерживаемая СУБД)
-- Установленный pip
+- Асинхронное подключение к БД через `AsyncEngine`/`AsyncSession`.
+- Модели SQLAlchemy:
+  - `Site`
+  - `Device`
+  - `Event`
+- Репозитории:
+  - `SiteRepo`
+  - `DeviceRepo`
+  - `EventRepo`
+- Обработка `push`-событий:
+  - вставка нового события;
+  - дедупликация по `event_uuid` + `payload_hash`;
+  - выявление коллизии UUID (одинаковый `event_uuid`, разный payload).
+- Базовые служебные эндпоинты (`/`, `/db_check`) и простые эндпоинты для `sites`/`devices`.
 
-### Установка
+---
 
-1. Клонируйте репозиторий:
-```bash
-git clone <repository-url>
-cd "Server Sync API"
+## Архитектура
+
+```text
+main.py
+└── app/
+    ├── core/
+    │   ├── config.py      # чтение .env (Settings)
+    │   ├── db.py          # engine + sessionmaker + get_db
+    │   └── json_encoder.py
+    ├── models/
+    │   ├── base.py
+    │   ├── site.py
+    │   ├── device.py
+    │   └── event.py
+    ├── repos/
+    │   ├── site_repo.py
+    │   ├── device_repo.py
+    │   └── event_repo.py
+    └── schemas/
+        └── event.py
 ```
 
-2. Создайте виртуальное окружение и активируйте его:
+Подробная документация по коду и потокам данных: `docs/code-documentation.md`.
+Сопоставление с вашим ТЗ v1: `docs/tz-gap-analysis.md`.
+
+---
+
+## Запуск
+
+### 1) Установка
+
 ```bash
 python -m venv .venv
-# Для Windows:
-.venv\Scripts\activate
-# Для Linux/Mac:
 source .venv/bin/activate
-```
-
-3. Установите зависимости:
-```bash
 pip install -r requirements.txt
 ```
 
-4. Настройте переменные окружения:
+### 2) Настройка
+
 ```bash
-copy .env.example .env
-# Отредактируйте .env файл согласно вашей конфигурации
+cp .env.example .env
 ```
 
-5. Запустите приложение:
+Минимально заполните:
+
+```env
+DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/dbname
+APP_ENV=dev
+LOG_LEVEL=INFO
+```
+
+### 3) Старт сервера
+
 ```bash
 uvicorn main:app --reload
 ```
 
-Приложение будет доступно по адресу: http://localhost:8000
+---
 
-## 📁 Структура проекта
+## Важные замечания
 
-```
-Server Sync API/
-├── app/                    # Основное приложение
-│   ├── core/              # Основные настройки и утилиты
-│   │   ├── config.py      # Конфигурация приложения
-│   │   ├── db.py          # Настройки базы данных
-│   │   └── json_encoder.py # Кастомный JSON энкодер
-│   ├── models/            # SQLAlchemy модели
-│   │   ├── base.py        # Базовая модель
-│   │   ├── device.py      # Модель устройства
-│   │   ├── event.py       # Модель события
-│   │   ├── site.py        # Модель сайта
-│   │   └── __init__.py    # Инициализация моделей
-│   ├── repos/             # Репозитории для работы с данными
-│   │   ├── device_repo.py # Репозиторий устройств
-│   │   ├── event_repo.py  # Репозиторий событий
-│   │   └── site_repo.py   # Репозиторий сайтов
-│   └── schemas/           # Pydantic схемы
-│       └── event.py       # Схемы для событий
-├── main.py                # Основной файл приложения
-├── requirements.txt       # Зависимости Python
-├── .env.example          # Пример переменных окружения
-├── .gitignore            # Git ignore файл
-└── test_main.http        # HTTP тесты для API
-```
-
-## 🗄️ Модели данных
-
-### Устройство (Device)
-- **id**: Уникальный идентификатор устройства
-- **name**: Название устройства
-- **site_id**: Ссылка на сайт
-- **created_at**: Время создания
-- **updated_at**: Время последнего обновления
-
-### Событие (Event)
-- **id**: Уникальный идентификатор события
-- **device_id**: Ссылка на устройство
-- **event_type**: Тип события
-- **data**: Данные события в формате JSON
-- **timestamp**: Временная метка события
-- **created_at**: Время создания записи
-
-### Сайт (Site)
-- **id**: Уникальный идентификатор сайта
-- **name**: Название сайта
-- **created_at**: Время создания
-- **updated_at**: Время последнего обновления
-
-## 🔧 API Эндпоинты
-
-### События (Events)
-
-#### Получить все события
-```
-GET /events/
-```
-Параметры:
-- `skip`: Количество записей для пропуска (по умолчанию: 0)
-- `limit`: Максимальное количество записей (по умолчанию: 100)
-
-#### Создать новое событие
-```
-POST /events/
-```
-Тело запроса:
-```json
-{
-  "device_id": 1,
-  "event_type": "status_change",
-  "data": {"status": "online"},
-  "timestamp": "2024-01-01T12:00:00"
-}
-```
-
-#### Получить событие по ID
-```
-GET /events/{event_id}
-```
-
-#### Удалить событие
-```
-DELETE /events/{event_id}
-```
-
-### Устройства (Devices)
-
-#### Получить все устройства
-```
-GET /devices/
-```
-
-#### Создать новое устройство
-```
-POST /devices/
-```
-Тело запроса:
-```json
-{
-  "name": "Device 1",
-  "site_id": 1
-}
-```
-
-#### Получить устройство по ID
-```
-GET /devices/{device_id}
-```
-
-#### Обновить устройство
-```
-PUT /devices/{device_id}
-```
-
-#### Удалить устройство
-```
-DELETE /devices/{device_id}
-```
-
-### Сайты (Sites)
-
-#### Получить все сайты
-```
-GET /sites/
-```
-
-#### Создать новый сайт
-```
-POST /sites/
-```
-Тело запроса:
-```json
-{
-  "name": "Main Site"
-}
-```
-
-#### Получить сайт по ID
-```
-GET /sites/{site_id}
-```
-
-#### Обновить сайт
-```
-PUT /sites/{site_id}
-```
-
-#### Удалить сайт
-```
-DELETE /sites/{site_id}
-```
-
-## ⚙️ Конфигурация
-
-Основные переменные окружения (файл `.env`):
-
-```
-DATABASE_URL=postgresql://user:password@localhost/dbname
-SECRET_KEY=your-secret-key-here
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-```
-
-## 🧪 Тестирование
-
-Для тестирования API используйте файл `test_main.http` с HTTP клиентом (например, VS Code REST Client).
-
-Примеры запросов:
-```http
-### Получить все события
-GET http://localhost:8000/events/
-
-### Создать событие
-POST http://localhost:8000/events/
-Content-Type: application/json
-
-{
-  "device_id": 1,
-  "event_type": "test",
-  "data": {"message": "test event"},
-  "timestamp": "2024-01-01T12:00:00"
-}
-```
-
-## 🛠️ Технологии
-
-- **FastAPI** - Веб-фреймворк для создания API
-- **SQLAlchemy** - ORM для работы с базой данных
-- **Pydantic** - Валидация данных и сериализация
-- **PostgreSQL** - Основная база данных (поддерживаются другие через SQLAlchemy)
-- **Uvicorn** - ASGI сервер для запуска приложения
-
-## 📊 Особенности
-
-1. **Автоматическая документация API**: Доступна по адресам:
-   - Swagger UI: http://localhost:8000/docs
-   - ReDoc: http://localhost:8000/redoc
-
-2. **Кастомный JSON энкодер**: Поддержка сериализации datetime объектов
-
-3. **Асинхронная работа**: Все эндпоинты используют async/await
-
-4. **Валидация данных**: Автоматическая валидация входных данных через Pydantic
-
-5. **Обработка ошибок**: Единая система обработки ошибок
-
-## 🔄 Миграции базы данных
-
-Для создания миграций используйте Alembic:
-
-```bash
-# Инициализация Alembic
-alembic init migrations
-
-# Создание миграции
-alembic revision --autogenerate -m "Описание изменений"
-
-# Применение миграций
-alembic upgrade head
-```
-
-## 🤝 Вклад в проект
-
-1. Форкните репозиторий
-2. Создайте ветку для новой функции (`git checkout -b feature/amazing-feature`)
-3. Зафиксируйте изменения (`git commit -m 'Add amazing feature'`)
-4. Запушьте ветку (`git push origin feature/amazing-feature`)
-5. Откройте Pull Request
-
-## 📄 Лицензия
-
-Этот проект лицензируется под MIT License - смотрите файл LICENSE для деталей.
-
-## 📞 Контакты
-
-Для вопросов и предложений создайте issue в репозитории проекта.
+- Сейчас на `startup` вызывается `Base.metadata.create_all(...)` (удобно для локальной разработки).
+- По вашему ТЗ v1 миграции и создание таблиц должен вести Django, поэтому в прод-контуре это поведение нужно отключить.
+- `server_seq` сейчас вычисляется в приложении как `max(server_seq)+1`; в ТЗ предполагается генерация БД (`BIGSERIAL`) для безопасной конкурентной записи.
 
 ---
 
-**Примечание**: Убедитесь, что база данных запущена перед запуском приложения. Для разработки можно использовать SQLite, изменив DATABASE_URL в `.env` файле.
+## API (текущее состояние)
+
+- `GET /` — health/info
+- `GET /db_check` — проверка подключения к БД
+- `POST /sites/`, `GET /sites/`
+- `POST /devices/`, `GET /devices/`, `GET /devices/{device_id}`
+- `PATCH /devices/{device_id}/heartbeat`
+- `POST /push` — приём пачки событий
+- `GET /pull` — получение событий по `site_id` и `since_seq`
+
+Примеры ручной проверки: `test_main.http`.
+
+---
+
+## Следующий этап по ТЗ
+
+Согласно вашему ТЗ, для полного v1 стоит добавить:
+
+- модели `categories`, `items`, `balances`, `user_site_roles`;
+- отдельные DTO для `catalog`/`sync`/`common`;
+- Unit of Work слой;
+- тесты на duplicate / uuid_collision / pull-сортировку;
+- отказ от `create_all` в пользу существующей схемы Django.
