@@ -139,4 +139,5 @@ docker compose up --build
 ## Additional docs
 
 - Detailed module reference: `docs/code-documentation.md`
+- Client development specification (TZ): `docs/client-development-tz.md`
 - TZ compliance report: `docs/tz-gap-analysis.md`
