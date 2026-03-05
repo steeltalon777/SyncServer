@@ -74,3 +74,26 @@ class PingResponse(ORMBaseModel):
     server_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
     server_seq_upto: int = 0
     backoff_seconds: int = 0
+
+
+class PullRequest(BaseModel):
+    site_id: UUID
+    device_id: UUID
+    since_seq: int = 0
+    limit: int = Field(default=200, ge=1, le=1000)
+
+
+class PullEvent(ORMBaseModel):
+    event_uuid: UUID
+    server_seq: int
+    event_type: str
+    event_datetime: datetime
+    schema_version: int
+    payload: EventPayload
+
+
+class PullResponse(ORMBaseModel):
+    events: list[PullEvent] = Field(default_factory=list)
+    server_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    server_seq_upto: int = 0
+    next_since_seq: int = 0

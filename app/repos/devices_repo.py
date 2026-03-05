@@ -27,7 +27,7 @@ class DevicesRepo:
         await self.session.flush()
         return device
 
-    async def update_last_seen(self, device_id: UUID, ip: str | None = None) -> None:
+    async def update_last_seen(self, device_id: UUID, ip: str | None = None, client_version: str | None = None) -> None:
         device = await self.get_by_id(device_id)
         if device is None:
             return
@@ -35,5 +35,7 @@ class DevicesRepo:
         device.last_seen_at = datetime.now(UTC)
         if ip is not None:
             device.last_ip = ip
+        if client_version is not None:
+            device.client_version = client_version
 
         await self.session.flush()

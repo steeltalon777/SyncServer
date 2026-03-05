@@ -34,6 +34,12 @@ class EventsRepo:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_max_server_seq(self, site_id: UUID) -> int:
+        stmt = select(Event.server_seq).where(Event.site_id == site_id).order_by(Event.server_seq.desc()).limit(1)
+        result = await self.session.execute(stmt)
+        max_seq = result.scalar_one_or_none()
+        return int(max_seq or 0)
+
     @staticmethod
     def compute_payload_hash(payload: dict[str, Any]) -> str:
         canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)

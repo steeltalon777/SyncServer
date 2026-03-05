@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     APP_ENV: str = "dev"
     LOG_LEVEL: str = "INFO"
     DEFAULT_PAGE_SIZE: int = Field(default=100, ge=1, le=5000)
+    ALLOWED_ORIGINS: str = ""
+    MAX_PUSH_EVENTS: int = Field(default=500, ge=1, le=5000)
+    DEFAULT_PULL_LIMIT: int = Field(default=200, ge=1, le=1000)
 
 
 @lru_cache

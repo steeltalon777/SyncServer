@@ -13,10 +13,10 @@ Implemented in this stage:
 - DTO contracts.
 - Repository contracts.
 - Transaction and idempotency workflow.
-- Test coverage for model-level behavior.
-
-Not implemented in this stage:
-- Production business endpoints (`/push`, `/pull`, `/catalog`, `/ping`) and auth.
+- HTTP API layer: `/ping`, `/push`, `/pull`, `/catalog/items`, `/catalog/categories`.
+- Device auth via `X-Device-Token` + site/device binding.
+- Health/readiness endpoints and request correlation ID header.
+- Integration tests for repository and HTTP behavior.
 
 ## Stack
 
@@ -93,6 +93,8 @@ uvicorn main:app --reload
 Available technical endpoints:
 - `GET /`
 - `GET /db_check`
+- `GET /health`
+- `GET /ready`
 
 ## Test strategy
 
@@ -104,10 +106,23 @@ Tests in `tests/test_events_repo.py` verify:
 - Pull ordering and filtering by `(site_id, since_seq)`.
 - Batch classification using `SyncService`.
 
+Tests in `tests/test_http_sync.py` verify:
+- `POST /ping` auth success.
+- `POST /push` accepted/duplicate/collision classification.
+- `POST /pull` ordering by `server_seq`.
+- Incremental catalog sync.
+- Auth failure on bad token.
+
 Run tests:
 
 ```bash
 pytest -q
+```
+
+## Docker (dev)
+
+```bash
+docker compose up --build
 ```
 
 ## Key design decisions
