@@ -1,113 +1,127 @@
-# SyncServer
+﻿# Server Sync API
 
-FastAPI-сервис для синхронизации событий между устройствами и сервером. Проект использует асинхронный SQLAlchemy и ориентирован на работу с PostgreSQL. В текущем состоянии реализованы базовые модели (`sites`, `devices`, `events`), схемы для `push` и репозитории для CRUD/синхронизации.
+Backend skeleton for sync domain in FastAPI:
+- SQLAlchemy ORM models for existing PostgreSQL tables managed by Django migrations.
+- Pydantic DTO layer for sync and catalog contracts.
+- Async repositories and transaction-oriented services (Unit of Work + idempotent ingest).
+- Integration tests for event idempotency and pull ordering.
 
-## Что уже реализовано
+## Scope of this repository
 
-- Асинхронное подключение к БД через `AsyncEngine`/`AsyncSession`.
-- Модели SQLAlchemy:
-  - `Site`
-  - `Device`
-  - `Event`
-- Репозитории:
-  - `SiteRepo`
-  - `DeviceRepo`
-  - `EventRepo`
-- Обработка `push`-событий:
-  - вставка нового события;
-  - дедупликация по `event_uuid` + `payload_hash`;
-  - выявление коллизии UUID (одинаковый `event_uuid`, разный payload).
-- Базовые служебные эндпоинты (`/`, `/db_check`) и простые эндпоинты для `sites`/`devices`.
+Implemented in this stage:
+- Data model and persistence layer.
+- DTO contracts.
+- Repository contracts.
+- Transaction and idempotency workflow.
+- Test coverage for model-level behavior.
 
----
+Not implemented in this stage:
+- Production business endpoints (`/push`, `/pull`, `/catalog`, `/ping`) and auth.
 
-## Архитектура
+## Stack
+
+- Python 3.11+
+- FastAPI
+- SQLAlchemy 2.x (async)
+- asyncpg
+- Pydantic v2
+- pytest + pytest-asyncio
+
+## Project structure
 
 ```text
+app/
+  core/
+    config.py
+    db.py
+  models/
+    base.py
+    site.py
+    device.py
+    category.py
+    item.py
+    event.py
+    balance.py
+    user_site_role.py
+  schemas/
+    common.py
+    sync.py
+    catalog.py
+  repos/
+    sites_repo.py
+    devices_repo.py
+    events_repo.py
+    balances_repo.py
+    catalog_repo.py
+  services/
+    uow.py
+    event_ingest.py
+    sync_service.py
 main.py
-└── app/
-    ├── core/
-    │   ├── config.py      # чтение .env (Settings)
-    │   ├── db.py          # engine + sessionmaker + get_db
-    │   └── json_encoder.py
-    ├── models/
-    │   ├── base.py
-    │   ├── site.py
-    │   ├── device.py
-    │   └── event.py
-    ├── repos/
-    │   ├── site_repo.py
-    │   ├── device_repo.py
-    │   └── event_repo.py
-    └── schemas/
-        └── event.py
+tests/
+  conftest.py
+  test_events_repo.py
+docs/
+  code-documentation.md
+  tz-gap-analysis.md
 ```
 
-Подробная документация по коду и потокам данных: `docs/code-documentation.md`.
-Сопоставление с вашим ТЗ v1: `docs/tz-gap-analysis.md`.
+## Environment
 
----
-
-## Запуск
-
-### 1) Установка
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 2) Настройка
-
-```bash
-cp .env.example .env
-```
-
-Минимально заполните:
+Create `.env` from `.env.example`:
 
 ```env
 DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/dbname
+DATABASE_URL_TEST=postgresql+asyncpg://user:password@localhost:5432/dbname_test
 APP_ENV=dev
 LOG_LEVEL=INFO
 ```
 
-### 3) Старт сервера
+Notes:
+- `DATABASE_URL_TEST` is used by tests. If missing, tests fallback to `DATABASE_URL`.
+- Database schema is expected to be migrated by Django in production.
+
+## Run
 
 ```bash
+python -m venv .venv
+.venv\\Scripts\\activate
+pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
----
+Available technical endpoints:
+- `GET /`
+- `GET /db_check`
 
-## Важные замечания
+## Test strategy
 
-- Сейчас на `startup` вызывается `Base.metadata.create_all(...)` (удобно для локальной разработки).
-- По вашему ТЗ v1 миграции и создание таблиц должен вести Django, поэтому в прод-контуре это поведение нужно отключить.
-- `server_seq` сейчас вычисляется в приложении как `max(server_seq)+1`; в ТЗ предполагается генерация БД (`BIGSERIAL`) для безопасной конкурентной записи.
+Tests in `tests/test_events_repo.py` verify:
+- DB smoke check.
+- Event insert returns `server_seq` after `flush`.
+- Duplicate detection (`same event_uuid + same payload`).
+- UUID collision detection (`same event_uuid + different payload`).
+- Pull ordering and filtering by `(site_id, since_seq)`.
+- Batch classification using `SyncService`.
 
----
+Run tests:
 
-## API (текущее состояние)
+```bash
+pytest -q
+```
 
-- `GET /` — health/info
-- `GET /db_check` — проверка подключения к БД
-- `POST /sites/`, `GET /sites/`
-- `POST /devices/`, `GET /devices/`, `GET /devices/{device_id}`
-- `PATCH /devices/{device_id}/heartbeat`
-- `POST /push` — приём пачки событий
-- `GET /pull` — получение событий по `site_id` и `since_seq`
+## Key design decisions
 
-Примеры ручной проверки: `test_main.http`.
+1. No schema creation on app startup.
+2. `events.server_seq` comes from DB identity/sequence behavior.
+3. Idempotency rule:
+   - missing `event_uuid` -> insert
+   - existing with same payload hash -> duplicate
+   - existing with different payload hash -> uuid_collision
+4. Repositories only encapsulate data access; orchestration is in services.
+5. `UnitOfWork` controls transaction boundaries.
 
----
+## Additional docs
 
-## Следующий этап по ТЗ
-
-Согласно вашему ТЗ, для полного v1 стоит добавить:
-
-- модели `categories`, `items`, `balances`, `user_site_roles`;
-- отдельные DTO для `catalog`/`sync`/`common`;
-- Unit of Work слой;
-- тесты на duplicate / uuid_collision / pull-сортировку;
-- отказ от `create_all` в пользу существующей схемы Django.
+- Detailed module reference: `docs/code-documentation.md`
+- TZ compliance report: `docs/tz-gap-analysis.md`

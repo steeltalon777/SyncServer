@@ -1,40 +1,68 @@
-# Сопоставление текущего проекта с ТЗ v1
+﻿# TZ Gap Analysis (after refactor)
 
-Ниже — краткий gap-analysis между текущей реализацией и вашим ТЗ.
+This file maps the requested TZ requirements to current implementation status.
 
-## Выполнено частично/полностью
+## Status legend
+- DONE: implemented in code.
+- PARTIAL: implemented with caveats.
+- TODO: intentionally not in this stage.
 
-- Async SQLAlchemy используется (`AsyncSession`, async dependency) ✅
-- Базовые модели `sites/devices/events` есть ✅
-- Базовые DTO для `push` есть ✅
-- Логика duplicate/uuid_collision по `event_uuid + payload_hash` есть ✅
-- Репозиторий pull по `site_id + since_seq` есть ✅
+## 1. Stack and async mode
+- Python/FastAPI/SQLAlchemy async/asyncpg/Pydantic v2: DONE
+- Async DB access with awaitable operations: DONE
+- `.env` settings including `DATABASE_URL_TEST`: DONE
 
-## Не выполнено (из ТЗ)
+## 2. Project structure
+- `app/core`, `app/models`, `app/schemas`, `app/repos`, `app/services`: DONE
+- Separation of concerns (model/schema/repo/service): DONE
 
-1. **Модели**
-   - Нет `categories`, `items`, `balances`, `user_site_roles`.
+## 3. ORM models
+- `sites`: DONE
+- `devices`: DONE
+- `categories`: DONE
+- `items`: DONE
+- `events`: DONE
+- `balances`: DONE
+- `user_site_roles`: DONE
 
-2. **Слои и структура**
-   - Нет выделенного Unit of Work.
-   - Нет разделения схем на `common.py`, `sync.py`, `catalog.py`.
+Notes:
+- ORM maps existing tables, but app does not auto-migrate schema.
+- `events.server_seq` configured as identity/DB-generated.
 
-3. **Правила работы с БД по ТЗ**
-   - Сейчас создаются таблицы через `create_all` при старте.
-   - В ТЗ: таблицы/миграции ведёт Django, FastAPI не создаёт схему.
+## 4. DTO contracts
+- Sync DTO (`EventLine`, `EventPayload`, `EventIn`, `PushRequest`, `PushResponse`): DONE
+- Catalog DTO (`ItemDto`, `CategoryDto`, response envelopes): DONE
+- Decimal usage for quantities: DONE
 
-4. **`server_seq`**
-   - Сейчас `max + 1` в приложении.
-   - В ТЗ: `BIGSERIAL`/генерация на стороне БД.
+## 5. Repository and transaction layer
+- `EventsRepo`: DONE
+  - `get_by_uuid`
+  - `insert_event`
+  - `pull`
+  - `compute_payload_hash`
+- `BalancesRepo` with `get_for_update` and `upsert`: DONE
+- `CatalogRepo`: DONE
+- Unit of Work transaction wrapper: DONE
 
-5. **Тесты**
-   - Нет автоматических тестов на smoke/duplicate/collision/pull.
+## 6. Duplicate/collision behavior
+Required behavior:
+1. Missing event -> insert.
+2. Existing + same payload -> duplicate.
+3. Existing + different payload -> uuid_collision.
 
-## Рекомендуемый порядок доработок
+Status: DONE (`EventIngestService`).
 
-1. Убрать `create_all` из `startup` для prod-сценария.
-2. Перевести `server_seq` на генерацию БД.
-3. Добавить недостающие ORM-модели.
-4. Разнести DTO по модулям (`sync`, `catalog`, `common`).
-5. Ввести Unit of Work и сервисный слой.
-6. Добавить асинхронные интеграционные тесты на события и pull.
+## 7. Tests
+- DB smoke: DONE
+- insert + `server_seq`: DONE
+- duplicate: DONE
+- uuid collision: DONE
+- pull ordering: DONE
+
+Additional:
+- push-batch classification via `SyncService`: DONE
+
+## 8. Out of current scope
+- Full HTTP API contract (`/push`, `/pull`, `/catalog`, `/ping` handlers).
+- Authentication/authorization logic.
+- Business `apply_event` logic (balances mutation semantics).

@@ -1,119 +1,167 @@
-# Документация кода (текущее состояние)
+﻿# Code Documentation
 
-## 1. Конфигурация
+This document describes current implementation details of the data/model layer.
+
+## 1. Core layer
 
 ### `app/core/config.py`
 
-`Settings` читает параметры из `.env`:
-- `DATABASE_URL`
-- `APP_ENV`
-- `LOG_LEVEL`
+`Settings` (Pydantic Settings):
+- `DATABASE_URL`: main asyncpg connection string.
+- `DATABASE_URL_TEST`: optional test DB connection string.
+- `APP_ENV`: environment label.
+- `LOG_LEVEL`: logging level.
+- `DEFAULT_PAGE_SIZE`: default pagination helper.
 
-`get_settings()` кешируется через `lru_cache`, чтобы один раз создать объект конфигурации на процесс.
+`get_settings()` uses `lru_cache` to avoid repeated environment parsing.
 
 ### `app/core/db.py`
 
-- Создаётся async engine (`create_async_engine`).
-- Создаётся фабрика сессий `AsyncSessionLocal`.
-- `get_db()` — dependency для FastAPI, выдаёт и закрывает `AsyncSession`.
+- Creates async SQLAlchemy engine (`create_async_engine`).
+- Exposes `SessionFactory` (`async_sessionmaker`).
+- Exposes FastAPI dependency `get_db()` yielding `AsyncSession`.
 
-## 2. Модели
+## 2. ORM models
 
-### `app/models/base.py`
+### `Site` (`sites`)
+- Columns: `id`, `code`, `name`, `is_active`, `created_at`.
+- Constraint/index: unique index on `code`.
 
-Базовый `DeclarativeBase` для всех ORM-классов.
+### `Device` (`devices`)
+- Columns: `id`, `site_id`, `name`, `registration_token`, `last_ip`, `last_seen_at`, `client_version`, `is_active`, `created_at`.
+- Constraints/indexes:
+  - unique `(site_id, registration_token)`
+  - index on `site_id`
+  - index on `last_seen_at`
 
-### `app/models/site.py`
+### `Category` (`categories`)
+- Columns: `id`, `name`, `parent_id`, `is_active`, `updated_at`.
+- Self-reference: `parent_id -> categories.id`.
+- Index on `updated_at`.
 
-Таблица `sites`:
-- `id` (UUID, PK)
-- `code` (unique)
-- `name`
-- `is_active`
-- `created_at`
+### `Item` (`items`)
+- Columns: `id`, `sku`, `name`, `category_id`, `unit`, `is_active`, `updated_at`.
+- `sku` unique (nullable).
+- Index on `updated_at`.
 
-Есть relationship на `Device` через `devices`.
+### `Event` (`events`)
+- PK: `event_uuid` (client-generated UUID).
+- Core fields: `site_id`, `device_id`, `user_id`, `event_type`, `event_datetime`, `received_at`, `schema_version`, `payload`, `payload_hash`.
+- `server_seq`: unique bigint identity (DB-generated).
+- Indexes:
+  - `(site_id, server_seq)` for pull
+  - `(site_id, event_datetime)` for investigation
+  - `(event_type)`
 
-### `app/models/device.py`
+### `Balance` (`balances`)
+- Composite PK: `(site_id, item_id)`.
+- Fields: `qty NUMERIC(18,3)`, `updated_at`.
 
-Таблица `devices`:
-- `id` (UUID, PK)
-- `site_id` (FK -> `sites.id`)
-- `name`
-- `registration_token`
-- `last_ip`
-- `last_seen_at`
-- `client_version`
-- `is_active`
-- `created_at`
+### `UserSiteRole` (`user_site_roles`)
+- Fields: `id`, `user_id`, `site_id`, `role`.
+- Unique `(user_id, site_id)`.
+- Check constraint: role in `admin|clerk|viewer`.
 
-Есть relationship `site`.
+## 3. DTO schemas
 
-### `app/models/event.py`
+### `app/schemas/sync.py`
 
-Таблица `events`:
-- `event_uuid` (UUID, PK, присылает клиент)
-- `site_id`, `device_id`, `user_id`
-- `event_type`, `event_datetime`, `received_at`
-- `schema_version`
-- `payload` (JSON)
-- `server_seq` (unique)
-- `payload_hash`
-
-Назначение: безопасно принимать события и различать:
-- повтор того же payload (`duplicate`);
-- коллизию UUID (`uuid_collision`).
-
-## 3. Pydantic-схемы
-
-### `app/schemas/event.py`
-
-Основные DTO:
+Input DTO:
 - `EventLine`
 - `EventPayload`
 - `EventIn`
 - `PushRequest`
+- `PingRequest`
+
+Output DTO:
+- `AcceptedEvent`
+- `DuplicateEvent`
+- `RejectedEvent`
 - `PushResponse`
+- `PingResponse`
 
-`EventPayload.lines` валидируется как непустой массив.
-`qty` хранится как `Decimal`.
+`ReasonCode` literal currently includes:
+- `uuid_collision`
+- `processing_error`
+- `validation_error`
 
-## 4. Репозитории
+### `app/schemas/catalog.py`
 
-### `app/repos/site_repo.py`
+- `CategoryDto`
+- `ItemDto`
+- `CatalogItemsResponse`
+- `CatalogCategoriesResponse`
+- `CatalogRequest`
 
+### `app/schemas/common.py`
+
+`ORMBaseModel` enables `from_attributes` and JSON serialization for `Decimal`, `datetime`, `UUID`.
+
+## 4. Repositories
+
+### `SitesRepo`
 - `get_by_id`
 - `get_by_code`
-- `create`
 
-### `app/repos/device_repo.py`
-
+### `DevicesRepo`
 - `get_by_id`
 - `get_by_site`
 - `create`
 - `update_last_seen`
 
-### `app/repos/event_repo.py`
+### `EventsRepo`
+- `get_by_uuid`
+- `insert_event`
+- `pull(site_id, since_seq, limit)`
+- `compute_payload_hash(payload)`
 
-- `_compute_payload_hash(payload)` — SHA-256 от канонизированного JSON.
-- `get_next_seq()` — вычисляет `max(server_seq)+1`.
-- `get_by_uuid(event_uuid)`.
-- `create_event(...)` — создаёт событие и делает `flush()`.
-- `process_event(...)` — реализует логику `accepted` / `duplicate` / `rejected(UUID_COLLISION)`.
-- `pull_events(site_id, since_seq, limit)` — выборка в порядке `server_seq`.
+### `BalancesRepo`
+- `get_for_update(site_id, item_id)`
+- `upsert(site_id, item_id, delta_qty)`
 
-## 5. Поток обработки `POST /push`
+### `CatalogRepo`
+- `list_items(updated_after, limit)`
+- `list_categories(updated_after, limit)`
 
-1. Приходит `PushRequest`.
-2. Для каждого `EventIn` вызывается `EventRepo.process_event(...)`.
-3. Результат раскладывается по массивам:
-   - `accepted`
-   - `duplicates`
-   - `rejected`
-4. После обработки всей пачки выполняется `commit()`.
+## 5. Services and transactions
 
-## 6. Ограничения и риски
+### `UnitOfWork`
 
-- `server_seq` считается в приложении, что может приводить к гонкам при высокой конкуренции.
-- В `main.py` на startup выполняется `create_all`, что конфликтует с подходом “схемой управляет Django”.
-- Пока отсутствуют модельные слои `categories/items/balances/user_site_roles` и Unit of Work.
+Wraps a transaction and bundles repositories:
+- `sites`, `devices`, `events`, `catalog`, `balances`.
+- Supports `async with` semantics.
+
+### `EventIngestService`
+
+Implements event idempotency:
+1. Query existing by `event_uuid`.
+2. Compute canonical payload hash.
+3. If no existing -> insert (`accepted`).
+4. If same hash -> `duplicate_same_payload`.
+5. Else -> `uuid_collision`.
+
+### `SyncService`
+
+Orchestrates push-batch classification over a `UnitOfWork` and returns `PushResponse`.
+
+## 6. Tests
+
+### `tests/conftest.py`
+- Creates temporary Postgres schema per test session.
+- Creates all ORM tables in that schema.
+- Drops schema after test session.
+
+### `tests/test_events_repo.py`
+Covers:
+- connectivity smoke;
+- insert + server_seq;
+- duplicate;
+- uuid collision;
+- pull ordering;
+- `SyncService` result classification.
+
+## 7. Operational notes
+
+- App does not run `create_all()` at startup.
+- Django remains the source of truth for production schema migrations.
+- The current FastAPI app intentionally exposes only technical health endpoints.
