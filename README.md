@@ -1,7 +1,7 @@
-﻿# Server Sync API
+# Server Sync API
 
-Backend skeleton for sync domain in FastAPI:
-- SQLAlchemy ORM models for existing PostgreSQL tables managed by Django migrations.
+Backend service for sync domain in FastAPI:
+- SQLAlchemy ORM models and explicit PostgreSQL bootstrap schema (`db/init/001_init_schema.sql`).
 - Pydantic DTO layer for sync and catalog contracts.
 - Async repositories and transaction-oriented services (Unit of Work + idempotent ingest).
 - Integration tests for event idempotency and pull ordering.
@@ -79,7 +79,19 @@ LOG_LEVEL=INFO
 
 Notes:
 - `DATABASE_URL_TEST` is used by tests. If missing, tests fallback to `DATABASE_URL`.
-- Database schema is expected to be migrated by Django in production.
+- For local Docker startup, PostgreSQL schema is initialized from `db/init/001_init_schema.sql`.
+
+
+## API audit snapshot
+
+Implemented and wired routes:
+- Sync: `POST /ping`, `POST /push`, `POST /pull`
+- Catalog: `POST /catalog/items`, `POST /catalog/categories`
+- Service checks: `GET /`, `GET /health`, `GET /ready`, `GET /db_check`
+
+Auth expectations:
+- `/ping`, `/push`, `/pull`: `X-Device-Token`
+- `/catalog/*`: `X-Site-Id`, `X-Device-Id`, `X-Device-Token`
 
 ## Run
 
