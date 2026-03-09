@@ -1,74 +1,94 @@
-# Server Sync API
+# SyncServer
 
-Backend service for sync domain in FastAPI:
-- SQLAlchemy ORM models and explicit PostgreSQL bootstrap schema (`db/init/001_init_schema.sql`).
-- Pydantic DTO layer for sync and catalog contracts.
-- Async repositories and transaction-oriented services (Unit of Work + idempotent ingest).
-- Integration tests for event idempotency and pull ordering.
+SyncServer — центральный сервер синхронизации распределённой системы складского учёта.
 
-## Scope of this repository
+## Назначение
 
-Implemented in this stage:
-- Data model and persistence layer.
-- DTO contracts.
-- Repository contracts.
-- Transaction and idempotency workflow.
-- HTTP API layer: `/ping`, `/push`, `/pull`, `/catalog/items`, `/catalog/categories`.
-- Device auth via `X-Device-Token` + site/device binding.
-- Health/readiness endpoints and request correlation ID header.
-- Integration tests for repository and HTTP behavior.
+Сервис синхронизирует данные между офлайн-клиентами складов и центральной базой PostgreSQL.
 
-## Stack
-
-- Python 3.11+
-- FastAPI
-- SQLAlchemy 2.x (async)
-- asyncpg
-- Pydantic v2
-- pytest + pytest-asyncio
-
-## Project structure
+Поток данных:
 
 ```text
-app/
-  core/
-    config.py
-    db.py
-  models/
-    base.py
-    site.py
-    device.py
-    category.py
-    item.py
-    event.py
-    balance.py
-    user_site_role.py
-  schemas/
-    common.py
-    sync.py
-    catalog.py
-  repos/
-    sites_repo.py
-    devices_repo.py
-    events_repo.py
-    balances_repo.py
-    catalog_repo.py
-  services/
-    uow.py
-    event_ingest.py
-    sync_service.py
-main.py
-tests/
-  conftest.py
-  test_events_repo.py
-docs/
-  code-documentation.md
-  tz-gap-analysis.md
+Клиенты складов (desktop / offline-first)
+        ↓
+      HTTP API
+        ↓
+    SyncServer
+        ↓
+    PostgreSQL
 ```
 
-## Environment
+SyncServer выполняет три ключевые роли:
 
-Create `.env` from `.env.example`:
+- **Event Store** — принимает и хранит события операций.
+- **Sync Engine** — обеспечивает push/pull синхронизацию между клиентами и сервером.
+- **Catalog Provider** — отдает инкрементальные справочники (номенклатура и категории).
+
+## Архитектурные принципы
+
+Система построена на событийной модели:
+
+- все операции сохраняются как события;
+- события неизменяемы;
+- текущие остатки рассчитываются на основе событий.
+
+## Технологический стек
+
+- Python
+- FastAPI
+- SQLAlchemy (async)
+- PostgreSQL
+
+## Слои приложения
+
+Проект организован по слоям:
+
+- **API Layer** — HTTP endpoints, валидация и авторизация.
+- **Service Layer** — бизнес-логика синхронизации и оркестрация сценариев.
+- **Repository Layer** — доступ к данным и инкапсуляция SQL/ORM-запросов.
+- **Models Layer** — ORM-модели доменных сущностей.
+
+## Основные доменные сущности
+
+- `Item`
+- `Category`
+- `Site`
+- `Device`
+- `Event`
+- `Balance`
+
+## Основные API endpoints
+
+### Sync API
+
+- `POST /ping` — heartbeat клиента и получение верхней границы `server_seq`.
+- `POST /push` — прием пачки событий с идемпотентной обработкой.
+- `POST /pull` — выдача событий для догонки клиента по `since_seq`.
+
+### Catalog API
+
+- `POST /catalog/items` — инкрементальная выгрузка номенклатуры.
+- `POST /catalog/categories` — инкрементальная выгрузка категорий.
+
+### Технические endpoints
+
+- `GET /`
+- `GET /health`
+- `GET /ready`
+- `GET /db_check`
+
+## Быстрый старт
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+## Настройка окружения
+
+Создайте `.env` из `.env.example`:
 
 ```env
 DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/dbname
@@ -77,79 +97,14 @@ APP_ENV=dev
 LOG_LEVEL=INFO
 ```
 
-Notes:
-- `DATABASE_URL_TEST` is used by tests. If missing, tests fallback to `DATABASE_URL`.
-- For local Docker startup, PostgreSQL schema is initialized from `db/init/001_init_schema.sql`.
-
-
-## API audit snapshot
-
-Implemented and wired routes:
-- Sync: `POST /ping`, `POST /push`, `POST /pull`
-- Catalog: `POST /catalog/items`, `POST /catalog/categories`
-- Service checks: `GET /`, `GET /health`, `GET /ready`, `GET /db_check`
-
-Auth expectations:
-- `/ping`, `/push`, `/pull`: `X-Device-Token`
-- `/catalog/*`: `X-Site-Id`, `X-Device-Id`, `X-Device-Token`
-
-## Run
-
-```bash
-python -m venv .venv
-.venv\\Scripts\\activate
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
-
-Available technical endpoints:
-- `GET /`
-- `GET /db_check`
-- `GET /health`
-- `GET /ready`
-
-## Test strategy
-
-Tests in `tests/test_events_repo.py` verify:
-- DB smoke check.
-- Event insert returns `server_seq` after `flush`.
-- Duplicate detection (`same event_uuid + same payload`).
-- UUID collision detection (`same event_uuid + different payload`).
-- Pull ordering and filtering by `(site_id, since_seq)`.
-- Batch classification using `SyncService`.
-
-Tests in `tests/test_http_sync.py` verify:
-- `POST /ping` auth success.
-- `POST /push` accepted/duplicate/collision classification.
-- `POST /pull` ordering by `server_seq`.
-- Incremental catalog sync.
-- Auth failure on bad token.
-
-Run tests:
+## Тесты
 
 ```bash
 pytest -q
 ```
 
-## Docker (dev)
+## Дополнительная документация
 
-```bash
-docker compose up --build
-```
-
-## Key design decisions
-
-1. No schema creation on app startup.
-2. `events.server_seq` comes from DB identity/sequence behavior.
-3. Idempotency rule:
-   - missing `event_uuid` -> insert
-   - existing with same payload hash -> duplicate
-   - existing with different payload hash -> uuid_collision
-4. Repositories only encapsulate data access; orchestration is in services.
-5. `UnitOfWork` controls transaction boundaries.
-
-## Additional docs
-
-- Detailed module reference: `docs/code-documentation.md`
-- Client development specification (TZ): `docs/client-development-tz.md`
-- TZ compliance report: `docs/tz-gap-analysis.md`
+- Архитектура и код по слоям: `docs/code-documentation.md`
+- Технический аудит и анализ: `docs/audit-syncserver.md`, `docs/tz-gap-analysis.md`
+- ТЗ для клиентской части: `docs/client-development-tz.md`
