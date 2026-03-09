@@ -1,4 +1,4 @@
-﻿# TZ Gap Analysis (after refactor)
+# TZ Gap Analysis (after refactor)
 
 This file maps the requested TZ requirements to current implementation status.
 
@@ -63,6 +63,5 @@ Additional:
 - push-batch classification via `SyncService`: DONE
 
 ## 8. Out of current scope
-- Full HTTP API contract (`/push`, `/pull`, `/catalog`, `/ping` handlers).
-- Authentication/authorization logic.
-- Business `apply_event` logic (balances mutation semantics).
+- Business `apply_event` logic (balances mutation semantics) is still not implemented in this repository.
+- Device registration and token issuance lifecycle are outside this API (server validates existing device/token only).
