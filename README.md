@@ -1,15 +1,19 @@
 # SyncServer
 
-SyncServer — центральный сервер синхронизации распределённой системы складского учёта.
+SyncServer — сервер синхронизации для распределённого складского учёта с офлайн-клиентами.
 
-## Назначение
+## Что делает сервис
 
-Сервис синхронизирует данные между офлайн-клиентами складов и центральной базой PostgreSQL.
+SyncServer решает три задачи:
+
+- принимает события от устройств (`/push`);
+- отдаёт недостающие события для догонки (`/pull`);
+- отдаёт справочники номенклатуры и категорий (`/catalog/*`).
 
 Поток данных:
 
 ```text
-Клиенты складов (desktop / offline-first)
+Офлайн-клиенты складов
         ↓
       HTTP API
         ↓
@@ -18,66 +22,74 @@ SyncServer — центральный сервер синхронизации р
     PostgreSQL
 ```
 
-SyncServer выполняет три ключевые роли:
+## Технологии
 
-- **Event Store** — принимает и хранит события операций.
-- **Sync Engine** — обеспечивает push/pull синхронизацию между клиентами и сервером.
-- **Catalog Provider** — отдает инкрементальные справочники (номенклатура и категории).
-
-## Архитектурные принципы
-
-Система построена на событийной модели:
-
-- все операции сохраняются как события;
-- события неизменяемы;
-- текущие остатки рассчитываются на основе событий.
-
-## Технологический стек
-
-- Python
+- Python 3.11+
 - FastAPI
-- SQLAlchemy (async)
-- PostgreSQL
+- SQLAlchemy Async + asyncpg
+- PostgreSQL 16
 
-## Слои приложения
+## Структура проекта
 
-Проект организован по слоям:
+- `app/api` — HTTP-роуты и зависимости
+- `app/services` — сценарии синхронизации и бизнес-логика
+- `app/repos` — слой доступа к данным
+- `app/models` — ORM-модели
+- `app/schemas` — Pydantic-схемы API
+- `db/init` — SQL-инициализация схемы БД
+- `tests` — автотесты
 
-- **API Layer** — HTTP endpoints, валидация и авторизация.
-- **Service Layer** — бизнес-логика синхронизации и оркестрация сценариев.
-- **Repository Layer** — доступ к данным и инкапсуляция SQL/ORM-запросов.
-- **Models Layer** — ORM-модели доменных сущностей.
+## API (кратко)
 
-## Основные доменные сущности
+### Синхронизация
 
-- `Item`
-- `Category`
-- `Site`
-- `Device`
-- `Event`
-- `Balance`
+- `POST /ping` — heartbeat клиента и получение верхней границы `server_seq_upto`
+- `POST /push` — приём пачки событий (идемпотентно)
+- `POST /pull` — выдача событий начиная с `since_seq`
 
-## Основные API endpoints
+### Каталоги
 
-### Sync API
+- `POST /catalog/items` — инкрементальная выдача номенклатуры
+- `POST /catalog/categories` — инкрементальная выдача категорий
+- `GET /catalog/categories` — дерево категорий
 
-- `POST /ping` — heartbeat клиента и получение верхней границы `server_seq`.
-- `POST /push` — прием пачки событий с идемпотентной обработкой.
-- `POST /pull` — выдача событий для догонки клиента по `since_seq`.
+### Технические эндпоинты
 
-### Catalog API
+- `GET /` — базовая информация о сервисе
+- `GET /health` — liveness-check
+- `GET /ready` — readiness-check с проверкой БД
+- `GET /db_check` — ручная проверка подключения к БД
 
-- `POST /catalog/items` — инкрементальная выгрузка номенклатуры.
-- `POST /catalog/categories` — инкрементальная выгрузка категорий.
+## Авторизация и заголовки
 
-### Технические endpoints
+Для рабочих эндпоинтов (`/ping`, `/push`, `/pull`, `/catalog/*`) используются заголовки устройства:
 
-- `GET /`
-- `GET /health`
-- `GET /ready`
-- `GET /db_check`
+- `X-Device-Token`
+- `X-Client-Version`
 
-## Быстрый старт
+Также в middleware проставляется `X-Request-Id`:
+
+- если клиент прислал `X-Request-Id`, он будет использован;
+- иначе сервер сгенерирует UUID и вернёт его в ответе.
+
+## Конфигурация
+
+Скопируйте `.env.example` в `.env` и при необходимости скорректируйте значения:
+
+```bash
+cp .env.example .env
+```
+
+Основные переменные:
+
+- `DATABASE_URL` — основное подключение к PostgreSQL
+- `DATABASE_URL_TEST` — тестовая БД
+- `APP_ENV` — окружение (`dev`, `prod` и т.д.)
+- `LOG_LEVEL` — уровень логирования
+- `MAX_PUSH_EVENTS` — максимум событий в одном `/push`
+- `DEFAULT_PULL_LIMIT` — лимит по умолчанию для `/pull`
+
+## Локальный запуск (без Docker)
 
 ```bash
 python -m venv .venv
@@ -86,18 +98,19 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-## Настройка окружения
+Сервис будет доступен на `http://127.0.0.1:8000`.
 
-Создайте `.env` из `.env.example`:
+## Запуск через Docker Compose
 
-```env
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/dbname
-DATABASE_URL_TEST=postgresql+asyncpg://user:password@localhost:5432/dbname_test
-APP_ENV=dev
-LOG_LEVEL=INFO
+```bash
+docker compose up --build
 ```
 
-## Тесты
+- PostgreSQL поднимется на `localhost:5432`
+- API будет доступен на `localhost:8000`
+- SQL-инициализация загрузится из `db/init/001_init_schema.sql`
+
+## Тестирование
 
 ```bash
 pytest -q
@@ -105,6 +118,7 @@ pytest -q
 
 ## Дополнительная документация
 
-- Архитектура и код по слоям: `docs/code-documentation.md`
-- Технический аудит и анализ: `docs/audit-syncserver.md`, `docs/tz-gap-analysis.md`
-- ТЗ для клиентской части: `docs/client-development-tz.md`
+- `docs/code-documentation.md` — описание слоёв и структуры кода
+- `docs/audit-syncserver.md` — технический аудит
+- `docs/tz-gap-analysis.md` — gap-анализ требований
+- `docs/client-development-tz.md` — ТЗ для клиентской команды
