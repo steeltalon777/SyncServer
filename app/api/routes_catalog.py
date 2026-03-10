@@ -6,8 +6,13 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import auth_catalog_headers, get_request_id, get_uow, require_device_auth
-from app.schemas.catalog import CatalogCategoriesResponse, CatalogItemsResponse, CatalogRequest
 from app.services.uow import UnitOfWork
+from app.schemas.catalog import (
+    CatalogCategoriesResponse,
+    CatalogItemsResponse,
+    CatalogRequest,
+    CategoryTreeNode,
+)
 
 router = APIRouter(prefix="/catalog")
 logger = logging.getLogger(__name__)
@@ -77,3 +82,31 @@ async def list_categories(
         server_time=datetime.now(UTC),
         next_updated_after=next_updated_after,
     )
+
+
+@router.get("/categories", response_model=list[CategoryTreeNode])
+async def get_categories_tree(
+    request: Request,
+    auth: dict = Depends(auth_catalog_headers),
+    uow: UnitOfWork = Depends(get_uow),
+) -> list[CategoryTreeNode]:
+    async with uow:
+        await require_device_auth(
+            request=request,
+            uow=uow,
+            site_id=auth["site_id"],
+            device_id=auth["device_id"],
+            device_token=auth["device_token"],
+            client_version=auth["client_version"],
+        )
+        categories_tree = await uow.catalog.get_categories_tree()
+
+    logger.info(
+        "request_id=%s catalog_categories_tree site_id=%s device_id=%s returned=%s",
+        get_request_id(request),
+        auth["site_id"],
+        auth["device_id"],
+        len(categories_tree),
+    )
+
+    return [CategoryTreeNode.model_validate(node) for node in categories_tree]

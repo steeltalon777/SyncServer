@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS sites (
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_sites_code ON sites(code);
 
+
+
 CREATE TABLE IF NOT EXISTS devices (
     id UUID PRIMARY KEY,
     site_id UUID NOT NULL REFERENCES sites(id),
@@ -24,15 +26,23 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE INDEX IF NOT EXISTS ix_devices_site_id ON devices(site_id);
 CREATE INDEX IF NOT EXISTS ix_devices_last_seen_at ON devices(last_seen_at);
 
+
+
 CREATE TABLE IF NOT EXISTS categories (
     id UUID PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
+    code VARCHAR(100),
     parent_id UUID REFERENCES categories(id),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    sort_order INTEGER
 );
 
+CREATE INDEX IF NOT EXISTS ix_categories_parent_id ON categories(parent_id);
 CREATE INDEX IF NOT EXISTS ix_categories_updated_at ON categories(updated_at);
+
+
 
 CREATE TABLE IF NOT EXISTS items (
     id UUID PRIMARY KEY,
@@ -45,6 +55,8 @@ CREATE TABLE IF NOT EXISTS items (
 );
 
 CREATE INDEX IF NOT EXISTS ix_items_updated_at ON items(updated_at);
+
+
 
 CREATE TABLE IF NOT EXISTS events (
     event_uuid UUID PRIMARY KEY,
@@ -64,13 +76,17 @@ CREATE INDEX IF NOT EXISTS ix_events_site_id_server_seq ON events(site_id, serve
 CREATE INDEX IF NOT EXISTS ix_events_site_id_event_datetime ON events(site_id, event_datetime);
 CREATE INDEX IF NOT EXISTS ix_events_event_type ON events(event_type);
 
+
+
 CREATE TABLE IF NOT EXISTS balances (
     site_id UUID NOT NULL REFERENCES sites(id),
     item_id UUID NOT NULL REFERENCES items(id),
-    qty NUMERIC(18, 3) NOT NULL DEFAULT 0,
+    qty NUMERIC(18,3) NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (site_id, item_id)
 );
+
+
 
 CREATE TABLE IF NOT EXISTS user_site_roles (
     user_id INTEGER NOT NULL,

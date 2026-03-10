@@ -1,4 +1,6 @@
-﻿from datetime import UTC, datetime
+﻿from __future__ import annotations
+
+from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -39,3 +41,23 @@ class CatalogCategoriesResponse(ORMBaseModel):
 class CatalogRequest(BaseModel):
     updated_after: datetime | None = None
     limit: int = Field(default=100, ge=1, le=1000)
+
+
+class CategoryTreeNode(ORMBaseModel):
+    id: UUID
+    name: str
+    code: str | None = None
+    parent_id: UUID | None = None
+
+    is_active: bool
+
+    created_at: datetime
+    updated_at: datetime
+
+    sort_order: int | None = None
+
+    path: list[str] = Field(default_factory=list)
+    children: list["CategoryTreeNode"] = Field(default_factory=list)
+
+
+CategoryTreeNode.model_rebuild()
