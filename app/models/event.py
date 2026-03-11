@@ -7,6 +7,7 @@ from sqlalchemy import BigInteger, DateTime, ForeignKey, Identity, Index, Intege
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.models import Site, Device
 from app.models.base import Base
 
 

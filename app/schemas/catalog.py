@@ -21,7 +21,8 @@ class ItemDto(ORMBaseModel):
     sku: str | None = None
     name: str
     category_id: UUID
-    unit: str
+    unit_id: UUID
+    description: str | None = None
     is_active: bool
     updated_at: datetime
 
@@ -59,5 +60,20 @@ class CategoryTreeNode(ORMBaseModel):
     path: list[str] = Field(default_factory=list)
     children: list["CategoryTreeNode"] = Field(default_factory=list)
 
+class CatalogUnitsResponse(BaseModel):
+    units: list[UnitDto]
+    server_time: datetime
 
+class UnitDto(ORMBaseModel):
+    id: UUID
+    name: str
+    symbol: str
+    is_active: bool
+    updated_at: datetime
+
+
+class CatalogUnitsResponse(ORMBaseModel):
+    units: list[UnitDto]
+    server_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    next_updated_after: datetime | None = None
 CategoryTreeNode.model_rebuild()

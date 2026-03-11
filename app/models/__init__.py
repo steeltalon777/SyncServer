@@ -5,6 +5,7 @@ from app.models.device import Device
 from app.models.event import Event
 from app.models.item import Item
 from app.models.site import Site
+from app.models.unit import Unit
 from app.models.user_site_role import UserSiteRole
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "Event",
     "Balance",
     "UserSiteRole",
+    "Unit"
 ]
