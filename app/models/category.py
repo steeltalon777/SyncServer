@@ -64,6 +64,7 @@ class Category(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("parent_id", "name", name="uq_categories_parent_name"),
         Index("ix_categories_parent_id", "parent_id"),
         Index("ix_categories_updated_at", "updated_at"),
     )

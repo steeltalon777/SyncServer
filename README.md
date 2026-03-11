@@ -1,95 +1,76 @@
 # SyncServer
 
-SyncServer — сервер синхронизации для распределённого складского учёта с офлайн-клиентами.
+SyncServer — FastAPI backend распределённой складской системы и основной source of truth.
 
-## Что делает сервис
-
-SyncServer решает три задачи:
-
-- принимает события от устройств (`/push`);
-- отдаёт недостающие события для догонки (`/pull`);
-- отдаёт справочники номенклатуры и категорий (`/catalog/*`).
-
-Поток данных:
+## Architecture overview
 
 ```text
-Офлайн-клиенты складов
-        ↓
-      HTTP API
-        ↓
-    SyncServer
-        ↓
-    PostgreSQL
+Clients (Django/WPF/mobile/offline)
+            ↓
+         HTTP API
+            ↓
+     SyncServer (FastAPI)
+            ↓
+        PostgreSQL
 ```
 
-## Технологии
+Принцип: клиенты не пишут в БД напрямую. Все операции записи идут через HTTP API SyncServer.
 
-- Python 3.11+
-- FastAPI
-- SQLAlchemy Async + asyncpg
-- PostgreSQL 16
+## Project structure
 
-## Структура проекта
+- `main.py` — entrypoint FastAPI приложения
+- `app/api` — роуты и зависимости
+- `app/services` — бизнес-логика
+- `app/repos` — доступ к данным
+- `app/models` — SQLAlchemy ORM
+- `app/schemas` — Pydantic схемы
+- `db/init` — SQL инициализация схемы
+- `tests` — интеграционные и repo тесты
 
-- `app/api` — HTTP-роуты и зависимости
-- `app/services` — сценарии синхронизации и бизнес-логика
-- `app/repos` — слой доступа к данным
-- `app/models` — ORM-модели
-- `app/schemas` — Pydantic-схемы API
-- `db/init` — SQL-инициализация схемы БД
-- `tests` — автотесты
+## Catalog module
 
-## API (кратко)
+Сущности каталога:
 
-### Синхронизация
+- `Category` (дерево через `parent_id`)
+- `Unit`
+- `Item`
 
-- `POST /ping` — heartbeat клиента и получение верхней границы `server_seq_upto`
-- `POST /push` — приём пачки событий (идемпотентно)
-- `POST /pull` — выдача событий начиная с `since_seq`
+Каталог поддерживает read/sync API и отдельный admin write API.
 
-### Каталоги
+## API overview
 
-- `POST /catalog/items` — инкрементальная выдача номенклатуры
-- `POST /catalog/categories` — инкрементальная выдача категорий
-- `GET /catalog/categories` — дерево категорий
+### Sync API
 
-### Технические эндпоинты
+- `POST /ping`
+- `POST /push`
+- `POST /pull`
 
-- `GET /` — базовая информация о сервисе
-- `GET /health` — liveness-check
-- `GET /ready` — readiness-check с проверкой БД
-- `GET /db_check` — ручная проверка подключения к БД
+### Catalog read/sync API
 
-## Авторизация и заголовки
+- `POST /catalog/items`
+- `POST /catalog/categories`
+- `POST /catalog/units`
+- `GET /catalog/categories/tree`
 
-Для рабочих эндпоинтов (`/ping`, `/push`, `/pull`, `/catalog/*`) используются заголовки устройства:
+### Catalog admin write API
 
-- `X-Device-Token`
-- `X-Client-Version`
+- `POST /catalog/admin/units`
+- `PATCH /catalog/admin/units/{unit_id}`
+- `POST /catalog/admin/categories`
+- `PATCH /catalog/admin/categories/{category_id}`
+- `POST /catalog/admin/items`
+- `PATCH /catalog/admin/items/{item_id}`
 
-Также в middleware проставляется `X-Request-Id`:
+Удаление реализовано как soft deactivate через `is_active=false`.
 
-- если клиент прислал `X-Request-Id`, он будет использован;
-- иначе сервер сгенерирует UUID и вернёт его в ответе.
+## Clients
 
-## Конфигурация
+- Django `Warehouse_web` (trusted client)
+- WPF client (planned)
+- mobile clients (planned)
+- offline warehouse clients (planned)
 
-Скопируйте `.env.example` в `.env` и при необходимости скорректируйте значения:
-
-```bash
-cp .env.example .env
-```
-
-Основные переменные:
-
-- `DATABASE_URL` — основное подключение к PostgreSQL
-- `DATABASE_URL_TEST` — тестовая БД
-- `APP_ENV` — окружение (`dev`, `prod` и т.д.)
-- `LOG_LEVEL` — уровень логирования
-- `MAX_PUSH_EVENTS` — максимум событий в одном `/push`
-- `DEFAULT_PULL_LIMIT` — лимит по умолчанию для `/pull`
-
-## Локальный запуск (без Docker)
+## Local run
 
 ```bash
 python -m venv .venv
@@ -98,27 +79,14 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-Сервис будет доступен на `http://127.0.0.1:8000`.
-
-## Запуск через Docker Compose
+## Docker
 
 ```bash
 docker compose up --build
 ```
 
-- PostgreSQL поднимется на `localhost:5432`
-- API будет доступен на `localhost:8000`
-- SQL-инициализация загрузится из `db/init/001_init_schema.sql`
-
-## Тестирование
+## Testing
 
 ```bash
 pytest -q
 ```
-
-## Дополнительная документация
-
-- `docs/code-documentation.md` — описание слоёв и структуры кода
-- `docs/audit-syncserver.md` — технический аудит
-- `docs/tz-gap-analysis.md` — gap-анализ требований
-- `docs/client-development-tz.md` — ТЗ для клиентской команды
