@@ -20,7 +20,7 @@ class ItemDto(ORMBaseModel):
     id: UUID
     sku: str | None = None
     name: str
-    category_id: UUID | None = None
+    category_id: UUID
     unit: str
     is_active: bool
     updated_at: datetime
