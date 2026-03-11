@@ -10,6 +10,7 @@ from app.models.category import Category
 from app.models.device import Device
 from app.models.item import Item
 from app.models.site import Site
+from app.models.unit import Unit
 from main import app
 
 
@@ -173,15 +174,16 @@ async def test_catalog_items_incremental(
     base_time = datetime.now(UTC) - timedelta(days=1)
     async with session_factory() as session:
         category = Category(id=uuid4(), name="All", updated_at=base_time)
-        item_1 = Item(id=uuid4(), name="Milk", unit="pcs", category_id=category.id, updated_at=base_time)
+        unit = Unit(id=uuid4(), name="Piece", symbol="pcs", updated_at=base_time)
+        item_1 = Item(id=uuid4(), name="Milk", unit_id=unit.id, category_id=category.id, updated_at=base_time)
         item_2 = Item(
             id=uuid4(),
             name="Bread",
-            unit="pcs",
+            unit_id=unit.id,
             category_id=category.id,
             updated_at=base_time + timedelta(minutes=1),
         )
-        session.add_all([category, item_1, item_2])
+        session.add_all([category, unit, item_1, item_2])
         await session.commit()
 
     headers = {
@@ -225,3 +227,65 @@ async def test_auth_fail_bad_token(client: AsyncClient, session_factory: async_s
     )
 
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_catalog_admin_write_flow(client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    site, device = await _seed_site_and_device(session_factory)
+
+    headers = {
+        "X-Site-Id": str(site.id),
+        "X-Device-Id": str(device.id),
+        "X-Device-Token": str(device.registration_token),
+    }
+
+    create_unit = await client.post("/catalog/admin/units", json={"name": "Box", "symbol": "box"}, headers=headers)
+    assert create_unit.status_code == 200
+    unit_id = create_unit.json()["id"]
+
+    create_category = await client.post("/catalog/admin/categories", json={"name": "Food"}, headers=headers)
+    assert create_category.status_code == 200
+    category_id = create_category.json()["id"]
+
+    create_item = await client.post(
+        "/catalog/admin/items",
+        json={"name": "Sugar", "sku": "SUGAR-001", "category_id": category_id, "unit_id": unit_id},
+        headers=headers,
+    )
+    assert create_item.status_code == 200
+    item_id = create_item.json()["id"]
+
+    deactivate_item = await client.patch(f"/catalog/admin/items/{item_id}", json={"is_active": False}, headers=headers)
+    assert deactivate_item.status_code == 200
+    assert deactivate_item.json()["is_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_catalog_admin_category_cycle_validation(client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    site, device = await _seed_site_and_device(session_factory)
+
+    headers = {
+        "X-Site-Id": str(site.id),
+        "X-Device-Id": str(device.id),
+        "X-Device-Token": str(device.registration_token),
+    }
+
+    root_resp = await client.post("/catalog/admin/categories", json={"name": "Root"}, headers=headers)
+    assert root_resp.status_code == 200
+    root_id = root_resp.json()["id"]
+
+    child_resp = await client.post(
+        "/catalog/admin/categories",
+        json={"name": "Child", "parent_id": root_id},
+        headers=headers,
+    )
+    assert child_resp.status_code == 200
+    child_id = child_resp.json()["id"]
+
+    cycle_resp = await client.patch(
+        f"/catalog/admin/categories/{root_id}",
+        json={"parent_id": child_id},
+        headers=headers,
+    )
+    assert cycle_resp.status_code == 400
+    assert cycle_resp.json()["detail"] == "category cycle detected"

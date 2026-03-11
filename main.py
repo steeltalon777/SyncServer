@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routes_catalog import router as catalog_router
+from app.api.routes_catalog_admin import router as catalog_admin_router
 from app.api.routes_health import router as health_router
 from app.api.routes_sync import router as sync_router
 from app.core.config import get_settings
@@ -51,4 +52,5 @@ async def db_check(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
 
 app.include_router(sync_router)
 app.include_router(catalog_router)
+app.include_router(catalog_admin_router)
 app.include_router(health_router)

@@ -9,7 +9,6 @@ CREATE TABLE IF NOT EXISTS sites (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_sites_code ON sites(code);
 
 
-
 CREATE TABLE IF NOT EXISTS devices (
     id UUID PRIMARY KEY,
     site_id UUID NOT NULL REFERENCES sites(id),
@@ -27,7 +26,6 @@ CREATE INDEX IF NOT EXISTS ix_devices_site_id ON devices(site_id);
 CREATE INDEX IF NOT EXISTS ix_devices_last_seen_at ON devices(last_seen_at);
 
 
-
 CREATE TABLE IF NOT EXISTS categories (
     id UUID PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -36,26 +34,44 @@ CREATE TABLE IF NOT EXISTS categories (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    sort_order INTEGER
+    sort_order INTEGER,
+    CONSTRAINT uq_categories_parent_name UNIQUE (parent_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS ix_categories_parent_id ON categories(parent_id);
 CREATE INDEX IF NOT EXISTS ix_categories_updated_at ON categories(updated_at);
 
 
+CREATE TABLE IF NOT EXISTS units (
+    id UUID PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    symbol VARCHAR(20) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_units_name ON units(name);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_units_symbol ON units(symbol);
+CREATE INDEX IF NOT EXISTS ix_units_updated_at ON units(updated_at);
+
 
 CREATE TABLE IF NOT EXISTS items (
     id UUID PRIMARY KEY,
     sku VARCHAR(100) UNIQUE,
     name VARCHAR(255) NOT NULL,
-    category_id UUID REFERENCES categories(id),
-    unit VARCHAR(32) NOT NULL,
+    category_id UUID NOT NULL REFERENCES categories(id),
+    unit_id UUID NOT NULL REFERENCES units(id),
+    description TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS ix_items_category_id ON items(category_id);
+CREATE INDEX IF NOT EXISTS ix_items_unit_id ON items(unit_id);
 CREATE INDEX IF NOT EXISTS ix_items_updated_at ON items(updated_at);
-
 
 
 CREATE TABLE IF NOT EXISTS events (
@@ -77,7 +93,6 @@ CREATE INDEX IF NOT EXISTS ix_events_site_id_event_datetime ON events(site_id, e
 CREATE INDEX IF NOT EXISTS ix_events_event_type ON events(event_type);
 
 
-
 CREATE TABLE IF NOT EXISTS balances (
     site_id UUID NOT NULL REFERENCES sites(id),
     item_id UUID NOT NULL REFERENCES items(id),
@@ -85,7 +100,6 @@ CREATE TABLE IF NOT EXISTS balances (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (site_id, item_id)
 );
-
 
 
 CREATE TABLE IF NOT EXISTS user_site_roles (
