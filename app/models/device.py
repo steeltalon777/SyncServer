@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, UniqueConst
 from sqlalchemy.dialects.postgresql import INET, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models import Site
+from app.models.site import Site
 from app.models.base import Base
 
 

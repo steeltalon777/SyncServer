@@ -7,7 +7,8 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models import Category, Unit
+from app.models.category import Category
+from app.models.unit import Unit
 from app.models.base import Base
 
 
