@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, UniqueConst
 from sqlalchemy.dialects.postgresql import INET, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.site import Site
+
 from app.models.base import Base
 
 
@@ -24,7 +24,7 @@ class Device(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    site: Mapped[Site] = relationship(back_populates="devices")
+    site = relationship("Site", back_populates="devices")
 
     __table_args__ = (
         UniqueConstraint("site_id", "registration_token", name="uq_devices_site_registration_token"),

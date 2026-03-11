@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, DateTime, Index, String, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.device import Device
+
 from app.models.base import Base
 
 
@@ -20,6 +20,6 @@ class Site(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    devices: Mapped[list[Device]] = relationship(back_populates="site")
+    devices = relationship("Device", back_populates="site")
 
     __table_args__ = (Index("ux_sites_code", "code", unique=True),)
