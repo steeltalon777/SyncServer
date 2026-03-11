@@ -1,40 +1,36 @@
 # AI_CONTEXT
 
 ## System architecture
-SyncServer построен как слой синхронизации и каталогизации данных для складских клиентов. Архитектура слоистая: API слой только оркестрирует запрос, доменная логика в сервисах, SQL доступ в репозиториях.
+- Architecture style: layered monolith.
+- Request path: FastAPI router → service → repository → PostgreSQL.
+- Transaction management: `UnitOfWork` (`async with uow`).
 
 ## Backend rules
-- Не добавлять бизнес-логику в роуты (`app/api`).
-- Любые доменные проверки размещать в `app/services`.
-- Транзакционные операции выполнять внутри `UnitOfWork` (`async with uow`).
-- Исключения уровня бизнес-правил возвращать как HTTP 4xx из сервисов/роутов согласованно.
+- Keep route handlers thin; business rules stay in `app/services`.
+- Repository layer owns SQLAlchemy query details.
+- Preserve push idempotency semantics (`accepted`, `duplicate_same_payload`, `uuid_collision`).
+- Keep auth checks via `require_device_auth` for sync/catalog endpoints.
 
 ## Database rules
-- PostgreSQL — единственное хранилище сервиса.
-- Избегать переноса доменной логики в триггеры/процедуры БД.
-- Использовать UUID как primary id для сущностей домена.
-- Для sync-событий использовать `server_seq` как монотонный курсор выдачи.
+- PostgreSQL is the only runtime datastore.
+- Domain entities use UUID identifiers.
+- `events.server_seq` is the authoritative pull cursor.
+- Catalog deactivation is soft (`is_active=false`), not hard delete.
 
 ## Layered architecture
-### API
-`app/api/routes_*.py`, `main.py`, `app/api/deps.py`.
-
-### Services
-`app/services/sync_service.py`, `event_ingest.py`, `catalog_admin_service.py`, `uow.py`.
-
-### Repositories
-`app/repos/*.py` — все запросы и запись в БД через repo-слой.
-
-### Models
-`app/models/*.py` — ORM отражение таблиц и связей.
+- API: `app/api/`
+- Service: `app/services/`
+- Repository: `app/repos/`
+- Models: `app/models/`
+- Config/DB wiring: `app/core/`
 
 ## Client rules
-- Поддерживаемые клиенты: web (Django), desktop/mobile/offline клиенты.
-- Клиенты обязаны обращаться только к HTTP API сервера.
-- Device-level аутентификация (`X-Device-Token`) обязательна для sync/catalog endpoints.
+- Clients must use HTTP API; no direct DB writes.
+- Sync/catalog calls require device headers (`X-Device-Token`, plus catalog auth headers).
+- Clients should treat `/push` as retry-safe due to idempotent ingest.
 
 ## Architecture constraints
-- Нельзя писать напрямую в PostgreSQL из клиентских приложений.
-- Нельзя смешивать sync ingestion и catalog admin логику в одном endpoint.
-- Нельзя ломать идемпотентность ingest (`event_uuid + payload_hash`).
-- Для каталога использовать soft deactivation (`is_active`), не hard delete.
+- Do not bypass `UnitOfWork` for transactional writes.
+- Do not move repository logic into routers.
+- Do not break category hierarchy invariants (no self-parent, no cycles, unique sibling names).
+- In-memory rate limiter is process-local; do not assume cluster-wide protection.
