@@ -38,3 +38,13 @@
 - Introduce distributed rate-limit storage.
 - Adopt migration tooling for schema evolution.
 - Add reconciliation workflows for long-offline clients.
+
+- In Docker deployment, `127.0.0.1` from another container does not reach SyncServer.
+- Cross-container access must use `http://syncserver:8000`.
+- Reverse proxy deployments should route `/api/` to SyncServer instead of exposing SyncServer as the main public entrypoint.
+- Database bootstrap is required before first use:
+  - apply `db/init/001_init_schema.sql`
+  - create `site`
+  - create `device`
+  - create `registration_token`
+- Device/site IDs and registration token must match real bootstrap data, not placeholder strings.

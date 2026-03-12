@@ -34,3 +34,12 @@
 - Do not move repository logic into routers.
 - Do not break category hierarchy invariants (no self-parent, no cycles, unique sibling names).
 - In-memory rate limiter is process-local; do not assume cluster-wide protection.
+
+## Deployment constraints
+
+- SyncServer is commonly deployed behind nginx reverse proxy.
+- In container deployment SyncServer should live in a shared external Docker network (for example `backend`).
+- Other services must call SyncServer by service/container name:
+  - `http://syncserver:8000`
+- Do not document or recommend `127.0.0.1` for cross-container communication.
+- Public ingress may terminate at nginx, while SyncServer remains internal-only.

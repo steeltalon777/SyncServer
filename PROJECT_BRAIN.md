@@ -7,6 +7,15 @@ SyncServer provides reliable event synchronization and catalog APIs for distribu
 Layered FastAPI backend:
 `routes -> services -> repositories -> PostgreSQL` with per-request `UnitOfWork` transactions.
 
+## Deployment role
+
+SyncServer is the backend authority in a multi-service deployment:
+
+- nginx gateway handles public ingress
+- Warehouse_web acts as SSR web client
+- SyncServer remains the source of truth for sync and catalog APIs
+- PostgreSQL stores authoritative backend state
+
 ## Key modules
 - Sync module (`/ping`, `/push`, `/pull`)
 - Catalog read module (`/catalog/*`)

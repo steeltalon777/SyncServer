@@ -6,6 +6,12 @@ SyncServer is an async FastAPI backend for event synchronization and catalog man
 ## Architecture overview
 `Clients → API layer → Service layer → Repository layer → PostgreSQL`
 
+## Deployment overview
+- Typically deployed inside shared Docker network `backend`
+- Usually accessed through nginx reverse proxy
+- Common public route: `/api/` → SyncServer
+- Warehouse_web web client calls SyncServer internally by `http://syncserver:8000`
+
 ## Tech stack
 Python 3.11, FastAPI, SQLAlchemy Async, Pydantic v2, PostgreSQL, Pytest, Docker.
 

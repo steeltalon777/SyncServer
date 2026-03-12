@@ -1,6 +1,39 @@
 # SYSTEM_MAP
 
 ## System components
+Ingress layer
+
+nginx gateway является точкой входа системы.
+
+Задачи nginx:
+
+маршрутизация HTTP
+
+будущий TLS termination
+
+проксирование API
+
+Routing:
+
+/ → Warehouse_web
+/api/ → SyncServer
+
+Web client
+
+Warehouse_web — Django SSR клиент.
+
+Функции:
+
+интерфейс кладовщика
+
+управление каталогом
+
+просмотр остатков
+
+создание операций
+
+резервный онлайн клиент
+
 
 ### Clients
 - Offline-capable device clients (desktop/mobile/other) calling sync and catalog APIs.

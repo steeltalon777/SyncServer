@@ -48,7 +48,42 @@ Set at least `DATABASE_URL` in `.env`.
 ```bash
 uvicorn main:app --reload
 ```
+## Container deployment (current production-style setup)
 
+SyncServer is deployed inside a shared external Docker network and is usually accessed
+through an nginx reverse proxy, not directly from the Internet.
+
+### Network model
+
+Services connected to the shared Docker network:
+
+- `syncserver`
+- `warehouse_web`
+- `nginx_gateway`
+
+External Docker network name:
+
+```text
+backend
+Internal service address
+
+Other containers must connect to SyncServer by service name:
+
+http://syncserver:8000
+
+Do not use 127.0.0.1 from other containers, because inside Docker that points to the container itself.
+
+Reverse proxy model
+
+Typical ingress flow:
+
+Browser
+  ↓
+nginx gateway
+  ↓
+/api/ → SyncServer
+
+In this deployment model SyncServer does not need a public host port exposed.
 or
 
 ```bash

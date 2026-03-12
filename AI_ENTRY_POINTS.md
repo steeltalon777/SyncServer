@@ -39,3 +39,10 @@
 - `.env.example`
 - `docker-compose.yml`
 - `db/init/001_init_schema.sql`
+
+## Deployment entrypoints
+
+- `docker-compose.yml` — container deployment descriptor
+- `db/init/001_init_schema.sql` — schema bootstrap
+- `.env` / `.env.example` — runtime configuration
+- nginx gateway (external repo/folder in deployment) routes `/api/` to this service

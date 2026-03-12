@@ -1,4 +1,11 @@
 # API_CONTRACT
+## Deployment note
+
+In containerized deployment this API is usually reached through reverse proxy:
+
+- internal service address: `http://syncserver:8000`
+- external routed prefix may be `/api/` depending on nginx configuration
+
 
 ## Notes
 - HTTP API is implemented with FastAPI routers.
