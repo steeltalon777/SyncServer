@@ -4,6 +4,7 @@ from app.models.category import Category
 from app.models.device import Device
 from app.models.event import Event
 from app.models.item import Item
+from app.models.operation import Operation, OperationLine
 from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user_site_role import UserSiteRole
@@ -17,5 +18,7 @@ __all__ = [
     "Event",
     "Balance",
     "UserSiteRole",
-    "Unit"
+    "Unit",
+    "Operation",
+    "OperationLine",
 ]

@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
 ## System Overview
-SyncServer is a standalone backend service that synchronizes device events and serves catalog data. The service persists all operational state in PostgreSQL.
+SyncServer is a standalone backend service that serves as the single source of truth for warehouse management system. The service persists all operational state in PostgreSQL.
 
 ## High-Level Architecture

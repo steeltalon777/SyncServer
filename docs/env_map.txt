@@ -1,0 +1,77 @@
+API
+  - AI_CONTEXT.md
+  - AI_ENTRY_POINTS.md
+  - API_CONTRACT.md
+  - INDEX.md
+  - MEMORY.md
+  - PROJECT_BRAIN.md
+  - README.md
+  - SYSTEM_MAP.md
+  - app/api/exceptions.py
+  - docs/adr/0001-layered-architecture-fastapi-service-repository-uow.md
+  - docs/adr/0002-idempotent-event-ingest-event-uuid-payload-hash.md
+  - docs/audit-syncserver.md
+  - docs/client-development-tz.md
+  - docs/code-documentation.md
+  - docs/tz-gap-analysis.md
+  - main.py
+  - tools/update_ai_maps.py
+
+API_CONTRACT
+  - API_CONTRACT.md
+  - MEMORY.md
+  - docs/tree_repo.txt
+
+DATABASE_URL
+  - .env.example
+  - AI_ENTRY_POINTS.md
+  - INDEX.md
+  - app/core/config.py
+  - app/core/db.py
+  - docs/code-documentation.md
+  - tests/conftest.py
+
+DATABASE_URL_TEST
+  - .env.example
+  - app/core/config.py
+  - docs/code-documentation.md
+  - docs/tz-gap-analysis.md
+  - tests/conftest.py
+
+DEBUG
+  - tools/update_ai_maps.py
+
+DPAPI
+  - docs/client-development-tz.md
+
+HOST
+  - tools/update_ai_maps.py
+
+PORT
+  - tools/update_ai_maps.py
+
+POSTGRES
+  - tools/update_ai_maps.py
+
+SECRET
+  - tools/update_ai_maps.py
+
+SYNC
+  - tools/update_ai_maps.py
+
+SYNC_SERVER_SERVICE_TOKEN
+  - AI_CONTEXT.md
+  - AI_ENTRY_POINTS.md
+  - INDEX.md
+  - MEMORY.md
+  - app/api/deps.py
+  - app/core/config.py
+
+TOKEN
+  - tools/update_ai_maps.py
+
+URL
+  - tools/update_ai_maps.py
+
+URL_PATTERN
+  - tools/update_ai_maps.py

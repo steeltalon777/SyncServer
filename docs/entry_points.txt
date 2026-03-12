@@ -1,0 +1,3 @@
+Potential entry points and routing files:
+- main.py
+- tools/update_ai_maps.py

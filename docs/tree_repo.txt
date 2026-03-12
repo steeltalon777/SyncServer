@@ -1,0 +1,41 @@
+SyncServer
+├── app
+│   ├── api
+│   ├── core
+│   ├── models
+│   ├── repos
+│   ├── schemas
+│   └── services
+├── db
+│   └── init
+├── docs
+│   ├── adr
+│   ├── audit-syncserver.md
+│   ├── client-development-tz.md
+│   ├── code-documentation.md
+│   └── tz-gap-analysis.md
+├── tests
+│   ├── conftest.py
+│   ├── test_events_repo.py
+│   └── test_http_sync.py
+├── tools
+│   └── update_ai_maps.py
+├── .env.example
+├── .gitignore
+├── AI_CONTEXT.md
+├── AI_ENTRY_POINTS.md
+├── API_CONTRACT.md
+├── ARCHITECTURE.md
+├── docker-compose.yml
+├── Dockerfile
+├── DOMAIN_MODEL.md
+├── INDEX.md
+├── main.py
+├── MEMORY.md
+├── PROJECT_BRAIN.md
+├── pytest.ini
+├── README.md
+├── requirements.txt
+├── SYSTEM_MAP.md
+├── test_main.http
+└── USE_CASES.md

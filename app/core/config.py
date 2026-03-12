@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     MAX_PUSH_EVENTS: int = Field(default=500, ge=1, le=5000)
     DEFAULT_PULL_LIMIT: int = Field(default=200, ge=1, le=1000)
     SYNC_SERVER_SERVICE_TOKEN: str = Field(default="", description="Service token for trusted service authentication")
+    DEFAULT_OPERATIONS_PAGE_SIZE: int = Field(default=50, ge=1, le=100, description="Default page size for operations")
+    DEFAULT_BALANCES_PAGE_SIZE: int = Field(default=100, ge=1, le=200, description="Default page size for balances")
+    DEFAULT_ADMIN_PAGE_SIZE: int = Field(default=50, ge=1, le=100, description="Default page size for admin endpoints")
+    MAX_OPERATION_LINES: int = Field(default=100, ge=1, le=500, description="Maximum lines per operation")
 
 
 @lru_cache

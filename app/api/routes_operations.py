@@ -1,0 +1,372 @@
+from __future__ import annotations
+
+import logging
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+
+from app.api.deps import (
+    get_request_id,
+    get_uow,
+    require_service_auth,
+    require_acting_user,
+)
+from app.schemas.operation import (
+    OperationCancel,
+    OperationCreate,
+    OperationFilter,
+    OperationListResponse,
+    OperationResponse,
+    OperationSubmit,
+    OperationUpdate,
+)
+from app.services.access_service import AccessService
+from app.services.operations_service import OperationsService
+from app.services.uow import UnitOfWork
+
+router = APIRouter(prefix="/operations")
+logger = logging.getLogger(__name__)
+
+
+@router.get("", response_model=OperationListResponse)
+async def list_operations(
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    site_id: UUID | None = Query(None, description="Filter by site ID"),
+    type: str | None = Query(None, description="Filter by operation type"),
+    status: str | None = Query(None, description="Filter by operation status"),
+    created_by_user_id: int | None = Query(None, description="Filter by creator user ID"),
+    created_after: str | None = Query(None, description="Filter by creation date after"),
+    created_before: str | None = Query(None, description="Filter by creation date before"),
+    updated_after: str | None = Query(None, description="Filter by update date after"),
+    updated_before: str | None = Query(None, description="Filter by update date before"),
+    search: str | None = Query(None, description="Search in notes"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Page size"),
+) -> OperationListResponse:
+    """List operations with filtering."""
+    # Validate service authentication
+    await require_service_auth(request=request, authorization=authorization)
+    
+    # Validate acting user context
+    user_context = await require_acting_user(
+        request=request,
+        uow=uow,
+        x_acting_user_id=x_acting_user_id,
+        x_acting_site_id=x_acting_site_id,
+    )
+    
+    # Get user's sites and roles
+    user_sites_roles = await AccessService.get_user_sites_with_roles(uow, user_context["user_id"])
+    user_site_ids = [site_id for site_id, _ in user_sites_roles]
+    
+    # Build filter
+    filter_data = OperationFilter(
+        site_id=site_id,
+        type=type,
+        status=status,
+        created_by_user_id=created_by_user_id,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        search=search,
+    )
+    
+    # If user is not root, filter by their accessible sites
+    if user_context["role"] != "root" and not site_id:
+        # User can only see operations from their sites
+        # We'll handle this in the repository
+        pass
+    
+    async with uow:
+        operations, total_count = await uow.operations.list_operations(
+            filter=filter_data,
+            page=page,
+            page_size=page_size,
+        )
+    
+    # Convert to response models
+    operation_responses = [
+        OperationResponse.model_validate(op) for op in operations
+    ]
+    
+    logger.info(
+        "request_id=%s list_operations user_id=%s site_id=%s returned=%s total=%s",
+        get_request_id(request),
+        user_context["user_id"],
+        user_context["site_id"],
+        len(operation_responses),
+        total_count,
+    )
+    
+    return OperationListResponse(
+        operations=operation_responses,
+        total_count=total_count,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/{operation_id}", response_model=OperationResponse)
+async def get_operation(
+    operation_id: int,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+) -> OperationResponse:
+    """Get operation by ID."""
+    # Validate service authentication
+    await require_service_auth(request=request, authorization=authorization)
+    
+    # Validate acting user context
+    user_context = await require_acting_user(
+        request=request,
+        uow=uow,
+        x_acting_user_id=x_acting_user_id,
+        x_acting_site_id=x_acting_site_id,
+    )
+    
+    async with uow:
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        
+        if not operation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Operation not found",
+            )
+        
+        # Check if user has access to this operation
+        user_sites_roles = await AccessService.get_user_sites_with_roles(uow, user_context["user_id"])
+        has_access = await uow.operations.user_has_access_to_operation(
+            user_id=user_context["user_id"],
+            operation_id=operation_id,
+            user_site_roles=user_sites_roles,
+        )
+        
+        if not has_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User does not have access to this operation",
+            )
+    
+    logger.info(
+        "request_id=%s get_operation operation_id=%s user_id=%s",
+        get_request_id(request),
+        operation_id,
+        user_context["user_id"],
+    )
+    
+    return OperationResponse.model_validate(operation)
+
+
+@router.post("", response_model=OperationResponse)
+async def create_operation(
+    operation_data: OperationCreate,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+) -> OperationResponse:
+    """Create a new operation."""
+    # Validate service authentication
+    await require_service_auth(request=request, authorization=authorization)
+    
+    # Validate acting user context
+    user_context = await require_acting_user(
+        request=request,
+        uow=uow,
+        x_acting_user_id=x_acting_user_id,
+        x_acting_site_id=x_acting_site_id,
+    )
+    
+    async with uow:
+        result = await OperationsService.create_operation(
+            uow=uow,
+            operation_data=operation_data,
+            user_id=user_context["user_id"],
+        )
+    
+    logger.info(
+        "request_id=%s create_operation operation_uuid=%s type=%s user_id=%s site_id=%s lines=%s",
+        get_request_id(request),
+        result["operation_uuid"],
+        operation_data.type,
+        user_context["user_id"],
+        operation_data.site_id,
+        len(operation_data.lines),
+    )
+    
+    return OperationResponse.model_validate(result["operation"])
+
+
+@router.patch("/{operation_id}", response_model=OperationResponse)
+async def update_operation(
+    operation_id: int,
+    update_data: OperationUpdate,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+) -> OperationResponse:
+    """Update an operation (draft only)."""
+    # Validate service authentication
+    await require_service_auth(request=request, authorization=authorization)
+    
+    # Validate acting user context
+    user_context = await require_acting_user(
+        request=request,
+        uow=uow,
+        x_acting_user_id=x_acting_user_id,
+        x_acting_site_id=x_acting_site_id,
+    )
+    
+    async with uow:
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        
+        if not operation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Operation not found",
+            )
+        
+        # Check if user has access to this operation
+        user_sites_roles = await AccessService.get_user_sites_with_roles(uow, user_context["user_id"])
+        has_access = await uow.operations.user_has_access_to_operation(
+            user_id=user_context["user_id"],
+            operation_id=operation_id,
+            user_site_roles=user_sites_roles,
+        )
+        
+        if not has_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User does not have access to this operation",
+            )
+        
+        # Only draft operations can be updated
+        if operation.status != "draft":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot update operation with status {operation.status}",
+            )
+        
+        # Update operation
+        if update_data.notes is not None:
+            operation.notes = update_data.notes
+        
+        # Update lines if provided
+        if update_data.lines is not None:
+            # Delete existing lines
+            await uow.operations.delete_operation_lines(operation_id)
+            
+            # Create new lines
+            for line_data in update_data.lines:
+                await uow.operations.create_operation_line(
+                    operation_id=operation_id,
+                    line_number=line_data.line_number,
+                    item_id=line_data.item_id,
+                    quantity=line_data.quantity,
+                    source_site_id=line_data.source_site_id,
+                    target_site_id=line_data.target_site_id,
+                    notes=line_data.notes,
+                )
+        
+        # Get updated operation
+        updated_operation = await uow.operations.get_operation_by_id(operation_id)
+    
+    logger.info(
+        "request_id=%s update_operation operation_id=%s user_id=%s",
+        get_request_id(request),
+        operation_id,
+        user_context["user_id"],
+    )
+    
+    return OperationResponse.model_validate(updated_operation)
+
+
+@router.post("/{operation_id}/submit", response_model=OperationResponse)
+async def submit_operation(
+    operation_id: int,
+    submit_data: OperationSubmit,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+) -> OperationResponse:
+    """Submit an operation."""
+    # Validate service authentication
+    await require_service_auth(request=request, authorization=authorization)
+    
+    # Validate acting user context
+    user_context = await require_acting_user(
+        request=request,
+        uow=uow,
+        x_acting_user_id=x_acting_user_id,
+        x_acting_site_id=x_acting_site_id,
+    )
+    
+    async with uow:
+        result = await OperationsService.submit_operation(
+            uow=uow,
+            operation_id=operation_id,
+            user_id=user_context["user_id"],
+        )
+    
+    logger.info(
+        "request_id=%s submit_operation operation_id=%s user_id=%s",
+        get_request_id(request),
+        operation_id,
+        user_context["user_id"],
+    )
+    
+    return OperationResponse.model_validate(result["operation"])
+
+
+@router.post("/{operation_id}/cancel", response_model=OperationResponse)
+async def cancel_operation(
+    operation_id: int,
+    cancel_data: OperationCancel,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+) -> OperationResponse:
+    """Cancel an operation."""
+    # Validate service authentication
+    await require_service_auth(request=request, authorization=authorization)
+    
+    # Validate acting user context
+    user_context = await require_acting_user(
+        request=request,
+        uow=uow,
+        x_acting_user_id=x_acting_user_id,
+        x_acting_site_id=x_acting_site_id,
+    )
+    
+    async with uow:
+        result = await OperationsService.cancel_operation(
+            uow=uow,
+            operation_id=operation_id,
+            user_id=user_context["user_id"],
+            reason=cancel_data.reason,
+        )
+    
+    logger.info(
+        "request_id=%s cancel_operation operation_id=%s user_id=%s reason=%s",
+        get_request_id(request),
+        operation_id,
+        user_context["user_id"],
+        cancel_data.reason,
+    )
+    
+    return OperationResponse.model_validate(result["operation"])
