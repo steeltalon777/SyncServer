@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = ""
     MAX_PUSH_EVENTS: int = Field(default=500, ge=1, le=5000)
     DEFAULT_PULL_LIMIT: int = Field(default=200, ge=1, le=1000)
+    SYNC_SERVER_SERVICE_TOKEN: str = Field(default="", description="Service token for trusted service authentication")
 
 
 @lru_cache

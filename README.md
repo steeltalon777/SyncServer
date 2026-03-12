@@ -63,7 +63,7 @@ Services connected to the shared Docker network:
 
 External Docker network name:
 
-```text
+backend
 backend
 Internal service address
 

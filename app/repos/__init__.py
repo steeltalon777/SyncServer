@@ -3,6 +3,7 @@ from app.repos.catalog_repo import CatalogRepo
 from app.repos.devices_repo import DevicesRepo
 from app.repos.events_repo import EventsRepo
 from app.repos.sites_repo import SitesRepo
+from app.repos.user_site_roles_repo import UserSiteRolesRepo
 
 __all__ = [
     "SitesRepo",
@@ -10,4 +11,5 @@ __all__ = [
     "EventsRepo",
     "CatalogRepo",
     "BalancesRepo",
+    "UserSiteRolesRepo",
 ]

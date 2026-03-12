@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routes_business import router as business_router
 from app.api.routes_catalog import router as catalog_router
 from app.api.routes_catalog_admin import router as catalog_admin_router
 from app.api.routes_health import router as health_router
@@ -54,3 +55,4 @@ app.include_router(sync_router)
 app.include_router(catalog_router)
 app.include_router(catalog_admin_router)
 app.include_router(health_router)
+app.include_router(business_router)
