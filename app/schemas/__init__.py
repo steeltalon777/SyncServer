@@ -30,7 +30,6 @@ from app.schemas.catalog import (
     CategoryTreeNode,
 )
 from app.schemas.common import ORMBaseModel
-from app.schemas.event import EventResponse
 from app.schemas.operation import (
     OperationCancel,
     OperationCreate,
