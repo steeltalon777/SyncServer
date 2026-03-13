@@ -8,6 +8,7 @@ API
   - README.md
   - SYSTEM_MAP.md
   - app/api/exceptions.py
+  - app/services/operations_service.py
   - docs/adr/0001-layered-architecture-fastapi-service-repository-uow.md
   - docs/adr/0002-idempotent-event-ingest-event-uuid-payload-hash.md
   - docs/audit-syncserver.md

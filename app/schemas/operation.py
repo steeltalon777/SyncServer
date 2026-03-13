@@ -9,12 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.schemas.common import ORMBaseModel
 
 
-# Request schemas
 class OperationLineCreate(BaseModel):
     """Schema for creating an operation line."""
-    
+
     line_number: int = Field(ge=1, description="Line number within operation")
-    item_id: int = Field(ge=1, description="Item ID")
+    item_id: UUID = Field(description="Item ID")
     quantity: int = Field(ge=1, description="Positive quantity")
     source_site_id: UUID | None = Field(None, description="Source site ID for MOVE operations")
     target_site_id: UUID | None = Field(None, description="Target site ID for MOVE operations")
@@ -23,12 +22,12 @@ class OperationLineCreate(BaseModel):
 
 class OperationCreate(BaseModel):
     """Schema for creating an operation."""
-    
+
     type: Literal["RECEIVE", "WRITE_OFF", "MOVE", "ISSUE"] = Field(description="Operation type")
     site_id: UUID = Field(description="Primary site ID for the operation")
     lines: list[OperationLineCreate] = Field(min_length=1, description="Operation lines")
     notes: str | None = Field(None, max_length=1000, description="Operation notes")
-    
+
     @field_validator("lines")
     @classmethod
     def validate_lines_for_type(cls, lines: list[OperationLineCreate], info):
@@ -44,31 +43,30 @@ class OperationCreate(BaseModel):
 
 class OperationUpdate(BaseModel):
     """Schema for updating an operation."""
-    
+
     notes: str | None = Field(None, max_length=1000, description="Operation notes")
     lines: list[OperationLineCreate] | None = Field(None, description="Updated operation lines")
 
 
 class OperationSubmit(BaseModel):
     """Schema for submitting an operation."""
-    
+
     submit: bool = Field(True, description="Submit the operation")
 
 
 class OperationCancel(BaseModel):
     """Schema for cancelling an operation."""
-    
+
     cancel: bool = Field(True, description="Cancel the operation")
     reason: str | None = Field(None, max_length=500, description="Cancellation reason")
 
 
-# Response schemas
 class OperationLineResponse(ORMBaseModel):
     """Schema for operation line response."""
-    
+
     id: int
     line_number: int
-    item_id: int
+    item_id: UUID
     quantity: int
     source_site_id: UUID | None
     target_site_id: UUID | None
@@ -77,7 +75,7 @@ class OperationLineResponse(ORMBaseModel):
 
 class OperationResponse(ORMBaseModel):
     """Schema for operation response."""
-    
+
     id: int
     operation_uuid: UUID
     site_id: UUID
@@ -96,17 +94,16 @@ class OperationResponse(ORMBaseModel):
 
 class OperationListResponse(ORMBaseModel):
     """Schema for operation list response."""
-    
+
     operations: list[OperationResponse]
     total_count: int
     page: int
     page_size: int
 
 
-# Filter schemas
 class OperationFilter(BaseModel):
     """Schema for filtering operations."""
-    
+
     site_id: UUID | None = None
     type: Literal["RECEIVE", "WRITE_OFF", "MOVE", "ISSUE"] | None = None
     status: Literal["draft", "submitted", "cancelled"] | None = None
@@ -116,5 +113,5 @@ class OperationFilter(BaseModel):
     updated_after: datetime | None = None
     updated_before: datetime | None = None
     search: str | None = None
-    
+
     model_config = ConfigDict(extra="forbid")

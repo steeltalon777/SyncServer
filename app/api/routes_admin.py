@@ -30,6 +30,7 @@ from app.schemas.admin import (
     UserSiteAccessResponse,
     UserSiteAccessUpdate,
     UserUpdate,
+    SiteFilter
 )
 from app.services.access_service import AccessService
 from app.services.uow import UnitOfWork
@@ -123,13 +124,17 @@ async def list_sites_admin(
         access_service = AccessService(uow)
         await access_service.validate_root_permission(user_context["user_id"])
 
+        site_filter = SiteFilter(
+            is_active=is_active,
+            search=search,
+        )
+
         sites, total_count = await uow.sites.list_sites(
-            filter={"is_active": is_active, "search": search},
+            filter=site_filter,
             user_site_ids=None,
             page=page,
             page_size=page_size,
         )
-
     site_responses = [SiteResponse.model_validate(site) for site in sites]
 
     logger.info(
