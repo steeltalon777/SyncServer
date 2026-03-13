@@ -66,7 +66,6 @@ __all__ = [
     "CatalogCategoriesResponse",
     "CatalogUnitsResponse",
     "CategoryTreeNode",
-    "EventResponse",
     "OperationCreate",
     "OperationUpdate",
     "OperationSubmit",

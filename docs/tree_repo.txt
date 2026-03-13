@@ -10,9 +10,18 @@ SyncServer
 │   └── init
 ├── docs
 │   ├── adr
+│   ├── api_routes.txt
 │   ├── audit-syncserver.md
 │   ├── client-development-tz.md
 │   ├── code-documentation.md
+│   ├── entry_points.txt
+│   ├── env_map.txt
+│   ├── tree_api.txt
+│   ├── tree_app.txt
+│   ├── tree_models.txt
+│   ├── tree_repo.txt
+│   ├── tree_repos.txt
+│   ├── tree_services.txt
 │   └── tz-gap-analysis.md
 ├── tests
 │   ├── conftest.py
