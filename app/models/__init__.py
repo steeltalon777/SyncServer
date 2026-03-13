@@ -8,6 +8,7 @@ from app.models.operation import Operation, OperationLine
 from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user_site_role import UserSiteRole
+from app.models.user import User
 
 __all__ = [
     "Base",
@@ -21,4 +22,5 @@ __all__ = [
     "Unit",
     "Operation",
     "OperationLine",
+    "User"
 ]

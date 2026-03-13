@@ -118,13 +118,13 @@ class UserSiteAccessCreate(BaseModel):
     
     user_id: int = Field(ge=1, description="User ID")
     site_id: UUID = Field(description="Site ID")
-    role: Literal["root", "chief_storekeeper", "storekeeper"] = Field(description="User role for this site")
+    role: Literal["root", "chief_storekeeper", "storekeeper", "observer"] = Field(description="User role for this site")
 
 
 class UserSiteAccessUpdate(BaseModel):
     """Schema for updating user-site access."""
     
-    role: Literal["root", "chief_storekeeper", "storekeeper"] | None = Field(None, description="User role for this site")
+    role: Literal["root", "chief_storekeeper", "storekeeper", "observer"] | None = Field(None, description="User role for this site")
     is_active: bool | None = Field(None, description="Whether the access is active")
 
 
@@ -134,7 +134,7 @@ class UserSiteAccessResponse(ORMBaseModel):
     id: int
     user_id: int
     site_id: UUID
-    role: Literal["root", "chief_storekeeper", "storekeeper"]
+    role: Literal["root", "chief_storekeeper", "storekeeper", "observer"]
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -211,7 +211,7 @@ class UserSiteAccessFilter(BaseModel):
     
     user_id: int | None = None
     site_id: UUID | None = None
-    role: Literal["root", "chief_storekeeper", "storekeeper"] | None = None
+    role: Literal["root", "chief_storekeeper", "storekeeper", "observer"] | None
     is_active: bool | None = None
     
     model_config = ConfigDict(extra="forbid")

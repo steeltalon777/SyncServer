@@ -9,6 +9,7 @@ from app.repos.events_repo import EventsRepo
 from app.repos.operations_repo import OperationsRepo
 from app.repos.sites_repo import SitesRepo
 from app.repos.user_site_roles_repo import UserSiteRolesRepo
+from app.repos.users_repo import UsersRepo
 
 
 class UnitOfWork:
@@ -23,6 +24,7 @@ class UnitOfWork:
         self.balances = BalancesRepo(session)
         self.user_site_roles = UserSiteRolesRepo(session)
         self.operations = OperationsRepo(session)
+        self.users = UsersRepo(session)
 
     async def __aenter__(self) -> "UnitOfWork":
         await self.session.begin()
