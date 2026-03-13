@@ -22,4 +22,9 @@ class Site(Base):
 
     devices = relationship("Device", back_populates="site")
 
+    operations = relationship(
+        "Operation",
+        back_populates="site",
+    )
+
     __table_args__ = (Index("ux_sites_code", "code", unique=True),)
