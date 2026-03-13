@@ -89,26 +89,17 @@ class AccessService:
         }
 
     async def can_create_operations(self, user_id: int, site_id: UUID) -> bool:
-        role = await self.get_user_site_role(user_id, site_id)
-        return role in {
-            ROLE_ROOT,
-            ROLE_CHIEF_STOREKEEPER,
+        return await self.has_minimum_site_role(
+            user_id,
+            site_id,
             ROLE_STOREKEEPER,
-        }
+        )
 
-    async def can_manage_catalog(self, user_id: int, site_id: UUID | None = None) -> bool:
-        accesses = await self.uow.user_site_roles.get_sites_for_user(user_id)
-
-        if site_id is None:
-            return any(
-                access.role in {ROLE_ROOT, ROLE_CHIEF_STOREKEEPER}
-                for access in accesses
-            )
-
-        return any(
-            access.site_id == site_id
-            and access.role in {ROLE_ROOT, ROLE_CHIEF_STOREKEEPER}
-            for access in accesses
+    async def can_manage_catalog(self, user_id: int, site_id: UUID) -> bool:
+        return await self.has_minimum_site_role(
+            user_id,
+            site_id,
+            ROLE_CHIEF_STOREKEEPER,
         )
 
     async def can_manage_root_admin(self, user_id: int) -> bool:

@@ -103,32 +103,45 @@ class OperationsRepo:
         return operation
 
     async def list_operations(
-        self,
-        filter: OperationFilter,
-        page: int = 1,
-        page_size: int = 50,
+            self,
+            filter: OperationFilter,
+            user_site_ids: list[UUID],
+            page: int = 1,
+            page_size: int = 50,
     ) -> tuple[list[Operation], int]:
-        """List operations with filtering and pagination."""
-        # Build query
+
         stmt = select(Operation).options(selectinload(Operation.lines))
+
         where_clauses = []
-        
+
+        # security filter
+        if user_site_ids:
+            where_clauses.append(Operation.site_id.in_(user_site_ids))
+
         if filter.site_id:
             where_clauses.append(Operation.site_id == filter.site_id)
+
         if filter.type:
             where_clauses.append(Operation.type == filter.type)
+
         if filter.status:
             where_clauses.append(Operation.status == filter.status)
+
         if filter.created_by_user_id:
             where_clauses.append(Operation.created_by_user_id == filter.created_by_user_id)
+
         if filter.created_after:
             where_clauses.append(Operation.created_at >= filter.created_after)
+
         if filter.created_before:
             where_clauses.append(Operation.created_at <= filter.created_before)
+
         if filter.updated_after:
             where_clauses.append(Operation.updated_at >= filter.updated_after)
+
         if filter.updated_before:
             where_clauses.append(Operation.updated_at <= filter.updated_before)
+
         if filter.search:
             search_term = f"%{filter.search}%"
             where_clauses.append(
@@ -136,24 +149,25 @@ class OperationsRepo:
                     Operation.notes.ilike(search_term),
                 )
             )
-        
+
         if where_clauses:
             stmt = stmt.where(and_(*where_clauses))
-        
-        # Count total
+
         count_stmt = select(func.count()).select_from(Operation)
+
         if where_clauses:
             count_stmt = count_stmt.where(and_(*where_clauses))
+
         total_result = await self.session.execute(count_stmt)
         total_count = total_result.scalar_one()
-        
-        # Apply pagination and ordering
+
         stmt = stmt.order_by(desc(Operation.created_at))
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
-        
+
         result = await self.session.execute(stmt)
+
         operations = list(result.scalars().all())
-        
+
         return operations, total_count
 
     async def create_operation_line(
