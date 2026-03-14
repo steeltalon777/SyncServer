@@ -21,7 +21,7 @@ class BalanceResponse(ORMBaseModel):
 class BalanceListResponse(ORMBaseModel):
     """Schema for balance list response."""
 
-    balances: list[BalanceResponse]
+    items: list[BalanceResponse]
     total_count: int
     page: int
     page_size: int

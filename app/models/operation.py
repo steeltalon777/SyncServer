@@ -34,7 +34,7 @@ class Operation(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "type IN ('RECEIVE', 'WRITE_OFF', 'MOVE', 'ISSUE')",
+            "type IN ('RECEIVE', 'WRITE_OFF', 'MOVE')",
             name="ck_operations_type",
         ),
         CheckConstraint(

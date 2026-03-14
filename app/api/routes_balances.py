@@ -79,7 +79,7 @@ async def list_balances(
             page_size=page_size,
         )
 
-    balance_responses = [
+    items = [
         BalanceResponse(
             site_id=balance.site_id,
             item_id=balance.item_id,
@@ -94,41 +94,13 @@ async def list_balances(
         get_request_id(request),
         user_context["user_id"],
         user_context["site_id"],
-        len(balance_responses),
+        len(items),
         total_count,
     )
 
     return BalanceListResponse(
-        balances=balance_responses,
+        items=items,
         total_count=total_count,
-        page=page,
-        page_size=page_size,
-    )
-
-
-@router.get("/by-site", response_model=BalanceListResponse)
-async def get_balances_by_site(
-    request: Request,
-    uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
-    site_id: UUID = Query(..., description="Site ID"),
-    only_positive: bool = Query(False, description="Show only positive balances"),
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(100, ge=1, le=200, description="Page size"),
-) -> BalanceListResponse:
-    return await list_balances(
-        request=request,
-        uow=uow,
-        authorization=authorization,
-        x_acting_user_id=x_acting_user_id,
-        x_acting_site_id=x_acting_site_id,
-        site_id=site_id,
-        item_id=None,
-        category_id=None,
-        search=None,
-        only_positive=only_positive,
         page=page,
         page_size=page_size,
     )
@@ -181,3 +153,34 @@ async def get_balances_summary(
         "accessible_sites_count": len(user_site_ids),
         "summary": summary,
     }
+
+
+@router.get("/{item_id}", response_model=BalanceListResponse)
+async def get_balances_by_item(
+    item_id: UUID,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    site_id: UUID | None = Query(None, description="Optional site filter"),
+    only_positive: bool = Query(False, description="Show only positive balances"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(100, ge=1, le=200, description="Page size"),
+) -> BalanceListResponse:
+    return await list_balances(
+        request=request,
+        uow=uow,
+        authorization=authorization,
+        x_acting_user_id=x_acting_user_id,
+        x_acting_site_id=x_acting_site_id,
+        site_id=site_id,
+        item_id=item_id,
+        category_id=None,
+        search=None,
+        only_positive=only_positive,
+        page=page,
+        page_size=page_size,
+    )
+
+

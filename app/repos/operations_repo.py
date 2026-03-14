@@ -22,7 +22,7 @@ class OperationsRepo:
         self,
         operation_uuid: UUID,
         site_id: UUID,
-        type: Literal["RECEIVE", "WRITE_OFF", "MOVE", "ISSUE"],
+        type: Literal["RECEIVE", "WRITE_OFF", "MOVE"],
         created_by_user_id: int,
         notes: str | None = None,
     ) -> Operation:
@@ -174,7 +174,7 @@ class OperationsRepo:
         self,
         operation_id: int,
         line_number: int,
-        item_id: int,
+        item_id: UUID,
         quantity: int,
         source_site_id: UUID | None = None,
         target_site_id: UUID | None = None,

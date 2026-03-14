@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 
@@ -18,6 +18,23 @@ class OperationsService:
     Permission checks must be handled in API layer via AccessGuard / AccessService.
     This service is responsible only for business validation and execution.
     """
+
+    @staticmethod
+    async def _ensure_sufficient_balance(
+        uow: UnitOfWork,
+        *,
+        site_id: UUID,
+        item_id: UUID,
+        required_qty: Decimal,
+        error_message: str,
+    ) -> None:
+        balance = await uow.balances.get_for_update(site_id=site_id, item_id=item_id)
+        current_qty = balance.qty if balance is not None else Decimal("0")
+        if current_qty < required_qty:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=error_message,
+            )
 
     @staticmethod
     async def create_operation(
@@ -104,7 +121,7 @@ class OperationsService:
         operation_id: int,
         user_id: int,
     ) -> dict:
-        """Submit an operation and update balances."""
+        """Submit an operation and update balances atomically inside the current UoW transaction."""
         operation = await uow.operations.get_operation_by_id(operation_id)
         if not operation:
             raise HTTPException(
@@ -119,35 +136,63 @@ class OperationsService:
             )
 
         for line in operation.lines:
+            quantity = Decimal(line.quantity)
+
             if operation.type == "RECEIVE":
                 await uow.balances.update_balance_quantity(
                     site_id=operation.site_id,
                     item_id=line.item_id,
-                    quantity_delta=Decimal(line.quantity),
+                    quantity_delta=quantity,
                 )
             elif operation.type == "WRITE_OFF":
+                await OperationsService._ensure_sufficient_balance(
+                    uow,
+                    site_id=operation.site_id,
+                    item_id=line.item_id,
+                    required_qty=quantity,
+                    error_message=(
+                        f"Insufficient stock for WRITE_OFF: item={line.item_id}, "
+                        f"site={operation.site_id}, required={line.quantity}"
+                    ),
+                )
                 await uow.balances.update_balance_quantity(
                     site_id=operation.site_id,
                     item_id=line.item_id,
-                    quantity_delta=Decimal(-line.quantity),
+                    quantity_delta=-quantity,
                 )
             elif operation.type == "MOVE":
-                if line.source_site_id and line.target_site_id:
-                    await uow.balances.update_balance_quantity(
-                        site_id=line.source_site_id,
-                        item_id=line.item_id,
-                        quantity_delta=Decimal(-line.quantity),
+                if not line.source_site_id or not line.target_site_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="MOVE operation line must have source_site_id and target_site_id",
                     )
-                    await uow.balances.update_balance_quantity(
-                        site_id=line.target_site_id,
-                        item_id=line.item_id,
-                        quantity_delta=Decimal(line.quantity),
+
+                target_site = await uow.sites.get_by_id(line.target_site_id)
+                if not target_site:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Target site {line.target_site_id} not found",
                     )
-            elif operation.type == "ISSUE":
-                await uow.balances.update_balance_quantity(
-                    site_id=operation.site_id,
+
+                await OperationsService._ensure_sufficient_balance(
+                    uow,
+                    site_id=line.source_site_id,
                     item_id=line.item_id,
-                    quantity_delta=Decimal(-line.quantity),
+                    required_qty=quantity,
+                    error_message=(
+                        f"Insufficient stock for MOVE: item={line.item_id}, "
+                        f"source_site={line.source_site_id}, required={line.quantity}"
+                    ),
+                )
+                await uow.balances.update_balance_quantity(
+                    site_id=line.source_site_id,
+                    item_id=line.item_id,
+                    quantity_delta=-quantity,
+                )
+                await uow.balances.update_balance_quantity(
+                    site_id=line.target_site_id,
+                    item_id=line.item_id,
+                    quantity_delta=quantity,
                 )
 
         submitted_operation = await uow.operations.submit_operation(
@@ -186,36 +231,31 @@ class OperationsService:
 
         if operation.status == "submitted":
             for line in operation.lines:
+                quantity = Decimal(line.quantity)
                 if operation.type == "RECEIVE":
                     await uow.balances.update_balance_quantity(
                         site_id=operation.site_id,
                         item_id=line.item_id,
-                        quantity_delta=Decimal(-line.quantity),
+                        quantity_delta=-quantity,
                     )
                 elif operation.type == "WRITE_OFF":
                     await uow.balances.update_balance_quantity(
                         site_id=operation.site_id,
                         item_id=line.item_id,
-                        quantity_delta=Decimal(line.quantity),
+                        quantity_delta=quantity,
                     )
                 elif operation.type == "MOVE":
                     if line.source_site_id and line.target_site_id:
                         await uow.balances.update_balance_quantity(
                             site_id=line.source_site_id,
                             item_id=line.item_id,
-                            quantity_delta=Decimal(line.quantity),
+                            quantity_delta=quantity,
                         )
                         await uow.balances.update_balance_quantity(
                             site_id=line.target_site_id,
                             item_id=line.item_id,
-                            quantity_delta=Decimal(-line.quantity),
+                            quantity_delta=-quantity,
                         )
-                elif operation.type == "ISSUE":
-                    await uow.balances.update_balance_quantity(
-                        site_id=operation.site_id,
-                        item_id=line.item_id,
-                        quantity_delta=Decimal(line.quantity),
-                    )
 
         cancelled_operation = await uow.operations.cancel_operation(
             operation_id=operation_id,

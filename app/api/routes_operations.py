@@ -111,7 +111,7 @@ async def list_operations(
     )
 
     return OperationListResponse(
-        operations=operation_responses,
+        items=operation_responses,
         total_count=total_count,
         page=page,
         page_size=page_size,
