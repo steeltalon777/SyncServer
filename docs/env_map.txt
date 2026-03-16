@@ -2,6 +2,7 @@ API
   - AI_CONTEXT.md
   - AI_ENTRY_POINTS.md
   - API_CONTRACT.md
+  - ARCHITECTURE.md
   - INDEX.md
   - MEMORY.md
   - PROJECT_BRAIN.md
@@ -11,6 +12,8 @@ API
   - app/services/operations_service.py
   - docs/adr/0001-layered-architecture-fastapi-service-repository-uow.md
   - docs/adr/0002-idempotent-event-ingest-event-uuid-payload-hash.md
+  - docs/adr/0003-layered-architecture.md
+  - docs/adr/0005-api-contract-for-clients.md
   - docs/audit-syncserver.md
   - docs/client-development-tz.md
   - docs/code-documentation.md
@@ -21,14 +24,11 @@ API
 
 API_CONTRACT
   - API_CONTRACT.md
-  - MEMORY.md
   - docs/env_map.txt
   - docs/tree_repo.txt
 
 DATABASE_URL
   - .env.example
-  - AI_ENTRY_POINTS.md
-  - INDEX.md
   - app/core/config.py
   - app/core/db.py
   - docs/code-documentation.md
@@ -72,10 +72,6 @@ SYNC
   - tools/update_ai_maps.py
 
 SYNC_SERVER_SERVICE_TOKEN
-  - AI_CONTEXT.md
-  - AI_ENTRY_POINTS.md
-  - INDEX.md
-  - MEMORY.md
   - app/api/deps.py
   - app/core/config.py
   - docs/env_map.txt

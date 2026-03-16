@@ -13,8 +13,8 @@ POST   /access/user-sites
 PATCH  /access/user-sites/{access_id}
 
 # FILE: D:/PROG/SyncServer/app/api/routes_balances.py
-GET    /by-site
 GET    /summary
+GET    /{item_id}
 
 # FILE: D:/PROG/SyncServer/app/api/routes_business.py
 POST   /catalog/items

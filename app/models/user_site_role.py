@@ -1,62 +1,53 @@
 ﻿from __future__ import annotations
 
-from datetime import datetime
-from uuid import UUID
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    CheckConstraint,
-    DateTime,
-    ForeignKey,
-    String,
-    UniqueConstraint,
-    func,
-)
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column
-
-from app.models.base import Base
+from app.repos.balances_repo import BalancesRepo
+from app.repos.catalog_repo import CatalogRepo
+from app.repos.devices_repo import DevicesRepo
+from app.repos.events_repo import EventsRepo
+from app.repos.operations_repo import OperationsRepo
+from app.repos.sites_repo import SitesRepo
+from app.repos.user_site_roles_repo import UserSiteRolesRepo
+from app.repos.users_repo import UsersRepo
 
 
-class UserSiteRole(Base):
-    __tablename__ = "user_site_roles"
+class UnitOfWork:
+    """Unit of work wrapper for a single database transaction."""
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    def __init__(self, session: AsyncSession):
+        self.session = session
+        self.sites = SitesRepo(session)
+        self.devices = DevicesRepo(session)
+        self.events = EventsRepo(session)
+        self.catalog = CatalogRepo(session)
+        self.balances = BalancesRepo(session)
+        self.user_site_roles = UserSiteRolesRepo(session)
+        self.operations = OperationsRepo(session)
+        self.users = UsersRepo(session)
+        self._owns_transaction = False
 
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    async def __aenter__(self) -> "UnitOfWork":
+        if not self.session.in_transaction():
+            await self.session.begin()
+            self._owns_transaction = True
+        else:
+            self._owns_transaction = False
+        return self
 
-    site_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("sites.id"),
-        nullable=False,
-    )
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        if not self._owns_transaction:
+            return
 
-    role: Mapped[str] = mapped_column(String(32), nullable=False)
+        if exc_type is None:
+            await self.session.commit()
+        else:
+            await self.session.rollback()
 
-    is_active: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        server_default="true",
-    )
+    async def commit(self) -> None:
+        if self.session.in_transaction():
+            await self.session.commit()
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    __table_args__ = (
-        UniqueConstraint("user_id", "site_id", name="uq_user_site_roles_user_site"),
-        CheckConstraint(
-            "role IN ('root','chief_storekeeper','storekeeper','observer')",
-            name="ck_user_site_roles_role",
-        ),
-    )
+    async def rollback(self) -> None:
+        if self.session.in_transaction():
+            await self.session.rollback()
