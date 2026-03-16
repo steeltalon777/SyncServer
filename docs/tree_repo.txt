@@ -48,6 +48,7 @@ SyncServer
 ├── pytest.ini
 ├── README.md
 ├── requirements.txt
+├── structure.txt
 ├── SYSTEM_MAP.md
 ├── test_main.http
 └── USE_CASES.md
