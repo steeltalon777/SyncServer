@@ -23,7 +23,7 @@ class OperationLineCreate(BaseModel):
 class OperationCreate(BaseModel):
     """Schema for creating an operation."""
 
-    type: Literal["RECEIVE", "WRITE_OFF", "MOVE", "ISSUE"] = Field(description="Operation type")
+    type: Literal["RECEIVE", "WRITE_OFF", "MOVE"] = Field(description="Operation type")
     site_id: UUID = Field(description="Primary site ID for the operation")
     lines: list[OperationLineCreate] = Field(min_length=1, description="Operation lines")
     notes: str | None = Field(None, max_length=1000, description="Operation notes")
@@ -79,7 +79,7 @@ class OperationResponse(ORMBaseModel):
     id: int
     operation_uuid: UUID
     site_id: UUID
-    type: Literal["RECEIVE", "WRITE_OFF", "MOVE", "ISSUE"]
+    type: Literal["RECEIVE", "WRITE_OFF", "MOVE"]
     status: Literal["draft", "submitted", "cancelled"]
     created_by_user_id: int
     created_at: datetime
@@ -95,7 +95,7 @@ class OperationResponse(ORMBaseModel):
 class OperationListResponse(ORMBaseModel):
     """Schema for operation list response."""
 
-    operations: list[OperationResponse]
+    items: list[OperationResponse]
     total_count: int
     page: int
     page_size: int
@@ -105,7 +105,7 @@ class OperationFilter(BaseModel):
     """Schema for filtering operations."""
 
     site_id: UUID | None = None
-    type: Literal["RECEIVE", "WRITE_OFF", "MOVE", "ISSUE"] | None = None
+    type: Literal["RECEIVE", "WRITE_OFF", "MOVE"] | None = None
     status: Literal["draft", "submitted", "cancelled"] | None = None
     created_by_user_id: int | None = None
     created_after: datetime | None = None
