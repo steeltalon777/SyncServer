@@ -645,3 +645,51 @@ async def update_user_site_access(
     )
 
     return UserSiteAccessResponse.model_validate(access_entry)
+
+@router.delete("/users/{user_id}", response_model=UserResponse)
+async def delete_user(
+    user_id: int,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+) -> UserResponse:
+    await require_service_auth(request=request, authorization=authorization)
+
+    async with uow:
+        user_context = await require_acting_user(
+            request=request,
+            uow=uow,
+            x_acting_user_id=x_acting_user_id,
+            x_acting_site_id=x_acting_site_id,
+        )
+        access_service = AccessService(uow)
+        await access_service.validate_root_permission(user_context["user_id"])
+
+        existing_user = await uow.users.get(user_id)
+        if existing_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+        if user_id == 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Root user cannot be deactivated",
+            )
+
+        updated_user = await uow.users.update(
+            user_id=user_id,
+            is_active=False,
+        )
+
+    logger.info(
+        "request_id=%s delete_user deactivated_user_id=%s by_user_id=%s",
+        get_request_id(request),
+        user_id,
+        x_acting_user_id,
+    )
+
+    return _build_user_response(updated_user)

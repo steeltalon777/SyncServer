@@ -63,16 +63,17 @@ class UsersRepo:
         )
         self.session.add(user)
         await self.session.flush()
+        await self.session.refresh(user)
         return user
 
     async def update(
-            self,
-            user_id: int,
-            *,
-            username: str | None = None,
-            email: str | None = None,
-            full_name: str | None = None,
-            is_active: bool | None = None,
+        self,
+        user_id: int,
+        *,
+        username: str | None = None,
+        email: str | None = None,
+        full_name: str | None = None,
+        is_active: bool | None = None,
     ) -> User:
         user = await self.get_required(user_id)
 
@@ -89,8 +90,7 @@ class UsersRepo:
             user.is_active = is_active
 
         await self.session.flush()
-        await self.session.refresh(user)  # ← ВОТ ЭТО ДОБАВИТЬ
-
+        await self.session.refresh(user)
         return user
 
     async def upsert(
@@ -118,4 +118,5 @@ class UsersRepo:
         existing.is_active = is_active
 
         await self.session.flush()
+        await self.session.refresh(existing)
         return existing
