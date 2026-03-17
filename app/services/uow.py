@@ -8,7 +8,7 @@ from app.repos.devices_repo import DevicesRepo
 from app.repos.events_repo import EventsRepo
 from app.repos.operations_repo import OperationsRepo
 from app.repos.sites_repo import SitesRepo
-from app.repos.user_site_roles_repo import UserSiteRolesRepo
+from app.repos.user_access_scopes_repo import UserAccessScopesRepo
 from app.repos.users_repo import UsersRepo
 
 
@@ -23,7 +23,7 @@ class UnitOfWork:
         self.events = EventsRepo(session)
         self.catalog = CatalogRepo(session)
         self.balances = BalancesRepo(session)
-        self.user_site_roles = UserSiteRolesRepo(session)
+        self.user_access_scopes = UserAccessScopesRepo(session)
         self.operations = OperationsRepo(session)
         self.users = UsersRepo(session)
 

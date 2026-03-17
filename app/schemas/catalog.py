@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -14,26 +13,26 @@ class CatalogRequest(BaseModel):
 
 
 class CategoryDto(ORMBaseModel):
-    id: UUID
+    id: int
     name: str
-    parent_id: UUID | None = None
+    parent_id: int | None = None
     is_active: bool
     updated_at: datetime
 
 
 class ItemDto(ORMBaseModel):
-    id: UUID
+    id: int
     sku: str | None = None
     name: str
-    category_id: UUID
-    unit_id: UUID
+    category_id: int
+    unit_id: int
     description: str | None = None
     is_active: bool
     updated_at: datetime
 
 
 class UnitDto(ORMBaseModel):
-    id: UUID
+    id: int
     name: str
     symbol: str
     is_active: bool
@@ -59,10 +58,10 @@ class CatalogUnitsResponse(ORMBaseModel):
 
 
 class CategoryTreeNode(ORMBaseModel):
-    id: UUID
+    id: int
     name: str
     code: str | None = None
-    parent_id: UUID | None = None
+    parent_id: int | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -72,7 +71,6 @@ class CategoryTreeNode(ORMBaseModel):
 
 
 class UnitCreateRequest(BaseModel):
-    id: UUID | None = None
     name: str = Field(min_length=1, max_length=100)
     symbol: str = Field(min_length=1, max_length=20)
     sort_order: int | None = None
@@ -87,7 +85,7 @@ class UnitUpdateRequest(BaseModel):
 
 
 class UnitResponse(ORMBaseModel):
-    id: UUID
+    id: int
     name: str
     symbol: str
     sort_order: int | None = None
@@ -97,10 +95,9 @@ class UnitResponse(ORMBaseModel):
 
 
 class CategoryCreateRequest(BaseModel):
-    id: UUID | None = None
     name: str = Field(min_length=1, max_length=255)
     code: str | None = Field(default=None, max_length=100)
-    parent_id: UUID | None = None
+    parent_id: int | None = None
     sort_order: int | None = None
     is_active: bool = True
 
@@ -108,16 +105,16 @@ class CategoryCreateRequest(BaseModel):
 class CategoryUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     code: str | None = Field(default=None, max_length=100)
-    parent_id: UUID | None = None
+    parent_id: int | None = None
     sort_order: int | None = None
     is_active: bool | None = None
 
 
 class CategoryResponse(ORMBaseModel):
-    id: UUID
+    id: int
     name: str
     code: str | None = None
-    parent_id: UUID | None = None
+    parent_id: int | None = None
     sort_order: int | None = None
     is_active: bool
     created_at: datetime
@@ -125,11 +122,10 @@ class CategoryResponse(ORMBaseModel):
 
 
 class ItemCreateRequest(BaseModel):
-    id: UUID | None = None
     sku: str | None = Field(default=None, max_length=100)
     name: str = Field(min_length=1, max_length=255)
-    category_id: UUID
-    unit_id: UUID
+    category_id: int
+    unit_id: int
     description: str | None = None
     is_active: bool = True
 
@@ -137,22 +133,35 @@ class ItemCreateRequest(BaseModel):
 class ItemUpdateRequest(BaseModel):
     sku: str | None = Field(default=None, max_length=100)
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    category_id: UUID | None = None
-    unit_id: UUID | None = None
+    category_id: int | None = None
+    unit_id: int | None = None
     description: str | None = None
     is_active: bool | None = None
 
 
 class ItemResponse(ORMBaseModel):
-    id: UUID
+    id: int
     sku: str | None = None
     name: str
-    category_id: UUID
-    unit_id: UUID
+    category_id: int
+    unit_id: int
     description: str | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class CatalogSiteDto(ORMBaseModel):
+    site_id: int
+    code: str
+    name: str
+    is_active: bool
+    permissions: dict[str, bool]
+
+
+class CatalogSitesResponse(ORMBaseModel):
+    sites: list[CatalogSiteDto]
+    server_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 CategoryTreeNode.model_rebuild()

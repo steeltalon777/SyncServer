@@ -1,177 +1,354 @@
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
-from app.api.deps import get_uow, require_service_auth
-from app.schemas.admin import UserCreate
+from app.schemas.admin import SiteFilter, UserCreate
 from app.services.access_service import AccessService
 from app.services.uow import UnitOfWork
+from app.api.deps import get_uow
+from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+async def _resolve_current_user(
+    uow: UnitOfWork,
+    x_user_token: UUID | None,
+) -> User:
+    if not x_user_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing X-User-Token",
+        )
+
+    user = await uow.users.get_by_user_token(x_user_token)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid X-User-Token",
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="user is inactive",
+        )
+    return user
+
+
+async def _resolve_current_device(
+    uow: UnitOfWork,
+    x_device_token: UUID | None,
+    x_device_id: str | None = None,
+):
+    if not x_device_token:
+        return None
+
+    device = await uow.devices.get_by_device_token(x_device_token)
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid X-Device-Token",
+        )
+    if not device.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="device is inactive",
+        )
+    if x_device_id is not None and str(device.id) != str(x_device_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="X-Device-Token does not match X-Device-Id",
+        )
+    return device
+
+
+def _user_payload(user: User) -> dict:
+    return {
+        "id": str(user.id),
+        "username": user.username,
+        "email": user.email,
+        "full_name": user.full_name,
+        "is_active": user.is_active,
+        "is_root": user.is_root,
+        "role": user.role,
+        "default_site_id": user.default_site_id,
+    }
 
 
 @router.post("/sync-user")
 async def sync_user(
     payload: UserCreate,
-    request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
 ):
-    await require_service_auth(request=request, authorization=authorization)
-
+    """
+    Sync user registry record (Django-compatible), authenticated by user token.
+    Root-only operation.
+    """
     async with uow:
-        existing = await uow.users.get(payload.user_id)
+        current_user = await _resolve_current_user(uow, x_user_token)
+        current_device = await _resolve_current_device(uow, x_device_token, x_device_id)
 
-        if existing:
-            user = await uow.users.update(
-                user_id=payload.user_id,
+        if not current_user.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required for sync-user",
+            )
+
+        target_user = None
+        if payload.id is not None:
+            target_user = await uow.users.get_by_id(payload.id)
+
+        if target_user is None:
+            by_username = await uow.users.get_by_username(payload.username)
+            if by_username is not None:
+                if payload.id is not None and by_username.id != payload.id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="username already bound to another user id",
+                    )
+                target_user = by_username
+
+        if target_user is None:
+            target_user = User(
+                id=payload.id or uuid4(),
                 username=payload.username,
                 email=payload.email,
                 full_name=payload.full_name,
                 is_active=payload.is_active,
+                is_root=payload.is_root,
+                role=payload.role,
+                default_site_id=payload.default_site_id,
             )
+            uow.session.add(target_user)
+            await uow.session.flush()
+            await uow.session.refresh(target_user)
+            status_value = "created"
         else:
-            user = await uow.users.create(
-                user_id=payload.user_id,
-                username=payload.username,
-                email=payload.email,
-                full_name=payload.full_name,
-                is_active=payload.is_active,
-            )
+            target_user.username = payload.username
+            target_user.email = payload.email
+            target_user.full_name = payload.full_name
+            target_user.is_active = payload.is_active
+            target_user.is_root = payload.is_root
+            target_user.role = payload.role
+            target_user.default_site_id = payload.default_site_id
+            await uow.session.flush()
+            await uow.session.refresh(target_user)
+            status_value = "updated"
 
     return {
-        "user_id": user.id,
-        "username": user.username,
-        "status": "synced",
+        "status": status_value,
+        "user": _user_payload(target_user),
+        "synced_by": {
+            "id": str(current_user.id),
+            "username": current_user.username,
+            "device_id": current_device.id if current_device else None,
+        },
     }
 
 
 @router.get("/me")
 async def get_me(
-    request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
 ):
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user = await uow.users.get(x_acting_user_id)
-
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="user not found",
-            )
+        user = await _resolve_current_user(uow, x_user_token)
+        device = await _resolve_current_device(uow, x_device_token, x_device_id)
 
     return {
-        "user_id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "full_name": user.full_name,
-        "is_active": user.is_active,
+        "user": _user_payload(user),
+        "device": (
+            {
+                "device_id": device.id,
+                "device_code": device.device_code,
+                "device_name": device.device_name,
+                "site_id": device.site_id,
+                "is_active": device.is_active,
+            }
+            if device
+            else None
+        ),
     }
 
 
 @router.get("/sites")
 async def get_user_sites(
-    request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
 ):
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        accesses = await uow.user_site_roles.get_sites_for_user(x_acting_user_id)
+        user = await _resolve_current_user(uow, x_user_token)
+        await _resolve_current_device(uow, x_device_token, x_device_id)
 
-        result = []
-        for access in accesses:
-            site = await uow.sites.get_by_id(access.site_id)
-            if not site:
-                continue
-
-            result.append(
-                {
-                    "site_id": str(site.id),
-                    "site_name": site.name,
-                    "site_code": site.code,
-                    "role": access.role,
-                    "is_active": access.is_active,
-                }
+        if user.is_root:
+            sites, _ = await uow.sites.list_sites(
+                filter=SiteFilter(is_active=True),
+                user_site_ids=None,
+                page=1,
+                page_size=1000,
             )
+            return {
+                "is_root": True,
+                "available_sites": [
+                    {
+                        "site_id": site.id,
+                        "code": site.code,
+                        "name": site.name,
+                        "is_active": site.is_active,
+                        "permissions": {
+                            "can_view": True,
+                            "can_operate": True,
+                            "can_manage_catalog": True,
+                        },
+                    }
+                    for site in sites
+                ],
+            }
 
-    return {"sites": result}
+        scopes = list(await uow.user_access_scopes.list_user_scopes(user.id))
+        scope_by_site = {scope.site_id: scope for scope in scopes if scope.is_active and scope.can_view}
+        site_ids = list(scope_by_site.keys())
+
+        if not site_ids:
+            return {"is_root": False, "available_sites": []}
+
+        sites, _ = await uow.sites.list_sites(
+            filter=SiteFilter(is_active=True),
+            user_site_ids=site_ids,
+            page=1,
+            page_size=1000,
+        )
+
+        return {
+            "is_root": False,
+            "available_sites": [
+                {
+                    "site_id": site.id,
+                    "code": site.code,
+                    "name": site.name,
+                    "is_active": site.is_active,
+                    "permissions": {
+                        "can_view": scope_by_site[site.id].can_view,
+                        "can_operate": scope_by_site[site.id].can_operate,
+                        "can_manage_catalog": scope_by_site[site.id].can_manage_catalog,
+                    },
+                }
+                for site in sites
+            ],
+        }
 
 
 @router.get("/context")
 async def get_auth_context(
-    request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID | None = Header(default=None, alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
 ):
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user = await uow.users.get(x_acting_user_id)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="user not found",
-            )
-
+        user = await _resolve_current_user(uow, x_user_token)
+        device = await _resolve_current_device(uow, x_device_token, x_device_id)
         access_service = AccessService(uow)
-        accesses = await uow.user_site_roles.get_sites_for_user(x_acting_user_id)
 
-        sites = []
-        acting_site_entry = None
+        if user.is_root:
+            sites, _ = await uow.sites.list_sites(
+                filter=SiteFilter(is_active=True),
+                user_site_ids=None,
+                page=1,
+                page_size=1000,
+            )
+            available_sites = [
+                {
+                    "site_id": site.id,
+                    "code": site.code,
+                    "name": site.name,
+                    "is_active": site.is_active,
+                    "permissions": {
+                        "can_view": True,
+                        "can_operate": True,
+                        "can_manage_catalog": True,
+                    },
+                }
+                for site in sites
+            ]
+            accessible_site_ids = [site["site_id"] for site in available_sites]
+        else:
+            scopes = list(await uow.user_access_scopes.list_user_scopes(user.id))
+            scope_by_site = {scope.site_id: scope for scope in scopes if scope.is_active and scope.can_view}
+            accessible_site_ids = list(scope_by_site.keys())
+            if accessible_site_ids:
+                sites, _ = await uow.sites.list_sites(
+                    filter=SiteFilter(is_active=True),
+                    user_site_ids=accessible_site_ids,
+                    page=1,
+                    page_size=1000,
+                )
+            else:
+                sites = []
+            available_sites = [
+                {
+                    "site_id": site.id,
+                    "code": site.code,
+                    "name": site.name,
+                    "is_active": site.is_active,
+                    "permissions": {
+                        "can_view": scope_by_site[site.id].can_view,
+                        "can_operate": scope_by_site[site.id].can_operate,
+                        "can_manage_catalog": scope_by_site[site.id].can_manage_catalog,
+                    },
+                }
+                for site in sites
+            ]
 
-        for access in accesses:
-            site = await uow.sites.get_by_id(access.site_id)
-            if not site:
-                continue
+        default_site = None
+        if user.default_site_id in accessible_site_ids:
+            default_site = next(
+                (site for site in available_sites if site["site_id"] == user.default_site_id),
+                None,
+            )
+        elif available_sites:
+            default_site = available_sites[0]
 
-            entry = {
-                "site_id": str(site.id),
-                "site_name": site.name,
-                "site_code": site.code,
-                "role": access.role,
-                "is_active": access.is_active,
-            }
-
-            sites.append(entry)
-
-            if x_acting_site_id is not None and access.site_id == x_acting_site_id:
-                acting_site_entry = entry
-
-        if x_acting_site_id is None:
-            permissions = {
+        if default_site is not None:
+            permissions_summary = await access_service.get_user_permissions_uuid(
+                user_id=user.id,
+                site_id=default_site["site_id"],
+            )
+        else:
+            permissions_summary = {
                 "can_read_operations": False,
                 "can_create_operations": False,
                 "can_read_balances": False,
                 "can_manage_catalog": False,
-                "can_manage_root_admin": False,
+                "can_manage_root_admin": user.is_root,
+                "is_root": user.is_root,
             }
-        else:
-            permissions = await access_service.get_user_permissions(
-                x_acting_user_id,
-                x_acting_site_id,
-            )
 
-        return {
-            "user": {
-                "user_id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "full_name": user.full_name,
-                "is_active": user.is_active,
-            },
-            "acting_site_id": str(x_acting_site_id) if x_acting_site_id else None,
-            "acting_site": acting_site_entry,
-            "sites": sites,
-            "permissions": permissions,
-        }
+    return {
+        "user": _user_payload(user),
+        "role": user.role,
+        "is_root": user.is_root,
+        "default_site": default_site,
+        "available_sites": available_sites,
+        "permissions_summary": permissions_summary,
+        "device": (
+            {
+                "device_id": device.id,
+                "device_code": device.device_code,
+                "device_name": device.device_name,
+                "site_id": device.site_id,
+                "is_active": device.is_active,
+            }
+            if device
+            else None
+        ),
+    }

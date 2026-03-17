@@ -1,51 +1,30 @@
 # SyncServer
 
-SyncServer is the backend domain system and single source of truth for the distributed warehouse management platform.
+SyncServer is the backend source of truth for warehouse domain data.
 
-## Overview
-- Provides REST APIs for Django web, mobile warehouse, and offline device clients.
-- Centralizes domain logic for users, sites, catalog, operations, and balances.
-- Computes inventory state from operations, not from client-side calculations.
+## Current State
+- Auth model: token-based (`X-User-Token` primary, `X-Device-Token` for device flows/context).
+- Access model: `User.is_root` + `UserAccessScope` (`can_view`, `can_operate`, `can_manage_catalog`).
+- Inventory model: operation-driven balances.
 
-## Architecture (high level)
-Clients -> FastAPI API layer -> Service layer -> Repository layer -> PostgreSQL
+## API Groups (`/api/v1`)
+- `auth` — user bootstrap/session context
+- `admin` — users, sites, access scopes, devices, roles
+- `catalog` — read APIs
+- `catalog/admin` — catalog mutations
+- `operations` — operation lifecycle
+- `balances` — read-only balances
+- `sync` — device event sync
+- `health` — liveness/readiness
+- `business` — legacy compatibility only
 
-See `ARCHITECTURE.md` for the detailed model.
+## Quick Start
+1. Create `.env` from `.env.example`
+2. Run: `docker compose up --build`
+3. Open docs: `/api/docs`
 
-## Tech stack
-- Python
-- FastAPI
-- SQLAlchemy Async
-- PostgreSQL
-- Pydantic
-
-## Setup
-1. Copy env template: `cp .env.example .env`
-2. Start dependencies/app: `docker compose up --build`
-3. Run tests: `pytest`
-
-## Running the server
-- Local: `uvicorn main:app --reload --host 0.0.0.0 --port 8000`
-- Docker: `docker compose up`
-
-## API overview
-Base path: `/api/v1`
-
-- Admin API
-  - `/admin/users`
-  - `/admin/sites`
-  - `/admin/access`
-- Catalog admin API
-  - `/catalog/admin/units`
-  - `/catalog/admin/categories`
-  - `/catalog/admin/items`
-- Operations API
-  - `POST /operations`
-  - `GET /operations`
-  - `GET /operations/{id}`
-  - `POST /operations/{id}/submit`
-  - `POST /operations/{id}/cancel`
-- Balances API
-  - `GET /balances`
-  - `GET /balances?site_id=...`
-  - `GET /balances/{item_id}`
+## Canonical Docs
+- [API reference](docs/API_REFERENCE.md)
+- [Endpoint inventory](docs/ENDPOINT_INVENTORY.md)
+- [Architecture](ARCHITECTURE.md)
+- [AI context](AI_CONTEXT.md)

@@ -9,7 +9,7 @@ from app.models.user_site_role import UserSiteRole
 
 
 class UserSiteRolesRepo:
-    """Repository for user_site_roles table operations."""
+    """LEGACY repository for user_site_roles table operations."""
 
     def __init__(self, session: AsyncSession):
         self.session = session

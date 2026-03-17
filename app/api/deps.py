@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.identity import Identity
 from app.models.device import Device
+from app.services.access_service import AccessService
+from app.services.identity_service import IdentityService
 from app.services.uow import UnitOfWork
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,12 @@ async def get_uow(db: AsyncSession = Depends(get_db)) -> AsyncGenerator[UnitOfWo
     yield UnitOfWork(db)
 
 
+async def get_identity_service(
+    uow: UnitOfWork = Depends(get_uow),
+) -> IdentityService:
+    return IdentityService(uow)
+
+
 def get_request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "")
 
@@ -53,12 +62,62 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+async def require_user_token_auth(
+    request: Request,
+    identity_service: IdentityService = Depends(get_identity_service),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> Identity:
+    if not x_user_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing X-User-Token",
+        )
+    return await identity_service.resolve_user_by_token(x_user_token)
+
+
+async def require_device_token_auth(
+    request: Request,
+    identity_service: IdentityService = Depends(get_identity_service),
+    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
+) -> Identity:
+    if not x_device_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing X-Device-Token",
+        )
+    return await identity_service.resolve_current_identity(
+        device_id=x_device_id,
+        device_token=x_device_token,
+        client_ip=get_client_ip(request),
+        client_version=x_client_version,
+    )
+
+
+async def require_token_auth(
+    request: Request,
+    identity_service: IdentityService = Depends(get_identity_service),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
+) -> Identity:
+    return await identity_service.resolve_current_identity(
+        user_token=x_user_token,
+        device_id=x_device_id,
+        device_token=x_device_token,
+        client_ip=get_client_ip(request),
+        client_version=x_client_version,
+    )
+
+
 async def require_device_auth(
     *,
     request: Request,
     uow: UnitOfWork,
-    site_id: UUID,
-    device_id: UUID,
+    site_id: UUID | int | str,
+    device_id: UUID | int | str,
     device_token: str | None,
     client_version: str | None,
 ) -> Device:
@@ -75,10 +134,11 @@ async def require_device_auth(
             detail="forbidden",
         )
 
+    token_value = getattr(device, "device_token", None) or getattr(device, "registration_token", None)
     is_valid = (
-        device.site_id == site_id
+        str(device.site_id) == str(site_id)
         and device.is_active
-        and str(device.registration_token) == device_token
+        and str(token_value) == str(device_token)
     )
     if not is_valid:
         raise HTTPException(
@@ -87,7 +147,7 @@ async def require_device_auth(
         )
 
     await uow.devices.update_last_seen(
-        device_id=device_id,
+        device_id=device.id,
         ip=get_client_ip(request),
         client_version=client_version,
     )
@@ -99,7 +159,11 @@ async def require_service_auth(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> None:
-    """Validate service token for trusted service authentication."""
+    """
+    LEGACY COMPATIBILITY AUTH.
+    Service token is kept temporarily for endpoints not yet migrated
+    to X-User-Token / X-Device-Token.
+    """
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -112,7 +176,7 @@ async def require_service_auth(
             detail="invalid authorization format, expected 'Bearer <token>'",
         )
 
-    token = authorization[7:].strip()  # Remove "Bearer " prefix
+    token = authorization[7:].strip()
     settings = get_settings()
 
     if not settings.SYNC_SERVER_SERVICE_TOKEN:
@@ -133,47 +197,68 @@ async def require_acting_user(
     *,
     request: Request,
     uow: UnitOfWork,
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
-) -> dict[str, int | UUID | str]:
-    """Validate acting user context and check access permissions."""
+    x_acting_user_id: str = Header(alias="X-Acting-User-Id"),
+    x_acting_site_id: str = Header(alias="X-Acting-Site-Id"),
+) -> dict[str, UUID | int | str | None]:
+    """
+    LEGACY COMPATIBILITY CONTEXT.
+    Acting-user headers are still accepted, but validation is performed
+    through the new model: User.is_root + UserAccessScope.
+    """
     if not x_acting_user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="missing acting user id",
         )
-
     if not x_acting_site_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="missing acting site id",
         )
 
-    # Check if user has access to the site
-    user_site_role = await uow.user_site_roles.get_by_user_and_site(
-        user_id=x_acting_user_id,
-        site_id=x_acting_site_id,
-    )
+    try:
+        user_uuid = UUID(str(x_acting_user_id))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="legacy integer acting_user_id is no longer supported in primary path",
+        ) from exc
 
-    if not user_site_role:
+    try:
+        site_id_int = int(str(x_acting_site_id))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="legacy UUID acting_site_id is no longer supported in primary path",
+        ) from exc
+
+    access_service = AccessService(uow)
+    await access_service.validate_acting_user_uuid(user_uuid)
+
+    can_view = await access_service.can_view_site(user_uuid, site_id_int)
+    if not can_view:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="user does not have access to this site",
         )
 
+    role = await access_service.get_user_role(user_uuid)
     return {
-        "user_id": x_acting_user_id,
-        "site_id": x_acting_site_id,
-        "role": user_site_role.role,
+        "user_id": user_uuid,
+        "user_uuid": user_uuid,
+        "site_id": site_id_int,
+        "site_id_int": site_id_int,
+        "role": role,
+        "legacy_headers": True,
     }
 
 
 async def auth_catalog_headers(
-    x_site_id: UUID = Header(alias="X-Site-Id"),
-    x_device_id: UUID = Header(alias="X-Device-Id"),
+    x_site_id: int = Header(alias="X-Site-Id"),
+    x_device_id: int = Header(alias="X-Device-Id"),
     x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
     x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
-) -> dict[str, UUID | str | None]:
+) -> dict[str, int | str | None]:
     return {
         "site_id": x_site_id,
         "device_id": x_device_id,
@@ -184,10 +269,9 @@ async def auth_catalog_headers(
 
 async def auth_service_headers(
     authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int | None = Header(default=None, alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID | None = Header(default=None, alias="X-Acting-Site-Id"),
-) -> dict[str, str | int | UUID | None]:
-    """Collect service authentication headers."""
+    x_acting_user_id: str | None = Header(default=None, alias="X-Acting-User-Id"),
+    x_acting_site_id: str | None = Header(default=None, alias="X-Acting-Site-Id"),
+) -> dict[str, str | None]:
     return {
         "authorization": authorization,
         "acting_user_id": x_acting_user_id,
@@ -211,7 +295,6 @@ async def enforce_rate_limit(request: Request, device_id: UUID, route_name: str)
     logger.debug("No rate limit configured for route=%s", route_name)
 
 
-# Error response format
 def error_response(
     status_code: int,
     message: str,
@@ -225,10 +308,8 @@ def error_response(
             "message": message,
         }
     }
-
     if details:
         error_body["error"]["details"] = details
-
     return JSONResponse(
         status_code=status_code,
         content=error_body,

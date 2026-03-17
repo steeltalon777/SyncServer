@@ -4,7 +4,7 @@ from app.repos.devices_repo import DevicesRepo
 from app.repos.events_repo import EventsRepo
 from app.repos.operations_repo import OperationsRepo
 from app.repos.sites_repo import SitesRepo
-from app.repos.user_site_roles_repo import UserSiteRolesRepo
+from app.repos.user_access_scopes_repo import UserAccessScopesRepo
 from app.repos.users_repo import UsersRepo
 
 __all__ = [
@@ -13,7 +13,7 @@ __all__ = [
     "EventsRepo",
     "CatalogRepo",
     "BalancesRepo",
-    "UserSiteRolesRepo",
+    "UserAccessScopesRepo",
     "UsersRepo",
     "OperationsRepo",
 ]

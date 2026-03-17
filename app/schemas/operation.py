@@ -4,97 +4,127 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.common import ORMBaseModel
 
 
-class OperationLineCreate(BaseModel):
-    """Schema for creating an operation line."""
+OperationType = Literal[
+    "RECEIVE",
+    "WRITE_OFF",
+    "MOVE",
+]
+OperationStatus = Literal["draft", "submitted", "cancelled"]
 
-    line_number: int = Field(ge=1, description="Line number within operation")
-    item_id: UUID = Field(description="Item ID")
-    quantity: int = Field(ge=1, description="Positive quantity")
-    source_site_id: UUID | None = Field(None, description="Source site ID for MOVE operations")
-    target_site_id: UUID | None = Field(None, description="Target site ID for MOVE operations")
-    notes: str | None = Field(None, max_length=500, description="Line notes")
+
+class OperationLineCreate(BaseModel):
+    """Operation line input aligned to current model."""
+
+    line_number: int = Field(ge=1)
+    item_id: int
+    qty: int = Field(ge=1, validation_alias=AliasChoices("qty", "quantity"))
+    batch: str | None = None
+    comment: str | None = None
+
+    @property
+    def quantity(self) -> int:
+        return self.qty
+
+    @property
+    def notes(self) -> str | None:
+        return self.comment
 
 
 class OperationCreate(BaseModel):
-    """Schema for creating an operation."""
+    """Operation create payload aligned to agreed model."""
 
-    type: Literal["RECEIVE", "WRITE_OFF", "MOVE"] = Field(description="Operation type")
-    site_id: UUID = Field(description="Primary site ID for the operation")
-    lines: list[OperationLineCreate] = Field(min_length=1, description="Operation lines")
-    notes: str | None = Field(None, max_length=1000, description="Operation notes")
+    operation_type: OperationType = Field(validation_alias=AliasChoices("operation_type", "type"))
+    site_id: int
+    source_site_id: int | None = None
+    destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
+    issued_to_user_id: UUID | None = None
+    issued_to_name: str | None = Field(default=None, max_length=255)
+    lines: list[OperationLineCreate] = Field(min_length=1)
+    notes: str | None = Field(default=None, max_length=1000)
+
+    @property
+    def type(self) -> OperationType:
+        return self.operation_type
 
     @field_validator("lines")
     @classmethod
     def validate_lines_for_type(cls, lines: list[OperationLineCreate], info):
-        """Validate lines based on operation type."""
-        if info.data.get("type") == "MOVE":
-            for line in lines:
-                if not line.source_site_id or not line.target_site_id:
-                    raise ValueError("MOVE operations require both source_site_id and target_site_id")
-                if line.source_site_id == line.target_site_id:
-                    raise ValueError("Source and target sites cannot be the same for MOVE operations")
+        operation_type = info.data.get("operation_type")
+        if operation_type == "MOVE":
+            src = info.data.get("source_site_id")
+            dst = info.data.get("destination_site_id")
+            if not src or not dst:
+                raise ValueError("MOVE operations require source and destination site ids")
+            if src == dst:
+                raise ValueError("Source and destination sites must differ")
         return lines
 
 
 class OperationUpdate(BaseModel):
-    """Schema for updating an operation."""
-
-    notes: str | None = Field(None, max_length=1000, description="Operation notes")
-    lines: list[OperationLineCreate] | None = Field(None, description="Updated operation lines")
+    notes: str | None = Field(default=None, max_length=1000)
+    source_site_id: int | None = None
+    destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
+    issued_to_user_id: UUID | None = None
+    issued_to_name: str | None = Field(default=None, max_length=255)
+    lines: list[OperationLineCreate] | None = None
 
 
 class OperationSubmit(BaseModel):
-    """Schema for submitting an operation."""
-
-    submit: bool = Field(True, description="Submit the operation")
+    submit: bool = True
 
 
 class OperationCancel(BaseModel):
-    """Schema for cancelling an operation."""
-
-    cancel: bool = Field(True, description="Cancel the operation")
-    reason: str | None = Field(None, max_length=500, description="Cancellation reason")
+    cancel: bool = True
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class OperationLineResponse(ORMBaseModel):
-    """Schema for operation line response."""
-
     id: int
     line_number: int
-    item_id: UUID
-    quantity: int
-    source_site_id: UUID | None
-    target_site_id: UUID | None
-    notes: str | None
+    item_id: int
+    qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
+    batch: str | None = None
+    comment: str | None = Field(default=None, validation_alias=AliasChoices("comment", "notes"))
+
+    @property
+    def quantity(self) -> int:
+        return self.qty
+
+    @property
+    def notes(self) -> str | None:
+        return self.comment
 
 
 class OperationResponse(ORMBaseModel):
-    """Schema for operation response."""
-
-    id: int
-    operation_uuid: UUID
-    site_id: UUID
-    type: Literal["RECEIVE", "WRITE_OFF", "MOVE"]
-    status: Literal["draft", "submitted", "cancelled"]
-    created_by_user_id: int
+    id: UUID = Field(validation_alias=AliasChoices("id", "operation_uuid"))
+    site_id: int
+    operation_type: OperationType = Field(validation_alias=AliasChoices("operation_type", "type"))
+    status: OperationStatus
+    source_site_id: int | None = None
+    destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
+    issued_to_user_id: UUID | None = None
+    issued_to_name: str | None = None
+    created_by_user_id: UUID
     created_at: datetime
     updated_at: datetime
-    submitted_at: datetime | None
-    submitted_by_user_id: int | None
-    cancelled_at: datetime | None
-    cancelled_by_user_id: int | None
-    notes: str | None
-    lines: list[OperationLineResponse]
+    submitted_at: datetime | None = None
+    submitted_by_user_id: UUID | None = None
+    cancelled_at: datetime | None = None
+    cancelled_by_user_id: UUID | None = None
+    notes: str | None = None
+    lines: list[OperationLineResponse] = Field(default_factory=list)
+
+    @property
+    def type(self) -> OperationType:
+        return self.operation_type
 
 
 class OperationListResponse(ORMBaseModel):
-    """Schema for operation list response."""
-
     items: list[OperationResponse]
     total_count: int
     page: int
@@ -102,12 +132,10 @@ class OperationListResponse(ORMBaseModel):
 
 
 class OperationFilter(BaseModel):
-    """Schema for filtering operations."""
-
-    site_id: UUID | None = None
-    type: Literal["RECEIVE", "WRITE_OFF", "MOVE"] | None = None
-    status: Literal["draft", "submitted", "cancelled"] | None = None
-    created_by_user_id: int | None = None
+    site_id: int | None = None
+    operation_type: OperationType | None = Field(default=None, validation_alias=AliasChoices("operation_type", "type"))
+    status: OperationStatus | None = None
+    created_by_user_id: UUID | None = None
     created_after: datetime | None = None
     created_before: datetime | None = None
     updated_after: datetime | None = None
@@ -115,3 +143,7 @@ class OperationFilter(BaseModel):
     search: str | None = None
 
     model_config = ConfigDict(extra="forbid")
+
+    @property
+    def type(self) -> OperationType | None:
+        return self.operation_type

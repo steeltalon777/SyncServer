@@ -4,38 +4,41 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.schemas.common import ORMBaseModel
+
+
+UserRole = Literal["root", "chief_storekeeper", "storekeeper", "observer"]
 
 
 # Site schemas
 class SiteCreate(BaseModel):
     """Schema for creating a site."""
-    
-    name: str = Field(min_length=1, max_length=100, description="Site name")
-    code: str = Field(min_length=1, max_length=20, description="Site code")
-    description: str | None = Field(None, max_length=500, description="Site description")
+
+    code: str = Field(min_length=1, max_length=64, description="Site code")
+    name: str = Field(min_length=1, max_length=255, description="Site name")
     is_active: bool = Field(default=True, description="Whether the site is active")
+    description: str | None = Field(default=None, max_length=500, description="Optional description")
 
 
 class SiteUpdate(BaseModel):
     """Schema for updating a site."""
-    
-    name: str | None = Field(None, min_length=1, max_length=100, description="Site name")
-    code: str | None = Field(None, min_length=1, max_length=20, description="Site code")
-    description: str | None = Field(None, max_length=500, description="Site description")
-    is_active: bool | None = Field(None, description="Whether the site is active")
+
+    code: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    is_active: bool | None = None
+    description: str | None = Field(default=None, max_length=500)
 
 
 class SiteResponse(ORMBaseModel):
-    """Schema for site response."""
-    
-    id: UUID
-    name: str
+    """Schema for site response (new model: int site_id)."""
+
+    site_id: int = Field(validation_alias=AliasChoices("site_id", "id"))
     code: str
-    description: str | None
+    name: str
     is_active: bool
+    description: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -43,107 +46,125 @@ class SiteResponse(ORMBaseModel):
 # Device schemas
 class DeviceCreate(BaseModel):
     """Schema for creating a device."""
-    
-    site_id: UUID = Field(description="Site ID the device belongs to")
-    name: str = Field(min_length=1, max_length=100, description="Device name")
-    description: str | None = Field(None, max_length=500, description="Device description")
+
+    device_code: str | None = Field(default=None, max_length=100)
+    device_name: str = Field(min_length=1, max_length=255)
+    site_id: int | None = Field(default=None, description="Nullable if device is not bound to site")
+    is_active: bool = True
 
 
 class DeviceUpdate(BaseModel):
     """Schema for updating a device."""
-    
-    name: str | None = Field(None, min_length=1, max_length=100, description="Device name")
-    description: str | None = Field(None, max_length=500, description="Device description")
-    is_active: bool | None = Field(None, description="Whether the device is active")
+
+    device_code: str | None = Field(default=None, max_length=100)
+    device_name: str | None = Field(default=None, min_length=1, max_length=255)
+    site_id: int | None = None
+    is_active: bool | None = None
 
 
 class DeviceResponse(ORMBaseModel):
     """Schema for device response."""
-    
-    id: UUID
-    site_id: UUID
-    name: str
-    description: str | None
+
+    device_id: int = Field(validation_alias=AliasChoices("device_id", "id"))
+    device_code: str
+    device_name: str = Field(validation_alias=AliasChoices("device_name", "name"))
+    site_id: int | None = None
     is_active: bool
-    registration_token: UUID
-    last_seen_at: datetime | None
-    last_seen_ip: str | None
-    last_seen_client_version: str | None
+    last_seen_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class DeviceTokenResponse(BaseModel):
-    """Schema for device token response (used for token rotation)."""
-    
-    device_id: UUID
-    registration_token: UUID
+    """
+    Token output schema.
+    Use this schema for explicit token read/rotation endpoints only.
+    """
+
+    device_id: int
+    device_token: UUID = Field(validation_alias=AliasChoices("device_token", "registration_token"))
     generated_at: datetime
 
 
-# User and access schemas
+# User schemas (new model)
 class UserCreate(BaseModel):
-    """Schema for creating a user."""
-    
-    user_id: int = Field(ge=1, description="User ID (external system ID)")
-    username: str = Field(min_length=1, max_length=100, description="Username")
-    email: str | None = Field(None, max_length=255, description="Email address")
-    full_name: str | None = Field(None, max_length=200, description="Full name")
-    is_active: bool = Field(default=True, description="Whether the user is active")
+    id: UUID | None = None
+    username: str = Field(min_length=1, max_length=150)
+    email: str | None = Field(default=None, max_length=255)
+    full_name: str | None = Field(default=None, max_length=255)
+    is_active: bool = True
+    is_root: bool = False
+    role: UserRole = "observer"
+    default_site_id: int | None = None
 
 
 class UserUpdate(BaseModel):
-    """Schema for updating a user."""
-    
-    username: str | None = Field(None, min_length=1, max_length=100, description="Username")
-    email: str | None = Field(None, max_length=255, description="Email address")
-    full_name: str | None = Field(None, max_length=200, description="Full name")
-    is_active: bool | None = Field(None, description="Whether the user is active")
+    username: str | None = Field(default=None, min_length=1, max_length=150)
+    email: str | None = Field(default=None, max_length=255)
+    full_name: str | None = Field(default=None, max_length=255)
+    is_active: bool | None = None
+    is_root: bool | None = None
+    role: UserRole | None = None
+    default_site_id: int | None = None
 
 
 class UserResponse(ORMBaseModel):
-    """Schema for user response."""
-    
-    user_id: int
+    id: UUID = Field(validation_alias=AliasChoices("id", "user_id"))
     username: str
     email: str | None
     full_name: str | None
     is_active: bool
+    is_root: bool = False
+    role: UserRole = "observer"
+    default_site_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
 
-class UserSiteAccessCreate(BaseModel):
-    """Schema for creating user-site access."""
-    
-    user_id: int = Field(ge=1, description="User ID")
-    site_id: UUID = Field(description="Site ID")
-    role: Literal["root", "chief_storekeeper", "storekeeper", "observer"] = Field(description="User role for this site")
+# User access scope schemas (new model)
+class UserAccessScopeCreate(BaseModel):
+    user_id: UUID
+    site_id: int
+    can_view: bool = True
+    can_operate: bool = False
+    can_manage_catalog: bool = False
+    is_active: bool = True
 
 
-class UserSiteAccessUpdate(BaseModel):
-    """Schema for updating user-site access."""
-    
-    role: Literal["root", "chief_storekeeper", "storekeeper", "observer"] | None = Field(None, description="User role for this site")
-    is_active: bool | None = Field(None, description="Whether the access is active")
+class UserAccessScopeUpdate(BaseModel):
+    can_view: bool | None = None
+    can_operate: bool | None = None
+    can_manage_catalog: bool | None = None
+    is_active: bool | None = None
 
 
-class UserSiteAccessResponse(ORMBaseModel):
-    """Schema for user-site access response."""
-    
+class UserAccessScopeResponse(ORMBaseModel):
     id: int
-    user_id: int
-    site_id: UUID
-    role: Literal["root", "chief_storekeeper", "storekeeper", "observer"]
+    user_id: UUID
+    site_id: int
+    can_view: bool
+    can_operate: bool
+    can_manage_catalog: bool
     is_active: bool
     created_at: datetime
     updated_at: datetime
 
 
+# Legacy names kept for route compatibility during migration
+class UserSiteAccessCreate(UserAccessScopeCreate):
+    pass
+
+
+class UserSiteAccessUpdate(UserAccessScopeUpdate):
+    pass
+
+
+class UserSiteAccessResponse(UserAccessScopeResponse):
+    pass
+
+
 # List response schemas
 class SiteListResponse(ORMBaseModel):
-    """Schema for site list response."""
-    
     sites: list[SiteResponse]
     total_count: int
     page: int
@@ -151,8 +172,6 @@ class SiteListResponse(ORMBaseModel):
 
 
 class DeviceListResponse(ORMBaseModel):
-    """Schema for device list response."""
-    
     devices: list[DeviceResponse]
     total_count: int
     page: int
@@ -160,8 +179,6 @@ class DeviceListResponse(ORMBaseModel):
 
 
 class UserListResponse(ORMBaseModel):
-    """Schema for user list response."""
-    
     users: list[UserResponse]
     total_count: int
     page: int
@@ -169,49 +186,44 @@ class UserListResponse(ORMBaseModel):
 
 
 class UserSiteAccessListResponse(ORMBaseModel):
-    """Schema for user-site access list response."""
-    
     access_entries: list[UserSiteAccessResponse]
     total_count: int
     page: int
     page_size: int
 
 
-# Filter schemas
+# Filters
 class SiteFilter(BaseModel):
-    """Schema for filtering sites."""
-    
     is_active: bool | None = None
     search: str | None = None
-    
+
     model_config = ConfigDict(extra="forbid")
 
 
 class DeviceFilter(BaseModel):
-    """Schema for filtering devices."""
-    
-    site_id: UUID | None = None
+    site_id: int | None = None
     is_active: bool | None = None
     search: str | None = None
-    
+
     model_config = ConfigDict(extra="forbid")
 
 
 class UserFilter(BaseModel):
-    """Schema for filtering users."""
-    
     is_active: bool | None = None
+    is_root: bool | None = None
+    role: UserRole | None = None
     search: str | None = None
-    
+
     model_config = ConfigDict(extra="forbid")
 
 
-class UserSiteAccessFilter(BaseModel):
-    """Schema for filtering user-site access."""
-    
-    user_id: int | None = None
-    site_id: UUID | None = None
-    role: Literal["root", "chief_storekeeper", "storekeeper", "observer"] | None
+class UserAccessScopeFilter(BaseModel):
+    user_id: UUID | None = None
+    site_id: int | None = None
     is_active: bool | None = None
-    
+
     model_config = ConfigDict(extra="forbid")
+
+
+class UserSiteAccessFilter(UserAccessScopeFilter):
+    pass

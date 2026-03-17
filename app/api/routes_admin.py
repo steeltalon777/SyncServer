@@ -1,44 +1,40 @@
 from __future__ import annotations
 
-import logging
-from math import ceil
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from sqlalchemy import func, or_, select
 
-from app.api.deps import (
-    get_request_id,
-    get_uow,
-    require_acting_user,
-    require_service_auth,
-)
+from app.api.deps import get_uow
+from app.models.device import Device
+from app.models.site import Site
+from app.models.user import User
 from app.schemas.admin import (
     DeviceCreate,
+    DeviceFilter,
     DeviceListResponse,
     DeviceResponse,
     DeviceTokenResponse,
     DeviceUpdate,
     SiteCreate,
+    SiteFilter,
     SiteListResponse,
     SiteResponse,
     SiteUpdate,
+    UserAccessScopeCreate,
+    UserAccessScopeResponse,
+    UserAccessScopeUpdate,
     UserCreate,
     UserListResponse,
     UserResponse,
-    UserSiteAccessCreate,
-    UserSiteAccessListResponse,
-    UserSiteAccessResponse,
-    UserSiteAccessUpdate,
     UserUpdate,
-    SiteFilter
 )
-from app.services.access_service import AccessService
 from app.services.uow import UnitOfWork
 
-router = APIRouter(prefix="/admin")
-logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/admin", tags=["admin"])
 
-ADMIN_ROLES = [
+CANONICAL_ROLES = [
     "root",
     "chief_storekeeper",
     "storekeeper",
@@ -46,55 +42,60 @@ ADMIN_ROLES = [
 ]
 
 
-def _build_user_response(user) -> UserResponse:
-    return UserResponse(
-        user_id=user.id,
-        username=user.username,
-        email=user.email,
-        full_name=user.full_name,
-        is_active=user.is_active,
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-    )
+async def _resolve_current_user(uow: UnitOfWork, x_user_token: UUID | None) -> User:
+    if not x_user_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing X-User-Token",
+        )
+    user = await uow.users.get_by_user_token(x_user_token)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid X-User-Token",
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="user is inactive",
+        )
+    return user
 
 
-def _paginate_list(items: list, page: int, page_size: int) -> tuple[list, int]:
-    total_count = len(items)
+def _require_root(user: User) -> None:
+    if not user.is_root:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="root permissions required",
+        )
+
+
+def _require_admin_basic(user: User) -> None:
+    if user.is_root:
+        return
+    if user.role != "chief_storekeeper":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin access denied",
+        )
+
+
+def _paginate(items: list, page: int, page_size: int) -> tuple[list, int]:
+    total = len(items)
     start = (page - 1) * page_size
     end = start + page_size
-    return items[start:end], total_count
+    return items[start:end], total
 
 
-# ------------------------
-# Roles
-# ------------------------
 @router.get("/roles", response_model=list[str])
 async def list_roles(
-    request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
 ) -> list[str]:
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
-
-    logger.info(
-        "request_id=%s list_roles user_id=%s returned=%s",
-        get_request_id(request),
-        x_acting_user_id,
-        len(ADMIN_ROLES),
-    )
-    return ADMIN_ROLES
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_admin_basic(current_user)
+    return CANONICAL_ROLES
 
 
 # ------------------------
@@ -102,51 +103,25 @@ async def list_roles(
 # ------------------------
 @router.get("/sites", response_model=SiteListResponse)
 async def list_sites_admin(
-    request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
-    is_active: bool | None = Query(None, description="Filter by active status"),
-    search: str | None = Query(None, description="Search in name, code, or description"),
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=100, description="Page size"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    is_active: bool | None = Query(default=None),
+    search: str | None = Query(default=None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
 ) -> SiteListResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
-
-        site_filter = SiteFilter(
-            is_active=is_active,
-            search=search,
-        )
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_admin_basic(current_user)
 
         sites, total_count = await uow.sites.list_sites(
-            filter=site_filter,
+            filter=SiteFilter(is_active=is_active, search=search),
             user_site_ids=None,
             page=page,
             page_size=page_size,
         )
-    site_responses = [SiteResponse.model_validate(site) for site in sites]
-
-    logger.info(
-        "request_id=%s list_sites_admin user_id=%s returned=%s total=%s",
-        get_request_id(request),
-        x_acting_user_id,
-        len(site_responses),
-        total_count,
-    )
-
     return SiteListResponse(
-        sites=site_responses,
+        sites=[SiteResponse.model_validate(site) for site in sites],
         total_count=total_count,
         page=page,
         page_size=page_size,
@@ -155,208 +130,105 @@ async def list_sites_admin(
 
 @router.post("/sites", response_model=SiteResponse)
 async def create_site(
-    site_data: SiteCreate,
-    request: Request,
+    payload: SiteCreate,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
 ) -> SiteResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_admin_basic(current_user)
 
-        existing_site = await uow.sites.get_by_code(site_data.code)
-        if existing_site:
+        existing = await uow.sites.get_by_code(payload.code)
+        if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Site with code '{site_data.code}' already exists",
+                detail=f"site code '{payload.code}' already exists",
             )
 
         site = await uow.sites.create_site(
-            name=site_data.name,
-            code=site_data.code,
-            description=site_data.description,
-            is_active=site_data.is_active,
+            name=payload.name,
+            code=payload.code,
+            description=payload.description,
+            is_active=payload.is_active,
         )
-
-    logger.info(
-        "request_id=%s create_site site_id=%s code=%s user_id=%s",
-        get_request_id(request),
-        site.id,
-        site.code,
-        x_acting_user_id,
-    )
-
     return SiteResponse.model_validate(site)
 
 
 @router.patch("/sites/{site_id}", response_model=SiteResponse)
 async def update_site(
-    site_id: UUID,
-    update_data: SiteUpdate,
-    request: Request,
+    site_id: int,
+    payload: SiteUpdate,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
 ) -> SiteResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_admin_basic(current_user)
 
         site = await uow.sites.get_by_id(site_id)
         if not site:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Site not found",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="site not found")
 
-        if update_data.code and update_data.code != site.code:
-            existing_site = await uow.sites.get_by_code(update_data.code)
-            if existing_site:
+        if payload.code and payload.code != site.code:
+            code_taken = await uow.sites.get_by_code(payload.code)
+            if code_taken:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Site with code '{update_data.code}' already exists",
+                    detail=f"site code '{payload.code}' already exists",
                 )
 
-        updated_site = await uow.sites.update_site(
+        updated = await uow.sites.update_site(
             site_id=site_id,
-            name=update_data.name,
-            code=update_data.code,
-            description=update_data.description,
-            is_active=update_data.is_active,
+            name=payload.name,
+            code=payload.code,
+            description=payload.description,
+            is_active=payload.is_active,
         )
-
-    logger.info(
-        "request_id=%s update_site site_id=%s user_id=%s",
-        get_request_id(request),
-        site_id,
-        x_acting_user_id,
-    )
-
-    return SiteResponse.model_validate(updated_site)
+    return SiteResponse.model_validate(updated)
 
 
 # ------------------------
-# Devices
-# ------------------------
-@router.get("/devices", response_model=DeviceListResponse)
-async def list_devices(
-    request: Request,
-    uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
-    site_id: UUID | None = Query(None, description="Filter by site ID"),
-    is_active: bool | None = Query(None, description="Filter by active status"),
-    search: str | None = Query(None, description="Search in device name or description"),
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=100, description="Page size"),
-) -> DeviceListResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
-    async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
-
-        # TODO: заменить на реальный DevicesRepo.list_devices(...)
-        devices = []
-        total_count = 0
-
-    device_responses = [DeviceResponse.model_validate(device) for device in devices]
-
-    logger.info(
-        "request_id=%s list_devices user_id=%s returned=%s total=%s",
-        get_request_id(request),
-        x_acting_user_id,
-        len(device_responses),
-        total_count,
-    )
-
-    return DeviceListResponse(
-        devices=device_responses,
-        total_count=total_count,
-        page=page,
-        page_size=page_size,
-    )
-
-
-# ------------------------
-# Users
+# Users (root only)
 # ------------------------
 @router.get("/users", response_model=UserListResponse)
 async def list_users(
-    request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
-    is_active: bool | None = Query(None, description="Filter by active status"),
-    search: str | None = Query(None, description="Search in username, email, or full name"),
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=100, description="Page size"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    is_active: bool | None = Query(default=None),
+    is_root: bool | None = Query(default=None),
+    role: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
 ) -> UserListResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
 
-        users = list(await uow.users.list(is_active=is_active, limit=10000, offset=0))
+        users = list(
+            await uow.users.list_users(
+                is_active=is_active,
+                is_root=is_root,
+                role=role,
+                limit=10000,
+                offset=0,
+            )
+        )
 
         if search:
-            search_lower = search.lower()
+            needle = search.lower()
             users = [
                 user
                 for user in users
-                if search_lower in user.username.lower()
-                or (user.email and search_lower in user.email.lower())
-                or (user.full_name and search_lower in user.full_name.lower())
+                if needle in user.username.lower()
+                or (user.email and needle in user.email.lower())
+                or (user.full_name and needle in user.full_name.lower())
             ]
 
-        page_items, total_count = _paginate_list(users, page, page_size)
-
-    user_responses = [_build_user_response(user) for user in page_items]
-
-    logger.info(
-        "request_id=%s list_users user_id=%s returned=%s total=%s",
-        get_request_id(request),
-        x_acting_user_id,
-        len(user_responses),
-        total_count,
-    )
+        page_items, total_count = _paginate(users, page, page_size)
 
     return UserListResponse(
-        users=user_responses,
+        users=[UserResponse.model_validate(user) for user in page_items],
         total_count=total_count,
         page=page,
         page_size=page_size,
@@ -365,331 +237,334 @@ async def list_users(
 
 @router.get("/users/{user_id}", response_model=UserResponse)
 async def get_user(
-    user_id: int,
-    request: Request,
+    user_id: UUID,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
 ) -> UserResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
 
-        user = await uow.users.get(user_id)
-        if user is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found",
-            )
-
-    logger.info(
-        "request_id=%s get_user requested_user_id=%s by_user_id=%s",
-        get_request_id(request),
-        user_id,
-        x_acting_user_id,
-    )
-
-    return _build_user_response(user)
+        user = await uow.users.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+    return UserResponse.model_validate(user)
 
 
 @router.post("/users", response_model=UserResponse)
 async def create_user(
-    user_data: UserCreate,
-    request: Request,
+    payload: UserCreate,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
 ) -> UserResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
+
+        if payload.id is not None:
+            exists_by_id = await uow.users.get_by_id(payload.id)
+            if exists_by_id:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="user id already exists")
+
+        exists_by_username = await uow.users.get_by_username(payload.username)
+        if exists_by_username:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="username already exists")
+
+        user = User(
+            id=payload.id or uuid4(),
+            username=payload.username,
+            email=payload.email,
+            full_name=payload.full_name,
+            is_active=payload.is_active,
+            is_root=payload.is_root,
+            role=payload.role,
+            default_site_id=payload.default_site_id,
         )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
-
-        existing_by_id = await uow.users.get(user_data.user_id)
-        if existing_by_id is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with id {user_data.user_id} already exists",
-            )
-
-        existing_by_username = await uow.users.get_by_username(user_data.username)
-        if existing_by_username is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with username '{user_data.username}' already exists",
-            )
-
-        user = await uow.users.create(
-            user_id=user_data.user_id,
-            username=user_data.username,
-            email=user_data.email,
-            full_name=user_data.full_name,
-            is_active=user_data.is_active,
-        )
-
-    logger.info(
-        "request_id=%s create_user created_user_id=%s by_user_id=%s",
-        get_request_id(request),
-        user.id,
-        x_acting_user_id,
-    )
-
-    return _build_user_response(user)
+        uow.session.add(user)
+        await uow.session.flush()
+        await uow.session.refresh(user)
+    return UserResponse.model_validate(user)
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse)
 async def update_user(
-    user_id: int,
-    update_data: UserUpdate,
-    request: Request,
+    user_id: UUID,
+    payload: UserUpdate,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
 ) -> UserResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
 
-        existing_user = await uow.users.get(user_id)
-        if existing_user is None:
+        user = await uow.users.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+
+        if payload.username is not None and payload.username != user.username:
+            exists_by_username = await uow.users.get_by_username(payload.username)
+            if exists_by_username and exists_by_username.id != user.id:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="username already exists")
+
+        if payload.username is not None:
+            user.username = payload.username
+        if payload.email is not None:
+            user.email = payload.email
+        if payload.full_name is not None:
+            user.full_name = payload.full_name
+        if payload.is_active is not None:
+            user.is_active = payload.is_active
+        if payload.is_root is not None:
+            user.is_root = payload.is_root
+        if payload.role is not None:
+            user.role = payload.role
+        if "default_site_id" in payload.model_fields_set:
+            user.default_site_id = payload.default_site_id
+
+        await uow.session.flush()
+        await uow.session.refresh(user)
+    return UserResponse.model_validate(user)
+
+
+@router.delete("/users/{user_id}", response_model=UserResponse)
+async def delete_user(
+    user_id: UUID,
+    uow: UnitOfWork = Depends(get_uow),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> UserResponse:
+    async with uow:
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
+
+        user = await uow.users.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+
+        if user.is_root and user.id == current_user.id:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found",
+                status_code=status.HTTP_409_CONFLICT,
+                detail="cannot deactivate current root user",
             )
 
-        if update_data.username and update_data.username != existing_user.username:
-            existing_by_username = await uow.users.get_by_username(update_data.username)
-            if existing_by_username is not None and existing_by_username.id != user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"User with username '{update_data.username}' already exists",
-                )
-
-        updated_user = await uow.users.update(
-            user_id=user_id,
-            username=update_data.username,
-            email=update_data.email,
-            full_name=update_data.full_name,
-            is_active=update_data.is_active,
-        )
-
-    logger.info(
-        "request_id=%s update_user updated_user_id=%s by_user_id=%s",
-        get_request_id(request),
-        user_id,
-        x_acting_user_id,
-    )
-
-    return _build_user_response(updated_user)
+        user.is_active = False
+        await uow.session.flush()
+        await uow.session.refresh(user)
+    return UserResponse.model_validate(user)
 
 
 # ------------------------
-# User-site access
+# Access scopes (root only)
 # ------------------------
-@router.get("/access/user-sites", response_model=UserSiteAccessListResponse)
-async def list_user_site_access(
-    request: Request,
+@router.get("/access/scopes", response_model=list[UserAccessScopeResponse])
+async def list_access_scopes(
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
-    user_id: int | None = Query(None, description="Filter by user ID"),
-    site_id: UUID | None = Query(None, description="Filter by site ID"),
-    role: str | None = Query(None, description="Filter by role"),
-    is_active: bool | None = Query(None, description="Filter by active status"),
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=100, description="Page size"),
-) -> UserSiteAccessListResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    user_id: UUID | None = Query(default=None),
+    site_id: int | None = Query(default=None),
+    is_active: bool | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> list[UserAccessScopeResponse]:
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
-        access_entries = list(
-            await access_service.list_user_access_entries(user_context["user_id"])
-        )
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
 
-        if user_id is not None:
-            access_entries = [entry for entry in access_entries if entry.user_id == user_id]
+        scopes = await uow.user_access_scopes.list_all_scopes(
+            user_id=user_id,
+            site_id=site_id,
+            is_active=is_active,
+            limit=limit,
+            offset=offset,
+        )
+    return [UserAccessScopeResponse.model_validate(scope) for scope in scopes]
+
+
+@router.post("/access/scopes", response_model=UserAccessScopeResponse)
+async def create_access_scope(
+    payload: UserAccessScopeCreate,
+    uow: UnitOfWork = Depends(get_uow),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> UserAccessScopeResponse:
+    async with uow:
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
+
+        user = await uow.users.get_by_id(payload.user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+
+        site = await uow.sites.get_by_id(payload.site_id)
+        if not site:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="site not found")
+
+        existing = await uow.user_access_scopes.get_by_user_and_site(payload.user_id, payload.site_id)
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="access scope already exists for user/site",
+            )
+
+        scope = await uow.user_access_scopes.create_scope(
+            user_id=payload.user_id,
+            site_id=payload.site_id,
+            can_view=payload.can_view,
+            can_operate=payload.can_operate,
+            can_manage_catalog=payload.can_manage_catalog,
+            is_active=payload.is_active,
+        )
+    return UserAccessScopeResponse.model_validate(scope)
+
+
+@router.patch("/access/scopes/{scope_id}", response_model=UserAccessScopeResponse)
+async def update_access_scope(
+    scope_id: int,
+    payload: UserAccessScopeUpdate,
+    uow: UnitOfWork = Depends(get_uow),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> UserAccessScopeResponse:
+    async with uow:
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
+
+        scope = await uow.user_access_scopes.update_scope(
+            scope_id=scope_id,
+            can_view=payload.can_view,
+            can_operate=payload.can_operate,
+            can_manage_catalog=payload.can_manage_catalog,
+            is_active=payload.is_active,
+        )
+        if not scope:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="scope not found")
+    return UserAccessScopeResponse.model_validate(scope)
+
+
+# ------------------------
+# Devices (root + chief_storekeeper)
+# ------------------------
+@router.get("/devices", response_model=DeviceListResponse)
+async def list_devices(
+    uow: UnitOfWork = Depends(get_uow),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    site_id: int | None = Query(default=None),
+    is_active: bool | None = Query(default=None),
+    search: str | None = Query(default=None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> DeviceListResponse:
+    async with uow:
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_admin_basic(current_user)
+
+        stmt = select(Device)
         if site_id is not None:
-            access_entries = [entry for entry in access_entries if entry.site_id == site_id]
-        if role is not None:
-            access_entries = [entry for entry in access_entries if entry.role == role]
+            stmt = stmt.where(Device.site_id == site_id)
         if is_active is not None:
-            access_entries = [
-                entry for entry in access_entries if entry.is_active == is_active
-            ]
+            stmt = stmt.where(Device.is_active == is_active)
+        if search:
+            token = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    Device.device_code.ilike(token),
+                    Device.device_name.ilike(token),
+                )
+            )
 
-        page_items, total_count = _paginate_list(access_entries, page, page_size)
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total_count = (await uow.session.execute(count_stmt)).scalar_one()
 
-    access_responses = [
-        UserSiteAccessResponse.model_validate(entry) for entry in page_items
-    ]
+        stmt = stmt.order_by(Device.id).offset((page - 1) * page_size).limit(page_size)
+        devices = list((await uow.session.execute(stmt)).scalars().all())
 
-    logger.info(
-        "request_id=%s list_user_site_access by_user_id=%s returned=%s total=%s",
-        get_request_id(request),
-        x_acting_user_id,
-        len(access_responses),
-        total_count,
-    )
-
-    return UserSiteAccessListResponse(
-        access_entries=access_responses,
+    return DeviceListResponse(
+        devices=[DeviceResponse.model_validate(device) for device in devices],
         total_count=total_count,
         page=page,
         page_size=page_size,
     )
 
 
-@router.post("/access/user-sites", response_model=UserSiteAccessResponse)
-async def create_user_site_access(
-    access_data: UserSiteAccessCreate,
-    request: Request,
+@router.post("/devices", response_model=DeviceResponse)
+async def create_device(
+    payload: DeviceCreate,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
-) -> UserSiteAccessResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> DeviceResponse:
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_admin_basic(current_user)
+
+        if payload.site_id is not None:
+            site = await uow.sites.get_by_id(payload.site_id)
+            if not site:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="site not found")
+
+        device = Device(
+            device_code=payload.device_code or f"device-{uuid4().hex[:10]}",
+            device_name=payload.device_name,
+            site_id=payload.site_id,
+            is_active=payload.is_active,
+            device_token=uuid4(),
         )
-        access_service = AccessService(uow)
-
-        access_entry = await access_service.create_user_site_access(
-            user_context["user_id"],
-            access_data,
-        )
-
-    logger.info(
-        "request_id=%s create_user_site_access target_user_id=%s site_id=%s role=%s by_user_id=%s",
-        get_request_id(request),
-        access_data.user_id,
-        access_data.site_id,
-        access_data.role,
-        x_acting_user_id,
-    )
-
-    return UserSiteAccessResponse.model_validate(access_entry)
+        uow.session.add(device)
+        await uow.session.flush()
+        await uow.session.refresh(device)
+    return DeviceResponse.model_validate(device)
 
 
-@router.patch("/access/user-sites/{access_id}", response_model=UserSiteAccessResponse)
-async def update_user_site_access(
-    access_id: int,
-    update_data: UserSiteAccessUpdate,
-    request: Request,
+@router.patch("/devices/{device_id}", response_model=DeviceResponse)
+async def update_device(
+    device_id: int,
+    payload: DeviceUpdate,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
-) -> UserSiteAccessResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> DeviceResponse:
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        access_service = AccessService(uow)
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_admin_basic(current_user)
 
-        access_entry = await access_service.update_user_site_access(
-            user_context["user_id"],
-            access_id,
-            update_data,
-        )
+        device = await uow.devices.get_by_id(device_id)
+        if not device:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
 
-    logger.info(
-        "request_id=%s update_user_site_access access_id=%s by_user_id=%s",
-        get_request_id(request),
-        access_id,
-        x_acting_user_id,
-    )
+        if payload.site_id is not None:
+            site = await uow.sites.get_by_id(payload.site_id)
+            if not site:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="site not found")
 
-    return UserSiteAccessResponse.model_validate(access_entry)
+        if payload.device_code is not None:
+            device.device_code = payload.device_code
+        if payload.device_name is not None:
+            device.device_name = payload.device_name
+        if "site_id" in payload.model_fields_set:
+            device.site_id = payload.site_id
+        if payload.is_active is not None:
+            device.is_active = payload.is_active
 
-@router.delete("/users/{user_id}", response_model=UserResponse)
-async def delete_user(
-    user_id: int,
-    request: Request,
+        await uow.session.flush()
+        await uow.session.refresh(device)
+    return DeviceResponse.model_validate(device)
+
+
+@router.post("/devices/{device_id}/rotate-token", response_model=DeviceTokenResponse)
+async def rotate_device_token(
+    device_id: int,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
-) -> UserResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> DeviceTokenResponse:
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_admin_basic(current_user)
+
+        device = await uow.devices.get_by_id(device_id)
+        if not device:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
+
+        device.device_token = uuid4()
+        await uow.session.flush()
+        await uow.session.refresh(device)
+
+        return DeviceTokenResponse(
+            device_id=device.id,
+            device_token=device.device_token,
+            generated_at=datetime.now(UTC),
         )
-        access_service = AccessService(uow)
-        await access_service.validate_root_permission(user_context["user_id"])
-
-        existing_user = await uow.users.get(user_id)
-        if existing_user is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found",
-            )
-
-        if user_id == 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Root user cannot be deactivated",
-            )
-
-        updated_user = await uow.users.update(
-            user_id=user_id,
-            is_active=False,
-        )
-
-    logger.info(
-        "request_id=%s delete_user deactivated_user_id=%s by_user_id=%s",
-        get_request_id(request),
-        user_id,
-        x_acting_user_id,
-    )
-
-    return _build_user_response(updated_user)

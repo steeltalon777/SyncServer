@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,7 +49,7 @@ class CatalogRepo:
         await self.session.refresh(unit)
         return unit
 
-    async def get_unit_by_id(self, unit_id: UUID) -> Unit | None:
+    async def get_unit_by_id(self, unit_id: int) -> Unit | None:
         result = await self.session.execute(select(Unit).where(Unit.id == unit_id))
         return result.scalar_one_or_none()
 
@@ -73,11 +72,11 @@ class CatalogRepo:
         await self.session.refresh(category)
         return category
 
-    async def get_category_by_id(self, category_id: UUID) -> Category | None:
+    async def get_category_by_id(self, category_id: int) -> Category | None:
         result = await self.session.execute(select(Category).where(Category.id == category_id))
         return result.scalar_one_or_none()
 
-    async def get_category_by_parent_and_name(self, parent_id: UUID | None, name: str) -> Category | None:
+    async def get_category_by_parent_and_name(self, parent_id: int | None, name: str) -> Category | None:
         stmt = select(Category).where(Category.parent_id == parent_id, Category.name == name)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
@@ -87,8 +86,8 @@ class CatalogRepo:
         await self.session.refresh(category)
         return category
 
-    async def list_category_ancestors(self, category_id: UUID) -> set[UUID]:
-        ancestors: set[UUID] = set()
+    async def list_category_ancestors(self, category_id: int) -> set[int]:
+        ancestors: set[int] = set()
         current = await self.get_category_by_id(category_id)
 
         while current is not None and current.parent_id is not None:
@@ -105,7 +104,7 @@ class CatalogRepo:
         await self.session.refresh(item)
         return item
 
-    async def get_item_by_id(self, item_id: UUID) -> Item | None:
+    async def get_item_by_id(self, item_id: int) -> Item | None:
         result = await self.session.execute(select(Item).where(Item.id == item_id))
         return result.scalar_one_or_none()
 
@@ -119,7 +118,7 @@ class CatalogRepo:
         return item
 
     def build_category_tree(self, categories: list[Category]) -> list[dict]:
-        nodes: dict[UUID, dict] = {}
+        nodes: dict[int, dict] = {}
         roots: list[dict] = []
 
         for category in categories:

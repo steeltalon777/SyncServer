@@ -1,6 +1,5 @@
 ﻿from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +13,7 @@ class BalancesRepo:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_for_update(self, site_id: UUID, item_id: UUID) -> Balance | None:
+    async def get_for_update(self, site_id: int, item_id: int) -> Balance | None:
         stmt = (
             select(Balance)
             .where(and_(Balance.site_id == site_id, Balance.item_id == item_id))
@@ -23,7 +22,7 @@ class BalancesRepo:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def upsert(self, site_id: UUID, item_id: UUID, delta_qty: Decimal) -> Balance:
+    async def upsert(self, site_id: int, item_id: int, delta_qty: Decimal) -> Balance:
         balance = await self.get_for_update(site_id=site_id, item_id=item_id)
 
         if balance is None:
@@ -38,8 +37,8 @@ class BalancesRepo:
 
     async def update_balance_quantity(
         self,
-        site_id: UUID,
-        item_id: UUID,
+        site_id: int,
+        item_id: int,
         quantity_delta: Decimal,
     ) -> Balance:
         return await self.upsert(
@@ -51,7 +50,7 @@ class BalancesRepo:
     async def list_balances(
         self,
         filter,
-        user_site_ids: list[UUID],
+        user_site_ids: list[int],
         page: int,
         page_size: int,
     ) -> tuple[list[Balance], int]:
@@ -78,7 +77,7 @@ class BalancesRepo:
         result = await self.session.execute(stmt)
         return list(result.scalars().all()), total_count
 
-    async def get_balances_summary(self, user_site_ids: list[UUID]) -> dict:
+    async def get_balances_summary(self, user_site_ids: list[int]) -> dict:
         stmt = select(
             func.count().label("rows_count"),
             func.count(func.distinct(Balance.site_id)).label("sites_count"),

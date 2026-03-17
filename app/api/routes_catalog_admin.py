@@ -5,12 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
-from app.api.deps import (
-    get_request_id,
-    get_uow,
-    require_acting_user,
-    require_service_auth,
-)
+from app.api.deps import get_request_id, get_uow
 from app.schemas.catalog import (
     CategoryCreateRequest,
     CategoryResponse,
@@ -22,6 +17,8 @@ from app.schemas.catalog import (
     UnitResponse,
     UnitUpdateRequest,
 )
+from app.services.access_guard import AccessGuard
+from app.services.access_service import AccessService
 from app.services.catalog_admin_service import CatalogAdminService
 from app.services.uow import UnitOfWork
 
@@ -29,12 +26,55 @@ router = APIRouter(prefix="/catalog/admin")
 logger = logging.getLogger(__name__)
 
 
-def _require_catalog_admin(user_context: dict) -> None:
-    if user_context["role"] != "root":
+async def _resolve_current_user_uuid(uow: UnitOfWork, x_user_token: UUID | None) -> UUID:
+    if not x_user_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing X-User-Token",
+        )
+
+    user = await uow.users.get_by_user_token(x_user_token)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid X-User-Token",
+        )
+    if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="catalog admin permission required",
+            detail="user is inactive",
         )
+    return user.id
+
+
+async def _require_catalog_admin(
+    uow: UnitOfWork,
+    user_id: UUID,
+    site_id_int: int | None,
+) -> None:
+    access_service = AccessService(uow)
+
+    if await access_service.is_root(user_id):
+        return
+
+    role = await access_service.get_user_role(user_id)
+    if role != "chief_storekeeper":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="catalog admin access denied",
+        )
+
+    if site_id_int is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Site-Id is required for chief_storekeeper catalog admin actions",
+        )
+
+    await AccessGuard.require_catalog_admin_access(
+        access_service=access_service,
+        user_id=user_id,
+        site_id=site_id_int,
+    )
 
 
 @router.post("/units", response_model=UnitResponse)
@@ -42,63 +82,35 @@ async def create_unit(
     payload: UnitCreateRequest,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> UnitResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     service = CatalogAdminService()
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        _require_catalog_admin(user_context)
-
+        user_id = await _resolve_current_user_uuid(uow, x_user_token)
+        await _require_catalog_admin(uow=uow, user_id=user_id, site_id_int=x_site_id)
         unit = await service.create_unit(uow, payload)
 
-    logger.info(
-        "request_id=%s create_unit unit_id=%s user_id=%s",
-        get_request_id(request),
-        unit.id,
-        user_context["user_id"],
-    )
+    logger.info("request_id=%s create_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, user_id)
     return UnitResponse.model_validate(unit)
 
 
 @router.patch("/units/{unit_id}", response_model=UnitResponse)
 async def update_unit(
-    unit_id: UUID,
+    unit_id: int,
     payload: UnitUpdateRequest,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> UnitResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     service = CatalogAdminService()
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        _require_catalog_admin(user_context)
-
+        user_id = await _resolve_current_user_uuid(uow, x_user_token)
+        await _require_catalog_admin(uow=uow, user_id=user_id, site_id_int=x_site_id)
         unit = await service.update_unit(uow, unit_id, payload)
 
-    logger.info(
-        "request_id=%s update_unit unit_id=%s user_id=%s",
-        get_request_id(request),
-        unit.id,
-        user_context["user_id"],
-    )
+    logger.info("request_id=%s update_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, user_id)
     return UnitResponse.model_validate(unit)
 
 
@@ -107,62 +119,44 @@ async def create_category(
     payload: CategoryCreateRequest,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> CategoryResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     service = CatalogAdminService()
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        _require_catalog_admin(user_context)
-
+        user_id = await _resolve_current_user_uuid(uow, x_user_token)
+        await _require_catalog_admin(uow=uow, user_id=user_id, site_id_int=x_site_id)
         category = await service.create_category(uow, payload)
 
     logger.info(
         "request_id=%s create_category category_id=%s user_id=%s",
         get_request_id(request),
         category.id,
-        user_context["user_id"],
+        user_id,
     )
     return CategoryResponse.model_validate(category)
 
 
 @router.patch("/categories/{category_id}", response_model=CategoryResponse)
 async def update_category(
-    category_id: UUID,
+    category_id: int,
     payload: CategoryUpdateRequest,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> CategoryResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     service = CatalogAdminService()
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        _require_catalog_admin(user_context)
-
+        user_id = await _resolve_current_user_uuid(uow, x_user_token)
+        await _require_catalog_admin(uow=uow, user_id=user_id, site_id_int=x_site_id)
         category = await service.update_category(uow, category_id, payload)
 
     logger.info(
         "request_id=%s update_category category_id=%s user_id=%s",
         get_request_id(request),
         category.id,
-        user_context["user_id"],
+        user_id,
     )
     return CategoryResponse.model_validate(category)
 
@@ -172,61 +166,33 @@ async def create_item(
     payload: ItemCreateRequest,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> ItemResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     service = CatalogAdminService()
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        _require_catalog_admin(user_context)
-
+        user_id = await _resolve_current_user_uuid(uow, x_user_token)
+        await _require_catalog_admin(uow=uow, user_id=user_id, site_id_int=x_site_id)
         item = await service.create_item(uow, payload)
 
-    logger.info(
-        "request_id=%s create_item item_id=%s user_id=%s",
-        get_request_id(request),
-        item.id,
-        user_context["user_id"],
-    )
+    logger.info("request_id=%s create_item item_id=%s user_id=%s", get_request_id(request), item.id, user_id)
     return ItemResponse.model_validate(item)
 
 
 @router.patch("/items/{item_id}", response_model=ItemResponse)
 async def update_item(
-    item_id: UUID,
+    item_id: int,
     payload: ItemUpdateRequest,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: int = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: UUID = Header(alias="X-Acting-Site-Id"),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> ItemResponse:
-    await require_service_auth(request=request, authorization=authorization)
-
     service = CatalogAdminService()
     async with uow:
-        user_context = await require_acting_user(
-            request=request,
-            uow=uow,
-            x_acting_user_id=x_acting_user_id,
-            x_acting_site_id=x_acting_site_id,
-        )
-        _require_catalog_admin(user_context)
-
+        user_id = await _resolve_current_user_uuid(uow, x_user_token)
+        await _require_catalog_admin(uow=uow, user_id=user_id, site_id_int=x_site_id)
         item = await service.update_item(uow, item_id, payload)
 
-    logger.info(
-        "request_id=%s update_item item_id=%s user_id=%s",
-        get_request_id(request),
-        item.id,
-        user_context["user_id"],
-    )
+    logger.info("request_id=%s update_item item_id=%s user_id=%s", get_request_id(request), item.id, user_id)
     return ItemResponse.model_validate(item)

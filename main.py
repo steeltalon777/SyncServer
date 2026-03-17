@@ -110,4 +110,6 @@ app.include_router(admin_router, prefix=api_v1_prefix)
 # Health endpoints
 app.include_router(health_router, prefix=api_v1_prefix)
 
+# Auth endpoints
 app.include_router(auth_router, prefix=api_v1_prefix)
+

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from uuid import UUID
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,13 +13,13 @@ class UsersRepo:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def get(self, user_id: int) -> User | None:
+    async def get_by_id(self, user_id: UUID) -> User | None:
         stmt = select(User).where(User.id == user_id)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_required(self, user_id: int) -> User:
-        user = await self.get(user_id)
+    async def get_required(self, user_id: UUID) -> User:
+        user = await self.get_by_id(user_id)
         if user is None:
             raise ValueError(f"user {user_id} not found")
         return user
@@ -28,52 +29,74 @@ class UsersRepo:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list(
+    async def get_by_user_token(self, user_token: UUID) -> User | None:
+        stmt = select(User).where(User.user_token == user_token)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_root_user(self) -> User | None:
+        stmt = select(User).where(User.is_root == True).where(User.is_active == True)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+    async def list_users(
         self,
         *,
         is_active: bool | None = None,
+        is_root: bool | None = None,
+        role: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> Sequence[User]:
-        stmt: Select[tuple[User]] = select(User).order_by(User.id)
-
+        stmt: Select[tuple[User]] = select(User).order_by(User.username)
         if is_active is not None:
             stmt = stmt.where(User.is_active == is_active)
 
-        stmt = stmt.offset(offset).limit(limit)
+        if is_root is not None:
+            stmt = stmt.where(User.is_root == is_root)
 
+        if role is not None:
+            stmt = stmt.where(User.role == role)
+
+        stmt = stmt.offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
-    async def create(
+    async def create_user(
         self,
         *,
-        user_id: int,
         username: str,
         email: str | None = None,
         full_name: str | None = None,
         is_active: bool = True,
+        is_root: bool = False,
+        role: str = "observer",
+        default_site_id: int | None = None,
     ) -> User:
         user = User(
-            id=user_id,
-            username=username,
-            email=email,
-            full_name=full_name,
-            is_active=is_active,
+                username=username,
+                email=email,
+                full_name=full_name,
+                is_active=is_active,
+            is_root=is_root,
+            role=role,
+            default_site_id=default_site_id,
         )
         self.session.add(user)
         await self.session.flush()
         await self.session.refresh(user)
         return user
 
-    async def update(
+    async def update_user(
         self,
-        user_id: int,
+        user_id: UUID,
         *,
         username: str | None = None,
         email: str | None = None,
         full_name: str | None = None,
         is_active: bool | None = None,
+        is_root: bool | None = None,
+        role: str | None = None,
+        default_site_id: int | None = None,
     ) -> User:
         user = await self.get_required(user_id)
 
@@ -89,9 +112,65 @@ class UsersRepo:
         if is_active is not None:
             user.is_active = is_active
 
+        if is_root is not None:
+            user.is_root = is_root
+
+        if role is not None:
+            user.role = role
+
+        if default_site_id is not None:
+            user.default_site_id = default_site_id
+
         await self.session.flush()
         await self.session.refresh(user)
         return user
+
+    async def soft_delete_user(self, user_id: UUID) -> User:
+        """Soft delete user by setting is_active=False."""
+        user = await self.get_required(user_id)
+        user.is_active = False
+        await self.session.flush()
+        await self.session.refresh(user)
+        return user
+
+    # Legacy compatibility methods (deprecated)
+    async def get(self, user_id: int) -> User | None:
+        """DEPRECATED: Legacy method for integer user_id. Use get_by_id with UUID instead."""
+        raise NotImplementedError("Legacy integer user_id is not supported. Use UUID-based methods.")
+
+    async def list(
+        self,
+        *,
+        is_active: bool | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Sequence[User]:
+        """DEPRECATED: Legacy method. Use list_users instead."""
+        return await self.list_users(is_active=is_active, limit=limit, offset=offset)
+
+    async def create(
+        self,
+        *,
+        user_id: int,
+        username: str,
+        email: str | None = None,
+        full_name: str | None = None,
+        is_active: bool = True,
+    ) -> User:
+        """DEPRECATED: Legacy method. Use create_user instead."""
+        raise NotImplementedError("Legacy create method is not supported. Use create_user instead.")
+
+    async def update(
+        self,
+        user_id: int,
+        *,
+        username: str | None = None,
+        email: str | None = None,
+        full_name: str | None = None,
+        is_active: bool | None = None,
+    ) -> User:
+        """DEPRECATED: Legacy method. Use update_user instead."""
+        raise NotImplementedError("Legacy update method is not supported. Use update_user instead.")
 
     async def upsert(
         self,
@@ -102,21 +181,5 @@ class UsersRepo:
         full_name: str | None = None,
         is_active: bool = True,
     ) -> User:
-        existing = await self.get(user_id)
-        if existing is None:
-            return await self.create(
-                user_id=user_id,
-                username=username,
-                email=email,
-                full_name=full_name,
-                is_active=is_active,
-            )
-
-        existing.username = username
-        existing.email = email
-        existing.full_name = full_name
-        existing.is_active = is_active
-
-        await self.session.flush()
-        await self.session.refresh(existing)
-        return existing
+        """DEPRECATED: Legacy method."""
+        raise NotImplementedError("Legacy upsert method is not supported.")

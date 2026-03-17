@@ -6,6 +6,7 @@ from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.site import Site
+from app.models.user_access_scope import UserAccessScope
 from app.schemas.admin import SiteFilter
 
 
@@ -110,8 +111,25 @@ class SitesRepo:
 
         return sites, total_count
 
-    async def get_user_sites(self, user_id: int) -> list[Site]:
-        """Get all sites accessible by a user."""
+    async def get_user_sites(self, user_id: UUID) -> list[Site]:
+        """Get all sites accessible by a user (using new UserAccessScope model)."""
+        stmt = (
+            select(Site)
+            .join(UserAccessScope, Site.id == UserAccessScope.site_id)
+            .where(
+                and_(
+                    UserAccessScope.user_id == user_id,
+                    UserAccessScope.is_active == True,
+                    UserAccessScope.can_view == True,
+                )
+            )
+            .order_by(Site.name)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_user_sites_legacy(self, user_id: int) -> list[Site]:
+        """DEPRECATED: Legacy method using UserSiteRole. Use get_user_sites with UUID instead."""
         from app.models.user_site_role import UserSiteRole
 
         stmt = (

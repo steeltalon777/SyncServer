@@ -1,17 +1,18 @@
 # INDEX
 
-## Core documentation
-- `README.md` - project overview, setup, API summary.
-- `ARCHITECTURE.md` - layered architecture and responsibilities.
-- `AI_CONTEXT.md` - architectural rules for AI/developers.
-- `AI_ENTRY_POINTS.md` - important code entry points.
-- `MEMORY.md` - durable domain decisions and business rules.
-- `docs/adr/` - architecture decision records.
+## Primary Docs
+- `README.md` — project overview and current API groups.
+- `docs/API_REFERENCE.md` — client-facing API docs and examples.
+- `docs/ENDPOINT_INVENTORY.md` — flat endpoint list (`METHOD PATH — purpose`).
+- `ARCHITECTURE.md` — architecture and invariants.
+- `AI_CONTEXT.md` — rules/context for AI-assisted changes.
+- `AI_ENTRY_POINTS.md` — practical code entry points.
+- `MEMORY.md` — stable product/technical decisions.
 
-## Source map
-- `main.py` - FastAPI app composition and router mounting.
-- `app/api/` - HTTP routes and dependencies.
-- `app/services/` - business logic.
-- `app/repos/` - persistence logic.
-- `app/models/` - ORM entities.
-- `app/schemas/` - request/response schemas.
+## Key Source Paths
+- `main.py` — app composition and router mounting.
+- `app/api/` — route handlers + dependencies.
+- `app/services/` — domain services.
+- `app/repos/` — DB repositories.
+- `app/models/` — ORM models.
+- `app/schemas/` — request/response DTOs.

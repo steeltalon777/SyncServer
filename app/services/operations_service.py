@@ -2,88 +2,93 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException, status
 
-from app.schemas.operation import OperationCreate
+from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
 from app.services.uow import UnitOfWork
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_OPERATION_TYPES: set[OperationType] = {"RECEIVE", "WRITE_OFF", "MOVE"}
+
 
 class OperationsService:
-    """Service for operation business logic.
-
-    Permission checks must be handled in API layer via AccessGuard / AccessService.
-    This service is responsible only for business validation and execution.
-    """
+    """Operation domain service with strict server-side validation."""
 
     @staticmethod
     async def _ensure_sufficient_balance(
         uow: UnitOfWork,
         *,
-        site_id: UUID,
-        item_id: UUID,
+        site_id: int,
+        item_id: int,
         required_qty: Decimal,
         error_message: str,
     ) -> None:
         balance = await uow.balances.get_for_update(site_id=site_id, item_id=item_id)
         current_qty = balance.qty if balance is not None else Decimal("0")
         if current_qty < required_qty:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=error_message)
+
+    @staticmethod
+    async def _validate_operation_type(operation_type: OperationType) -> None:
+        if operation_type not in SUPPORTED_OPERATION_TYPES:
+            supported = ", ".join(sorted(SUPPORTED_OPERATION_TYPES))
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=error_message,
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"unsupported operation_type '{operation_type}', supported: {supported}",
             )
+
+    @staticmethod
+    async def _validate_operation_sites(uow: UnitOfWork, operation_data: OperationCreate) -> None:
+        site = await uow.sites.get_by_id(operation_data.site_id)
+        if not site:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="site not found")
+
+        if operation_data.operation_type == "MOVE":
+            if operation_data.source_site_id is None or operation_data.destination_site_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="MOVE operation requires source_site_id and destination_site_id",
+                )
+            if operation_data.source_site_id == operation_data.destination_site_id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="MOVE source and destination must be different",
+                )
+
+            source = await uow.sites.get_by_id(operation_data.source_site_id)
+            if not source:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source site not found")
+            destination = await uow.sites.get_by_id(operation_data.destination_site_id)
+            if not destination:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="destination site not found")
 
     @staticmethod
     async def create_operation(
         uow: UnitOfWork,
         operation_data: OperationCreate,
-        user_id: int,
-    ) -> dict:
-        """Create a new operation with business validation."""
-        site = await uow.sites.get_by_id(operation_data.site_id)
-        if not site:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Site not found",
-            )
+        user_id: UUID,
+    ) -> dict[str, object]:
+        await OperationsService._validate_operation_type(operation_data.operation_type)
+        await OperationsService._validate_operation_sites(uow, operation_data)
 
         for line in operation_data.lines:
             item = await uow.catalog.get_item_by_id(line.item_id)
             if not item:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Item with ID {line.item_id} not found",
+                    detail=f"item with id {line.item_id} not found",
                 )
 
-            if operation_data.type == "MOVE":
-                if not line.source_site_id or not line.target_site_id:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="MOVE operations require source_site_id and target_site_id",
-                    )
-
-                source_site = await uow.sites.get_by_id(line.source_site_id)
-                if not source_site:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Source site {line.source_site_id} not found",
-                    )
-
-                target_site = await uow.sites.get_by_id(line.target_site_id)
-                if not target_site:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Target site {line.target_site_id} not found",
-                    )
-
-        operation_uuid = uuid4()
         operation = await uow.operations.create_operation(
-            operation_uuid=operation_uuid,
             site_id=operation_data.site_id,
-            type=operation_data.type,
+            operation_type=operation_data.operation_type,
+            source_site_id=operation_data.source_site_id,
+            destination_site_id=operation_data.destination_site_id,
+            issued_to_user_id=operation_data.issued_to_user_id,
+            issued_to_name=operation_data.issued_to_name,
             created_by_user_id=user_id,
             notes=operation_data.notes,
         )
@@ -93,66 +98,110 @@ class OperationsService:
                 operation_id=operation.id,
                 line_number=line_data.line_number,
                 item_id=line_data.item_id,
-                quantity=line_data.quantity,
-                source_site_id=line_data.source_site_id,
-                target_site_id=line_data.target_site_id,
-                notes=line_data.notes,
+                qty=line_data.qty,
+                batch=line_data.batch,
+                comment=line_data.comment,
             )
 
         created_operation = await uow.operations.get_operation_by_id(operation.id)
+        return {"operation": created_operation}
 
-        logger.info(
-            "Created operation %s of type %s by user %s for site %s with %s lines",
-            operation_uuid,
-            operation_data.type,
-            user_id,
-            operation_data.site_id,
-            len(operation_data.lines),
+    @staticmethod
+    async def update_operation(
+        uow: UnitOfWork,
+        operation_id: UUID,
+        update_data: OperationUpdate,
+    ):
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        if not operation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
+        if operation.status != "draft":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"cannot update operation with status {operation.status}",
+            )
+
+        source_site_id = operation.source_site_id
+        destination_site_id = operation.destination_site_id
+        if "source_site_id" in update_data.model_fields_set:
+            source_site_id = update_data.source_site_id
+        if "destination_site_id" in update_data.model_fields_set:
+            destination_site_id = update_data.destination_site_id
+
+        if operation.operation_type == "MOVE":
+            if source_site_id is None or destination_site_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="MOVE operation requires source_site_id and destination_site_id",
+                )
+            if source_site_id == destination_site_id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="MOVE source and destination must be different",
+                )
+
+        updated = await uow.operations.update_operation(
+            operation_id=operation_id,
+            notes=update_data.notes,
+            source_site_id=source_site_id,
+            destination_site_id=destination_site_id,
+            issued_to_user_id=update_data.issued_to_user_id,
+            issued_to_name=update_data.issued_to_name,
+            fields_set=update_data.model_fields_set,
         )
 
-        return {
-            "operation": created_operation,
-            "operation_uuid": operation_uuid,
-        }
+        if update_data.lines is not None:
+            await uow.operations.delete_operation_lines(operation_id)
+            for line in update_data.lines:
+                item = await uow.catalog.get_item_by_id(line.item_id)
+                if not item:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"item with id {line.item_id} not found",
+                    )
+                await uow.operations.create_operation_line(
+                    operation_id=operation_id,
+                    line_number=line.line_number,
+                    item_id=line.item_id,
+                    qty=line.qty,
+                    batch=line.batch,
+                    comment=line.comment,
+                )
+
+        return await uow.operations.get_operation_by_id(updated.id)
 
     @staticmethod
     async def submit_operation(
         uow: UnitOfWork,
-        operation_id: int,
-        user_id: int,
-    ) -> dict:
-        """Submit an operation and update balances atomically inside the current UoW transaction."""
+        operation_id: UUID,
+        user_id: UUID,
+    ) -> dict[str, object]:
         operation = await uow.operations.get_operation_by_id(operation_id)
         if not operation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Operation not found",
-            )
-
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
         if operation.status != "draft":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Operation is already {operation.status}",
+                detail=f"operation is already {operation.status}",
             )
 
         for line in operation.lines:
-            quantity = Decimal(line.quantity)
-
-            if operation.type == "RECEIVE":
+            quantity = Decimal(line.qty)
+            if operation.operation_type == "RECEIVE":
                 await uow.balances.update_balance_quantity(
                     site_id=operation.site_id,
                     item_id=line.item_id,
                     quantity_delta=quantity,
                 )
-            elif operation.type == "WRITE_OFF":
+            elif operation.operation_type == "WRITE_OFF":
                 await OperationsService._ensure_sufficient_balance(
                     uow,
                     site_id=operation.site_id,
                     item_id=line.item_id,
                     required_qty=quantity,
                     error_message=(
-                        f"Insufficient stock for WRITE_OFF: item={line.item_id}, "
-                        f"site={operation.site_id}, required={line.quantity}"
+                        f"insufficient stock for WRITE_OFF: item={line.item_id}, "
+                        f"site={operation.site_id}, required={line.qty}"
                     ),
                 )
                 await uow.balances.update_balance_quantity(
@@ -160,37 +209,30 @@ class OperationsService:
                     item_id=line.item_id,
                     quantity_delta=-quantity,
                 )
-            elif operation.type == "MOVE":
-                if not line.source_site_id or not line.target_site_id:
+            elif operation.operation_type == "MOVE":
+                if operation.source_site_id is None or operation.destination_site_id is None:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="MOVE operation line must have source_site_id and target_site_id",
-                    )
-
-                target_site = await uow.sites.get_by_id(line.target_site_id)
-                if not target_site:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Target site {line.target_site_id} not found",
+                        detail="MOVE operation requires source_site_id and destination_site_id",
                     )
 
                 await OperationsService._ensure_sufficient_balance(
                     uow,
-                    site_id=line.source_site_id,
+                    site_id=operation.source_site_id,
                     item_id=line.item_id,
                     required_qty=quantity,
                     error_message=(
-                        f"Insufficient stock for MOVE: item={line.item_id}, "
-                        f"source_site={line.source_site_id}, required={line.quantity}"
+                        f"insufficient stock for MOVE: item={line.item_id}, "
+                        f"source_site={operation.source_site_id}, required={line.qty}"
                     ),
                 )
                 await uow.balances.update_balance_quantity(
-                    site_id=line.source_site_id,
+                    site_id=operation.source_site_id,
                     item_id=line.item_id,
                     quantity_delta=-quantity,
                 )
                 await uow.balances.update_balance_quantity(
-                    site_id=line.target_site_id,
+                    site_id=operation.destination_site_id,
                     item_id=line.item_id,
                     quantity_delta=quantity,
                 )
@@ -199,60 +241,45 @@ class OperationsService:
             operation_id=operation_id,
             submitted_by_user_id=user_id,
         )
-
-        logger.info(
-            "Submitted operation %s by user %s",
-            operation.operation_uuid,
-            user_id,
-        )
-
         return {"operation": submitted_operation}
 
     @staticmethod
     async def cancel_operation(
         uow: UnitOfWork,
-        operation_id: int,
-        user_id: int,
+        operation_id: UUID,
+        user_id: UUID,
         reason: str | None = None,
-    ) -> dict:
-        """Cancel an operation and reverse balance changes if submitted."""
+    ) -> dict[str, object]:
         operation = await uow.operations.get_operation_by_id(operation_id)
         if not operation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Operation not found",
-            )
-
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
         if operation.status == "cancelled":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Operation is already cancelled",
-            )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="operation is already cancelled")
 
         if operation.status == "submitted":
             for line in operation.lines:
-                quantity = Decimal(line.quantity)
-                if operation.type == "RECEIVE":
+                quantity = Decimal(line.qty)
+                if operation.operation_type == "RECEIVE":
                     await uow.balances.update_balance_quantity(
                         site_id=operation.site_id,
                         item_id=line.item_id,
                         quantity_delta=-quantity,
                     )
-                elif operation.type == "WRITE_OFF":
+                elif operation.operation_type == "WRITE_OFF":
                     await uow.balances.update_balance_quantity(
                         site_id=operation.site_id,
                         item_id=line.item_id,
                         quantity_delta=quantity,
                     )
-                elif operation.type == "MOVE":
-                    if line.source_site_id and line.target_site_id:
+                elif operation.operation_type == "MOVE":
+                    if operation.source_site_id and operation.destination_site_id:
                         await uow.balances.update_balance_quantity(
-                            site_id=line.source_site_id,
+                            site_id=operation.source_site_id,
                             item_id=line.item_id,
                             quantity_delta=quantity,
                         )
                         await uow.balances.update_balance_quantity(
-                            site_id=line.target_site_id,
+                            site_id=operation.destination_site_id,
                             item_id=line.item_id,
                             quantity_delta=-quantity,
                         )
@@ -262,11 +289,5 @@ class OperationsService:
             cancelled_by_user_id=user_id,
         )
 
-        logger.info(
-            "Cancelled operation %s by user %s, reason: %s",
-            operation.operation_uuid,
-            user_id,
-            reason,
-        )
-
+        logger.info("cancelled operation=%s by user=%s reason=%s", operation_id, user_id, reason)
         return {"operation": cancelled_operation}

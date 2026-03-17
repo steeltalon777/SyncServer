@@ -1,42 +1,35 @@
 # ARCHITECTURE
 
-## Layered architecture
+## Layers
+Clients -> FastAPI routes -> Services -> Repositories -> PostgreSQL
 
-Clients
-↓
-SyncServer API (FastAPI routes)
-↓
-Service layer (business rules + orchestration)
-↓
-Repository layer (SQLAlchemy queries only)
-↓
-PostgreSQL
+## Responsibilities
+- API: HTTP contracts, auth, access checks, validation mapping.
+- Services: domain behavior, invariants, workflows.
+- Repositories: persistence and query composition only.
 
-## Layer responsibilities
+## Identity and Access
+- User identity: `X-User-Token`
+- Device identity: `X-Device-Token`
+- Root model: `User.is_root` (global)
+- Scoped model: `UserAccessScope` per site
+  - `can_view`
+  - `can_operate`
+  - `can_manage_catalog`
 
-### API layer
-- Authentication/authorization checks
-- Request parsing and validation
-- Mapping API contracts to service calls
-- HTTP status and response serialization
-
-### Service layer
-- Warehouse business logic
-- Operation workflow and invariants
-- Balance update rules
-- Cross-repository orchestration
-
-### Repository layer
-- ORM query composition and persistence
-- Row locking and data retrieval
-- No business rules
-
-### Models
-- SQLAlchemy ORM entities
-- DB constraints and relationships
-
-## Inventory model
-- Inventory state is operation-driven.
+## Domain Invariants
+- SyncServer is the only source of truth for warehouse state.
+- Clients do not own business logic.
+- Balances are derived from operations.
 - Operation statuses: `draft -> submitted -> cancelled`.
-- Balances are updated only on submit.
-- Cancelling a submitted operation applies reverse deltas.
+- Submitting applies deltas; cancelling submitted operations rolls back.
+
+## Operation Types (current runtime)
+- `RECEIVE`
+- `WRITE_OFF`
+- `MOVE`
+
+## Legacy Notes
+- `UserSiteRole` artifacts are retained only as deprecated compatibility code.
+- Compatibility APIs exist under `/business/*` and legacy POST catalog reads.
+- New integrations should use token-based APIs from `docs/API_REFERENCE.md`.

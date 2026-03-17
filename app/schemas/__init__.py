@@ -11,6 +11,10 @@ from app.schemas.admin import (
     SiteResponse,
     SiteUpdate,
     UserCreate,
+    UserAccessScopeCreate,
+    UserAccessScopeFilter,
+    UserAccessScopeResponse,
+    UserAccessScopeUpdate,
     UserFilter,
     UserListResponse,
     UserResponse,
@@ -21,11 +25,17 @@ from app.schemas.admin import (
     UserSiteAccessUpdate,
     UserUpdate,
 )
-from app.schemas.balance import BalanceFilter, BalanceListResponse, BalanceResponse
+from app.schemas.balance import (
+    BalanceFilter,
+    BalanceListResponse,
+    BalanceResponse,
+    BalanceSummaryResponse,
+)
 from app.schemas.catalog import (
     CatalogCategoriesResponse,
     CatalogItemsResponse,
     CatalogRequest,
+    CatalogSitesResponse,
     CatalogUnitsResponse,
     CategoryTreeNode,
 )
@@ -64,6 +74,7 @@ __all__ = [
     "CatalogItemsResponse",
     "CatalogCategoriesResponse",
     "CatalogUnitsResponse",
+    "CatalogSitesResponse",
     "CategoryTreeNode",
     "OperationCreate",
     "OperationUpdate",
@@ -76,6 +87,7 @@ __all__ = [
     "OperationFilter",
     "BalanceResponse",
     "BalanceListResponse",
+    "BalanceSummaryResponse",
     "BalanceFilter",
     "SiteCreate",
     "SiteUpdate",
@@ -89,6 +101,10 @@ __all__ = [
     "DeviceListResponse",
     "DeviceFilter",
     "UserCreate",
+    "UserAccessScopeCreate",
+    "UserAccessScopeUpdate",
+    "UserAccessScopeResponse",
+    "UserAccessScopeFilter",
     "UserUpdate",
     "UserResponse",
     "UserListResponse",

@@ -1,32 +1,24 @@
 # MEMORY
 
-## Core entities
-- Users
-- Sites
-- UserSiteAccess (user-site roles)
-- Units, Categories, Items
-- Operations, OperationLines
-- Balances (item quantity per site)
+## Stable Decisions
+- SyncServer is the single source of truth.
+- Access model is `User.is_root` + `UserAccessScope`.
+- Primary request auth is token-based (`X-User-Token`, `X-Device-Token`).
 
-## Operation workflow
-- New operations start as `draft`.
-- Only `submitted` operations affect balances.
-- `cancelled` means draft cancellation or submitted rollback.
+## Access Semantics
+- `root`: global access.
+- non-root access is site-scoped and flag-driven:
+  - `can_view`
+  - `can_operate`
+  - `can_manage_catalog`
 
-## Balance rules
-- RECEIVE: `site += qty`
-- WRITE_OFF: `site -= qty` (must have enough stock)
-- MOVE: `source -= qty`, `target += qty` (source stock required)
+## Operations Semantics
+- Supported types: `RECEIVE`, `WRITE_OFF`, `MOVE`.
+- Statuses: `draft`, `submitted`, `cancelled`.
+- Submit mutates balances.
+- Cancel of submitted operation performs rollback.
 
-## API design decisions
-- Layered routing and service orchestration.
-- Paginated list responses use:
-  - `items`
-  - `total_count`
-  - `page`
-  - `page_size`
-- Entity responses return object fields directly.
-
-## Source-of-truth rule
-- Any domain rule change must be implemented in SyncServer services.
-- Clients are integration consumers only.
+## API Posture
+- Primary routes are token-based.
+- Legacy compatibility routes still exist for transitional clients.
+- Endpoint inventory lives in `docs/ENDPOINT_INVENTORY.md`.

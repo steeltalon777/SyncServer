@@ -1,24 +1,28 @@
 # AI_CONTEXT
 
-## SyncServer invariants
-- SyncServer is the single source of truth for warehouse domain data.
-- Clients must not implement business logic.
-- Warehouse state is derived from operations.
+## Product Truth
+- SyncServer is the source of truth for warehouse domain state.
+- Domain rules belong on server side, not in clients.
 
-## Layering rules
-- API layer: validation, request parsing, auth checks, HTTP mapping.
-- Services: business logic and orchestration.
-- Repositories: database access only.
-- Models: ORM mapping and constraints.
+## Current Auth Model
+- Primary user auth: `X-User-Token`.
+- Device auth: `X-Device-Token` (sync/device context).
+- Legacy `Authorization + X-Acting-*` paths are compatibility-only.
 
-## Operations rules
-- Types: `RECEIVE`, `WRITE_OFF`, `MOVE`.
-- Workflow: `draft -> submitted -> cancelled`.
-- Only submission changes balances.
-- Cancelling submitted operations must rollback deltas.
+## Current Access Model
+- Root authority: `User.is_root`.
+- Scoped authority: `UserAccessScope` by site.
+- Scope flags:
+  - `can_view`
+  - `can_operate`
+  - `can_manage_catalog`
 
-## Balance validation
-- WRITE_OFF requires sufficient stock at operation site.
-- MOVE requires sufficient stock at source site.
-- MOVE target site must exist.
-- RECEIVE is always allowed.
+## Domain Rules
+- Supported operation types in runtime: `RECEIVE`, `WRITE_OFF`, `MOVE`.
+- Operation lifecycle: `draft -> submitted -> cancelled`.
+- Submit applies balance deltas.
+- Cancel on submitted operation rolls deltas back.
+
+## Integration Orientation
+- Use `docs/API_REFERENCE.md` for endpoint contracts.
+- Use `docs/ENDPOINT_INVENTORY.md` for full test/wiring list.

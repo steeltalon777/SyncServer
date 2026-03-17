@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from uuid import UUID, uuid4
-
 from fastapi import HTTPException, status
 
 from app.models.category import Category
@@ -23,7 +21,6 @@ class CatalogAdminService:
         await self._ensure_unit_unique(uow, name=payload.name, symbol=payload.symbol)
 
         unit = Unit(
-            id=payload.id or uuid4(),
             name=payload.name,
             symbol=payload.symbol,
             sort_order=payload.sort_order,
@@ -31,7 +28,7 @@ class CatalogAdminService:
         )
         return await uow.catalog.create_unit(unit)
 
-    async def update_unit(self, uow: UnitOfWork, unit_id: UUID, payload: UnitUpdateRequest) -> Unit:
+    async def update_unit(self, uow: UnitOfWork, unit_id: int, payload: UnitUpdateRequest) -> Unit:
         unit = await uow.catalog.get_unit_by_id(unit_id)
         if unit is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unit not found")
@@ -56,10 +53,6 @@ class CatalogAdminService:
         return await uow.catalog.update_unit(unit)
 
     async def create_category(self, uow: UnitOfWork, payload: CategoryCreateRequest) -> Category:
-        category_id = payload.id or uuid4()
-        if payload.parent_id == category_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="category parent_id cannot equal id")
-
         if payload.parent_id is not None:
             parent = await uow.catalog.get_category_by_id(payload.parent_id)
             if parent is None:
@@ -70,7 +63,6 @@ class CatalogAdminService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="category name already exists for parent")
 
         category = Category(
-            id=category_id,
             name=payload.name,
             code=payload.code,
             parent_id=payload.parent_id,
@@ -79,7 +71,7 @@ class CatalogAdminService:
         )
         return await uow.catalog.create_category(category)
 
-    async def update_category(self, uow: UnitOfWork, category_id: UUID, payload: CategoryUpdateRequest) -> Category:
+    async def update_category(self, uow: UnitOfWork, category_id: int, payload: CategoryUpdateRequest) -> Category:
         category = await uow.catalog.get_category_by_id(category_id)
         if category is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
@@ -119,7 +111,6 @@ class CatalogAdminService:
         await self._ensure_item_sku_unique(uow, payload.sku)
 
         item = Item(
-            id=payload.id or uuid4(),
             sku=payload.sku,
             name=payload.name,
             category_id=payload.category_id,
@@ -129,7 +120,7 @@ class CatalogAdminService:
         )
         return await uow.catalog.create_item(item)
 
-    async def update_item(self, uow: UnitOfWork, item_id: UUID, payload: ItemUpdateRequest) -> Item:
+    async def update_item(self, uow: UnitOfWork, item_id: int, payload: ItemUpdateRequest) -> Item:
         item = await uow.catalog.get_item_by_id(item_id)
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
@@ -163,12 +154,12 @@ class CatalogAdminService:
         if await uow.catalog.get_unit_by_symbol(symbol):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="unit symbol already exists")
 
-    async def _validate_no_category_cycle(self, uow: UnitOfWork, category_id: UUID, new_parent_id: UUID) -> None:
+    async def _validate_no_category_cycle(self, uow: UnitOfWork, category_id: int, new_parent_id: int) -> None:
         ancestors = await uow.catalog.list_category_ancestors(new_parent_id)
         if category_id in ancestors:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="category cycle detected")
 
-    async def _validate_item_relations(self, uow: UnitOfWork, category_id: UUID, unit_id: UUID) -> None:
+    async def _validate_item_relations(self, uow: UnitOfWork, category_id: int, unit_id: int) -> None:
         if await uow.catalog.get_category_by_id(category_id) is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
         if await uow.catalog.get_unit_by_id(unit_id) is None:
