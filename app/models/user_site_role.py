@@ -1,4 +1,12 @@
-﻿from __future__ import annotations
+﻿# app/models/user_site_role.py
+# DEPRECATED: This model is legacy and will be removed in future versions.
+# DO NOT USE IN NEW CODE.
+# TYPE MISMATCH WITH NEW MODEL:
+#   - user_id is INTEGER (BigInteger) but new User.id is UUID
+#   - site_id is UUID but new Site.id is INTEGER
+# Use UserAccessScope for per-site permissions instead.
+
+from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID

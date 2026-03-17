@@ -32,10 +32,14 @@ class Site(Base):
         onupdate=func.now(),
     )
 
-    # relationships
+    # Relationships
     devices = relationship("Device", back_populates="site")
     operations = relationship("Operation", back_populates="site")
-    # возможно, другие связи
+    access_scopes: Mapped[list["UserAccessScope"]] = relationship(
+        "UserAccessScope",
+        back_populates="site",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ux_sites_code", "code", unique=True),

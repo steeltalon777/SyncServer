@@ -1,7 +1,8 @@
-# scripts/bootstrap_root.py
 import asyncio
 import uuid
+
 from sqlalchemy import select
+
 from app.core.db import SessionFactory, engine
 from app.models import Base
 from app.models.user import User
@@ -13,15 +14,19 @@ ROOT_FULL_NAME = "System Root"
 DJANGO_DEVICE_CODE = "DJANGO_WEB"
 DJANGO_DEVICE_NAME = "Django Web Client"
 
-async def bootstrap():
-    print("Creating tables...")
+
+async def bootstrap() -> None:
+    print("Creating database tables...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     async with SessionFactory() as session:
         # ---- Root user ----
-        result = await session.execute(select(User).where(User.username == ROOT_USERNAME))
+        result = await session.execute(
+            select(User).where(User.username == ROOT_USERNAME)
+        )
         root_user = result.scalar_one_or_none()
+
         if root_user is None:
             print("Creating root user...")
             root_user = User(
@@ -32,57 +37,64 @@ async def bootstrap():
                 user_token=uuid.uuid4(),
                 is_active=True,
                 is_root=True,
-                role='root',
+                role="root",
                 default_site_id=None,
             )
             session.add(root_user)
+            await session.flush()
         else:
             print("Root user already exists. Updating if needed...")
             root_user.email = ROOT_EMAIL
             root_user.full_name = ROOT_FULL_NAME
             root_user.is_active = True
             root_user.is_root = True
-            root_user.role = 'root'
+            root_user.role = "root"
             if root_user.user_token is None:
                 root_user.user_token = uuid.uuid4()
-        await session.flush()
+            await session.flush()
 
         # ---- Django device ----
-        result = await session.execute(select(Device).where(Device.device_code == DJANGO_DEVICE_CODE))
-        device = result.scalar_one_or_none()
-        if device is None:
+        result = await session.execute(
+            select(Device).where(Device.device_code == DJANGO_DEVICE_CODE)
+        )
+        django_device = result.scalar_one_or_none()
+
+        if django_device is None:
             print("Creating Django device...")
-            device = Device(
+            django_device = Device(
                 device_code=DJANGO_DEVICE_CODE,
                 device_name=DJANGO_DEVICE_NAME,
                 device_token=uuid.uuid4(),
                 site_id=None,
                 is_active=True,
             )
-            session.add(device)
+            session.add(django_device)
+            await session.flush()
         else:
             print("Django device already exists. Updating...")
-            device.device_name = DJANGO_DEVICE_NAME
-            device.is_active = True
-            if device.device_token is None:
-                device.device_token = uuid.uuid4()
-        await session.flush()
+            django_device.device_name = DJANGO_DEVICE_NAME
+            django_device.is_active = True
+            if django_device.device_token is None:
+                django_device.device_token = uuid.uuid4()
+            await session.flush()
 
         await session.commit()
 
-        print("\n" + "="*60)
+        # ---- Output ----
+        print("\n" + "=" * 60)
         print("BOOTSTRAP COMPLETE")
-        print("="*60)
+        print("=" * 60)
         print("Root user:")
         print(f"  id:       {root_user.id}")
         print(f"  username: {root_user.username}")
         print(f"  token:    {root_user.user_token}")
         print()
         print("Django device:")
-        print(f"  id:       {device.id}")
-        print(f"  code:     {device.device_code}")
-        print(f"  token:    {device.device_token}")
-        print("="*60)
+        print(f"  id:       {django_device.id}")
+        print(f"  code:     {django_device.device_code}")
+        print(f"  token:    {django_device.device_token}")
+        print("=" * 60)
+
 
 if __name__ == "__main__":
     asyncio.run(bootstrap())
