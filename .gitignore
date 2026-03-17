@@ -43,6 +43,7 @@ dist/
 build/
 *.egg-info/
 .env
+repo_map.txt
 
 # Docker
 *.pid

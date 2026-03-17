@@ -17,6 +17,8 @@ from app.api.routes_operations import router as operations_router
 from app.api.routes_sync import router as sync_router
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.api.routes_auth import router as auth_router
+
 
 settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
@@ -107,3 +109,5 @@ app.include_router(admin_router, prefix=api_v1_prefix)
 
 # Health endpoints
 app.include_router(health_router, prefix=api_v1_prefix)
+
+app.include_router(auth_router, prefix=api_v1_prefix)
