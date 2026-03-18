@@ -33,7 +33,6 @@ class Operation(Base):
     operation_type: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
 
-    # Поля для MOVE (и других операций со складами)
     source_site_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("sites.id"),
@@ -45,7 +44,6 @@ class Operation(Base):
         nullable=True,
     )
 
-    # Поля для ISSUE / ISSUE_RETURN
     issued_to_user_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("users.id"),
@@ -53,7 +51,6 @@ class Operation(Base):
     )
     issued_to_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    # Аудит
     created_by_user_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("users.id"),
@@ -87,7 +84,22 @@ class Operation(Base):
         back_populates="operation",
         cascade="all, delete-orphan",
     )
-    site = relationship("Site", back_populates="operations")
+
+    site = relationship(
+        "Site",
+        back_populates="operations",
+        foreign_keys=[site_id],
+    )
+    source_site = relationship(
+        "Site",
+        back_populates="source_operations",
+        foreign_keys=[source_site_id],
+    )
+    destination_site = relationship(
+        "Site",
+        back_populates="destination_operations",
+        foreign_keys=[destination_site_id],
+    )
 
     __table_args__ = (
         CheckConstraint(

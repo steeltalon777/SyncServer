@@ -32,9 +32,26 @@ class Site(Base):
         onupdate=func.now(),
     )
 
-    # Relationships
     devices = relationship("Device", back_populates="site")
-    operations = relationship("Operation", back_populates="site")
+
+    operations = relationship(
+        "Operation",
+        back_populates="site",
+        foreign_keys="Operation.site_id",
+    )
+
+    source_operations = relationship(
+        "Operation",
+        back_populates="source_site",
+        foreign_keys="Operation.source_site_id",
+    )
+
+    destination_operations = relationship(
+        "Operation",
+        back_populates="destination_site",
+        foreign_keys="Operation.destination_site_id",
+    )
+
     access_scopes: Mapped[list["UserAccessScope"]] = relationship(
         "UserAccessScope",
         back_populates="site",

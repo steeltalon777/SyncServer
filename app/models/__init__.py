@@ -9,7 +9,7 @@ from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user import User
 from app.models.user_access_scope import UserAccessScope
-from app.models.user_site_role import UserSiteRole  # legacy, will be removed
+
 
 __all__ = [
     "Base",
@@ -24,5 +24,4 @@ __all__ = [
     "OperationLine",
     "User",
     "UserAccessScope",
-    "UserSiteRole",  # legacy
 ]
