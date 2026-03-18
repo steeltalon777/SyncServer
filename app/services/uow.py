@@ -27,23 +27,10 @@ class UnitOfWork:
         self.operations = OperationsRepo(session)
         self.users = UsersRepo(session)
 
-        self._own_transaction = False
-
     async def __aenter__(self) -> "UnitOfWork":
-
-        if not self.session.in_transaction():
-            await self.session.begin()
-            self._own_transaction = True
-        else:
-            self._own_transaction = False
-
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
-
-        if not self._own_transaction:
-            return
-
         if exc_type is None:
             await self.session.commit()
         else:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -94,6 +95,7 @@ class OperationsRepo:
             operation.submitted_by_user_id = submitted_by_user_id
             operation.submitted_at = submitted_at or datetime.now(UTC)
             await self.session.flush()
+        return await self.get_operation_by_id(operation_id)
         return operation
 
     async def cancel_operation(
@@ -108,6 +110,7 @@ class OperationsRepo:
             operation.cancelled_by_user_id = cancelled_by_user_id
             operation.cancelled_at = cancelled_at or datetime.now(UTC)
             await self.session.flush()
+        return await self.get_operation_by_id(operation_id)
         return operation
 
     async def list_operations(
@@ -132,7 +135,9 @@ class OperationsRepo:
         if filter.status is not None:
             where_clauses.append(Operation.status == filter.status)
         if filter.created_by_user_id is not None:
-            where_clauses.append(Operation.created_by_user_id == filter.created_by_user_id)
+            where_clauses.append(
+                Operation.created_by_user_id == filter.created_by_user_id
+            )
         if filter.created_after is not None:
             where_clauses.append(Operation.created_at >= filter.created_after)
         if filter.created_before is not None:
@@ -146,10 +151,16 @@ class OperationsRepo:
             where_clauses.append(or_(Operation.notes.ilike(term)))
 
         stmt = stmt.where(and_(*where_clauses))
-        count_stmt = select(func.count()).select_from(Operation).where(and_(*where_clauses))
+        count_stmt = (
+            select(func.count()).select_from(Operation).where(and_(*where_clauses))
+        )
 
         total_count = (await self.session.execute(count_stmt)).scalar_one()
-        stmt = stmt.order_by(desc(Operation.created_at)).offset((page - 1) * page_size).limit(page_size)
+        stmt = (
+            stmt.order_by(desc(Operation.created_at))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
 
         operations = list((await self.session.execute(stmt)).scalars().all())
         return operations, total_count
@@ -159,7 +170,7 @@ class OperationsRepo:
         operation_id: UUID,
         line_number: int,
         item_id: int,
-        qty: int,
+        qty: Decimal | int,
         batch: str | None = None,
         comment: str | None = None,
     ) -> OperationLine:
