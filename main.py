@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import SyncServerException
 from app.api.routes_admin import router as admin_router
+from app.api.routes_auth import router as auth_router
 from app.api.routes_balances import router as balances_router
 from app.api.routes_business import router as business_router
 from app.api.routes_catalog import router as catalog_router
@@ -17,8 +18,6 @@ from app.api.routes_operations import router as operations_router
 from app.api.routes_sync import router as sync_router
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.api.routes_auth import router as auth_router
-
 
 settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
@@ -30,8 +29,8 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
-
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
