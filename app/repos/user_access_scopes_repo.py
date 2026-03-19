@@ -32,6 +32,19 @@ class UserAccessScopesRepo:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_any_by_user_and_site(
+        self,
+        user_id: UUID,
+        site_id: int,
+    ) -> UserAccessScope | None:
+        stmt = (
+            select(UserAccessScope)
+            .where(UserAccessScope.user_id == user_id)
+            .where(UserAccessScope.site_id == site_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def list_user_scopes(self, user_id: UUID) -> Sequence[UserAccessScope]:
         """Get all active access scopes for a user."""
         stmt = (
@@ -233,23 +246,31 @@ class UserAccessScopesRepo:
         Returns:
             List of created/updated scopes
         """
-        # Deactivate all existing scopes for this user
-        existing_scopes = await self.list_user_scopes(user_id)
+        existing_scopes = list(await self.list_all_scopes(user_id=user_id, limit=10000, offset=0))
+        existing_by_site = {scope.site_id: scope for scope in existing_scopes}
+        requested_site_ids = {scope_def["site_id"] for scope_def in scopes}
+
         for scope in existing_scopes:
-            scope.is_active = False
-        
-        # Create new scopes
+            if scope.site_id not in requested_site_ids:
+                scope.is_active = False
+
         new_scopes = []
         for scope_def in scopes:
-            scope = await self.create_scope(
-                user_id=user_id,
-                site_id=scope_def["site_id"],
-                can_view=scope_def.get("can_view", True),
-                can_operate=scope_def.get("can_operate", False),
-                can_manage_catalog=scope_def.get("can_manage_catalog", False),
-                is_active=True,
-            )
+            scope = existing_by_site.get(scope_def["site_id"])
+            if scope is None:
+                scope = UserAccessScope(
+                    user_id=user_id,
+                    site_id=scope_def["site_id"],
+                )
+                self.session.add(scope)
+
+            scope.can_view = scope_def.get("can_view", True)
+            scope.can_operate = scope_def.get("can_operate", False)
+            scope.can_manage_catalog = scope_def.get("can_manage_catalog", False)
+            scope.is_active = True
             new_scopes.append(scope)
-        
+
         await self.session.flush()
+        for scope in new_scopes:
+            await self.session.refresh(scope)
         return new_scopes

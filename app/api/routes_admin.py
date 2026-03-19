@@ -23,12 +23,16 @@ from app.schemas.admin import (
     SiteResponse,
     SiteUpdate,
     UserAccessScopeCreate,
+    UserAccessScopeReplaceRequest,
     UserAccessScopeResponse,
     UserAccessScopeUpdate,
     UserCreate,
     UserListResponse,
     UserResponse,
+    UserSyncStateResponse,
+    UserTokenResponse,
     UserUpdate,
+    UserWithTokenResponse,
 )
 from app.services.uow import UnitOfWork
 
@@ -85,6 +89,39 @@ def _paginate(items: list, page: int, page_size: int) -> tuple[list, int]:
     start = (page - 1) * page_size
     end = start + page_size
     return items[start:end], total
+
+
+async def _validate_default_site(uow: UnitOfWork, default_site_id: int | None) -> None:
+    if default_site_id is None:
+        return
+
+    site = await uow.sites.get_by_id(default_site_id)
+    if site is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="default site not found")
+
+
+def _require_non_root_target(user: User, *, detail: str) -> None:
+    if user.is_root:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=detail,
+        )
+
+
+def _user_with_token_payload(user: User) -> UserWithTokenResponse:
+    return UserWithTokenResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        is_root=user.is_root,
+        role=user.role,
+        default_site_id=user.default_site_id,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        user_token=user.user_token,
+    )
 
 
 @router.get("/roles", response_model=list[str])
@@ -261,6 +298,14 @@ async def create_user(
         current_user = await _resolve_current_user(uow, x_user_token)
         _require_root(current_user)
 
+        if payload.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="admin api cannot create root users",
+            )
+
+        await _validate_default_site(uow, payload.default_site_id)
+
         if payload.id is not None:
             exists_by_id = await uow.users.get_by_id(payload.id)
             if exists_by_id:
@@ -301,10 +346,21 @@ async def update_user(
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
 
+        _require_non_root_target(user, detail="admin api cannot update root users")
+
         if payload.username is not None and payload.username != user.username:
             exists_by_username = await uow.users.get_by_username(payload.username)
             if exists_by_username and exists_by_username.id != user.id:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="username already exists")
+
+        if payload.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="admin api cannot update root users",
+            )
+
+        default_site_id = payload.default_site_id if "default_site_id" in payload.model_fields_set else user.default_site_id
+        await _validate_default_site(uow, default_site_id)
 
         if payload.username is not None:
             user.username = payload.username
@@ -352,6 +408,99 @@ async def delete_user(
     return UserResponse.model_validate(user)
 
 
+@router.get("/users/{user_id}/sync-state", response_model=UserSyncStateResponse)
+async def get_user_sync_state(
+    user_id: UUID,
+    uow: UnitOfWork = Depends(get_uow),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> UserSyncStateResponse:
+    async with uow:
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
+
+        user = await uow.users.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+
+        scopes = await uow.user_access_scopes.list_user_scopes(user.id)
+
+    return UserSyncStateResponse(
+        user=_user_with_token_payload(user),
+        scopes=[UserAccessScopeResponse.model_validate(scope) for scope in scopes],
+    )
+
+
+@router.put("/users/{user_id}/scopes", response_model=list[UserAccessScopeResponse])
+async def replace_user_scopes(
+    user_id: UUID,
+    payload: UserAccessScopeReplaceRequest,
+    uow: UnitOfWork = Depends(get_uow),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> list[UserAccessScopeResponse]:
+    async with uow:
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
+
+        user = await uow.users.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+        _require_non_root_target(user, detail="cannot replace scopes for root users")
+
+        seen_site_ids: set[int] = set()
+        scopes_payload = []
+        for scope in payload.scopes:
+            if scope.site_id in seen_site_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="duplicate site_id in scopes payload",
+                )
+            seen_site_ids.add(scope.site_id)
+
+            site = await uow.sites.get_by_id(scope.site_id)
+            if not site:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="site not found")
+
+            scopes_payload.append(
+                {
+                    "site_id": scope.site_id,
+                    "can_view": scope.can_view,
+                    "can_operate": scope.can_operate,
+                    "can_manage_catalog": scope.can_manage_catalog,
+                }
+            )
+
+        scopes = await uow.user_access_scopes.replace_user_scopes(user.id, scopes_payload)
+
+    return [UserAccessScopeResponse.model_validate(scope) for scope in scopes]
+
+
+@router.post("/users/{user_id}/rotate-token", response_model=UserTokenResponse)
+async def rotate_user_token(
+    user_id: UUID,
+    uow: UnitOfWork = Depends(get_uow),
+    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+) -> UserTokenResponse:
+    async with uow:
+        current_user = await _resolve_current_user(uow, x_user_token)
+        _require_root(current_user)
+
+        user = await uow.users.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+        _require_non_root_target(user, detail="root token rotation is not allowed via API")
+
+        user.user_token = uuid4()
+        await uow.session.flush()
+        await uow.session.refresh(user)
+
+        return UserTokenResponse(
+            user_id=user.id,
+            username=user.username,
+            user_token=user.user_token,
+            generated_at=datetime.now(UTC),
+        )
+
+
 # ------------------------
 # Access scopes (root only)
 # ------------------------
@@ -397,21 +546,24 @@ async def create_access_scope(
         if not site:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="site not found")
 
-        existing = await uow.user_access_scopes.get_by_user_and_site(payload.user_id, payload.site_id)
+        existing = await uow.user_access_scopes.get_any_by_user_and_site(payload.user_id, payload.site_id)
         if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="access scope already exists for user/site",
+            existing.can_view = payload.can_view
+            existing.can_operate = payload.can_operate
+            existing.can_manage_catalog = payload.can_manage_catalog
+            existing.is_active = payload.is_active
+            await uow.session.flush()
+            await uow.session.refresh(existing)
+            scope = existing
+        else:
+            scope = await uow.user_access_scopes.create_scope(
+                user_id=payload.user_id,
+                site_id=payload.site_id,
+                can_view=payload.can_view,
+                can_operate=payload.can_operate,
+                can_manage_catalog=payload.can_manage_catalog,
+                is_active=payload.is_active,
             )
-
-        scope = await uow.user_access_scopes.create_scope(
-            user_id=payload.user_id,
-            site_id=payload.site_id,
-            can_view=payload.can_view,
-            can_operate=payload.can_operate,
-            can_manage_catalog=payload.can_manage_catalog,
-            is_active=payload.is_active,
-        )
     return UserAccessScopeResponse.model_validate(scope)
 
 

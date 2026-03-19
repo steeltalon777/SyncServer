@@ -77,6 +77,24 @@ def _user_payload(user: User) -> dict:
     }
 
 
+def _user_sync_payload(user: User) -> dict:
+    payload = _user_payload(user)
+    payload["user_token"] = str(user.user_token)
+    return payload
+
+
+async def _validate_default_site(uow: UnitOfWork, default_site_id: int | None) -> None:
+    if default_site_id is None:
+        return
+
+    site = await uow.sites.get_by_id(default_site_id)
+    if site is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="default site not found",
+        )
+
+
 @router.post("/sync-user")
 async def sync_user(
     payload: UserCreate,
@@ -98,6 +116,14 @@ async def sync_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="root permissions required for sync-user",
             )
+
+        if payload.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="sync-user cannot create or update root users",
+            )
+
+        await _validate_default_site(uow, payload.default_site_id)
 
         target_user = None
         if payload.id is not None:
@@ -129,6 +155,11 @@ async def sync_user(
             await uow.session.refresh(target_user)
             status_value = "created"
         else:
+            if target_user.is_root:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="sync-user cannot create or update root users",
+                )
             target_user.username = payload.username
             target_user.email = payload.email
             target_user.full_name = payload.full_name
@@ -142,7 +173,7 @@ async def sync_user(
 
     return {
         "status": status_value,
-        "user": _user_payload(target_user),
+        "user": _user_sync_payload(target_user),
         "synced_by": {
             "id": str(current_user.id),
             "username": current_user.username,

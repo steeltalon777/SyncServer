@@ -49,9 +49,12 @@ Roles:
 Users (root only):
 - `GET /admin/users`
 - `GET /admin/users/{user_id}`
+- `GET /admin/users/{user_id}/sync-state`
 - `POST /admin/users`
 - `PATCH /admin/users/{user_id}`
 - `DELETE /admin/users/{user_id}`
+- `PUT /admin/users/{user_id}/scopes`
+- `POST /admin/users/{user_id}/rotate-token`
 
 Sites:
 - `GET /admin/sites`
@@ -145,6 +148,61 @@ These are compatibility endpoints and should not be used for new clients.
 Headers:
 - `X-User-Token: {{user_token}}`
 - `X-Device-Token: {{device_token}}` (optional)
+
+### 1.1) Sync user from Django admin
+`POST /api/v1/auth/sync-user`
+Headers:
+- `X-User-Token: {{root_user_token}}`
+- `Content-Type: application/json`
+Body:
+```json
+{
+  "id": "6b8d9d4d-8b74-4c77-9f0a-5d6b6d3f2b11",
+  "username": "ivanov",
+  "email": "ivanov@example.com",
+  "full_name": "Иван Иванов",
+  "is_active": true,
+  "is_root": false,
+  "role": "storekeeper",
+  "default_site_id": 1
+}
+```
+Notes:
+- root-only
+- root users cannot be created or updated through this endpoint
+- existing non-root users keep their current `user_token`
+
+### 1.2) Replace user scopes
+`PUT /api/v1/admin/users/{user_id}/scopes`
+Headers:
+- `X-User-Token: {{root_user_token}}`
+- `Content-Type: application/json`
+Body:
+```json
+{
+  "scopes": [
+    {
+      "site_id": 1,
+      "can_view": true,
+      "can_operate": true,
+      "can_manage_catalog": false
+    }
+  ]
+}
+```
+
+### 1.3) Read sync state
+`GET /api/v1/admin/users/{user_id}/sync-state`
+Headers:
+- `X-User-Token: {{root_user_token}}`
+
+### 1.4) Rotate non-root user token
+`POST /api/v1/admin/users/{user_id}/rotate-token`
+Headers:
+- `X-User-Token: {{root_user_token}}`
+Notes:
+- root-only
+- root token rotation is not allowed via API
 
 ### 2) Create operation
 `POST /api/v1/operations`

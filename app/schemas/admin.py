@@ -86,6 +86,15 @@ class DeviceTokenResponse(BaseModel):
     generated_at: datetime
 
 
+class UserTokenResponse(BaseModel):
+    """Token output schema for explicit user token read/rotation endpoints."""
+
+    user_id: UUID
+    username: str
+    user_token: UUID
+    generated_at: datetime
+
+
 # User schemas (new model)
 class UserCreate(BaseModel):
     id: UUID | None = None
@@ -121,6 +130,10 @@ class UserResponse(ORMBaseModel):
     updated_at: datetime
 
 
+class UserWithTokenResponse(UserResponse):
+    user_token: UUID
+
+
 # User access scope schemas (new model)
 class UserAccessScopeCreate(BaseModel):
     user_id: UUID
@@ -148,6 +161,22 @@ class UserAccessScopeResponse(ORMBaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class UserAccessScopeReplaceItem(BaseModel):
+    site_id: int
+    can_view: bool = True
+    can_operate: bool = False
+    can_manage_catalog: bool = False
+
+
+class UserAccessScopeReplaceRequest(BaseModel):
+    scopes: list[UserAccessScopeReplaceItem]
+
+
+class UserSyncStateResponse(BaseModel):
+    user: UserWithTokenResponse
+    scopes: list[UserAccessScopeResponse]
 
 
 # Legacy names kept for route compatibility during migration
