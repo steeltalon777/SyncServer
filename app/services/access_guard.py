@@ -98,7 +98,7 @@ class AccessGuard:
 
         Rules:
         - root -> full access
-        - chief_storekeeper -> allowed when can_manage_catalog=true
+        - chief_storekeeper -> global business access
         - storekeeper -> denied
         - observer -> denied
         """

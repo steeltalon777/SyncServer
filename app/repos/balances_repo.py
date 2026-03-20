@@ -1,10 +1,14 @@
 ﻿from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.balance import Balance
+from app.models.category import Category
+from app.models.item import Item
+from app.models.site import Site
+from app.models.unit import Unit
 
 
 class BalancesRepo:
@@ -53,14 +57,48 @@ class BalancesRepo:
         user_site_ids: list[int],
         page: int,
         page_size: int,
-    ) -> tuple[list[Balance], int]:
-        stmt = select(Balance).where(Balance.site_id.in_(user_site_ids))
+    ) -> tuple[list[dict], int]:
+        stmt = (
+            select(
+                Balance.site_id.label("site_id"),
+                Site.name.label("site_name"),
+                Balance.item_id.label("item_id"),
+                Item.name.label("item_name"),
+                Item.sku.label("sku"),
+                Item.unit_id.label("unit_id"),
+                Unit.symbol.label("unit_symbol"),
+                Item.category_id.label("category_id"),
+                Category.name.label("category_name"),
+                Balance.qty.label("qty"),
+                Balance.updated_at.label("updated_at"),
+            )
+            .select_from(Balance)
+            .join(Site, Site.id == Balance.site_id)
+            .join(Item, Item.id == Balance.item_id)
+            .join(Category, Category.id == Item.category_id)
+            .join(Unit, Unit.id == Item.unit_id)
+            .where(Balance.site_id.in_(user_site_ids))
+        )
 
         if filter.site_id is not None:
             stmt = stmt.where(Balance.site_id == filter.site_id)
 
         if filter.item_id is not None:
             stmt = stmt.where(Balance.item_id == filter.item_id)
+
+        if filter.category_id is not None:
+            stmt = stmt.where(Item.category_id == filter.category_id)
+
+        if filter.search:
+            term = f"%{filter.search.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    Item.name.ilike(term),
+                    Item.sku.ilike(term),
+                    Category.name.ilike(term),
+                    Site.name.ilike(term),
+                )
+            )
 
         if filter.only_positive:
             stmt = stmt.where(Balance.qty > 0)
@@ -69,13 +107,13 @@ class BalancesRepo:
         total_count = (await self.session.execute(count_stmt)).scalar_one()
 
         stmt = (
-            stmt.order_by(Balance.updated_at.desc(), Balance.site_id, Balance.item_id)
+            stmt.order_by(Balance.updated_at.desc(), Site.name, Item.name, Balance.item_id)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
 
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all()), total_count
+        rows = (await self.session.execute(stmt)).all()
+        return [dict(row._mapping) for row in rows], int(total_count)
 
     async def get_balances_summary(self, user_site_ids: list[int]) -> dict:
         stmt = select(

@@ -9,10 +9,17 @@ from app.schemas.common import ORMBaseModel
 
 
 class BalanceResponse(ORMBaseModel):
-    """Balance schema aligned to new model."""
+    """UI-ready balance row."""
 
     site_id: int
+    site_name: str
     item_id: int
+    item_name: str
+    sku: str | None = None
+    unit_id: int
+    unit_symbol: str
+    category_id: int
+    category_name: str
     qty: Decimal = Field(validation_alias=AliasChoices("qty", "quantity"))
     updated_at: datetime
 

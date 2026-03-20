@@ -44,7 +44,7 @@ Application-specific handlers may return:
 ## Admin API
 Roles:
 - root: full admin
-- chief_storekeeper: sites/devices/roles list (no users/access scopes)
+- chief_storekeeper: global business supervisor across all sites (no users/access scopes CRUD)
 
 Users (root only):
 - `GET /admin/users`
@@ -124,13 +124,14 @@ Endpoints:
 Rules:
 - submit updates balances
 - cancel rolls back submitted deltas
+- rollback is blocked if reversing a submitted operation would make a balance invalid (for example, negative stock on the affected site)
 - server validates site access and MOVE source/destination
 - `ADJUSTMENT` uses signed `qty`: positive adds stock, negative subtracts stock
 - `ISSUE` and `ISSUE_RETURN` are accepted by the API, but submit/rollback is currently a placeholder and returns `501`
 - `storekeeper` may create operations on allowed sites, but submit is reserved for `chief_storekeeper` and `root`
 - `storekeeper` may update only own draft operations
 - `storekeeper` may cancel only own draft operations
-- `chief_storekeeper` has global operational access across all sites and may submit/cancel operations created by other users
+- `chief_storekeeper` is a global business supervisor and may work with operations across all sites
 
 ## Balances API (read-only)
 - `GET /balances`
@@ -139,7 +140,15 @@ Rules:
 
 Access:
 - root: all sites
-- non-root: only active `UserAccessScope` with `can_view=true`
+- chief_storekeeper: all sites as global business supervisor
+- storekeeper/observer: only active `UserAccessScope` with `can_view=true`
+
+`GET /balances` list rows are UI-ready and include:
+- `site_id`, `site_name`
+- `item_id`, `item_name`, `sku`
+- `unit_id`, `unit_symbol`
+- `category_id`, `category_name`
+- `qty`, `updated_at`
 
 ## Sync API (device)
 - `POST /ping`

@@ -28,15 +28,10 @@ logger = logging.getLogger(__name__)
 
 READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
-GLOBAL_OPERATIONS_ROLES = {"chief_storekeeper"}
-
-
-def _is_global_operations_manager(identity: Identity) -> bool:
-    return identity.is_root or identity.role in GLOBAL_OPERATIONS_ROLES
 
 
 def _require_read_site(identity: Identity, site_id: int) -> None:
-    if _is_global_operations_manager(identity):
+    if identity.has_global_business_access:
         return
     if identity.role not in READ_ROLES:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read operations permission required")
@@ -45,7 +40,7 @@ def _require_read_site(identity: Identity, site_id: int) -> None:
 
 
 def _require_operate_site(identity: Identity, site_id: int) -> None:
-    if _is_global_operations_manager(identity):
+    if identity.has_global_business_access:
         return
     if identity.role not in WRITE_ROLES:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="operate permission required")
@@ -64,7 +59,7 @@ def _validate_move_access(identity: Identity, source_site_id: int | None, destin
 
 
 def _require_operation_owner_or_supervisor(identity: Identity, operation) -> None:
-    if _is_global_operations_manager(identity):
+    if identity.has_global_business_access:
         return
     if operation.created_by_user_id != identity.user_id:
         raise HTTPException(
@@ -74,7 +69,7 @@ def _require_operation_owner_or_supervisor(identity: Identity, operation) -> Non
 
 
 def _require_operation_submit_permission(identity: Identity) -> None:
-    if _is_global_operations_manager(identity):
+    if identity.has_global_business_access:
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -83,7 +78,7 @@ def _require_operation_submit_permission(identity: Identity) -> None:
 
 
 def _require_operation_cancel_permission(identity: Identity, operation) -> None:
-    if _is_global_operations_manager(identity):
+    if identity.has_global_business_access:
         return
     if operation.status == "draft" and operation.created_by_user_id == identity.user_id:
         return
@@ -94,7 +89,7 @@ def _require_operation_cancel_permission(identity: Identity, operation) -> None:
 
 
 async def _resolve_readable_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if _is_global_operations_manager(identity):
+    if identity.has_global_business_access:
         sites, _ = await uow.sites.list_sites(
             filter=SiteFilter(is_active=None),
             user_site_ids=None,

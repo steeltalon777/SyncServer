@@ -46,7 +46,7 @@ Used by:
 - `X-Device-Id: <device_id>`
   - optional on `/auth/me`, `/auth/context`, `/auth/sync-user`
 - `X-Site-Id: <site_id>`
-  - required for `chief_storekeeper` on `/catalog/admin/*`
+  - required for `chief_storekeeper` on `/catalog/admin/*` as action context
 - `Authorization: Bearer <service_token>`
   - legacy compatibility only, used by `/business/*`
 - `X-Acting-User-Id`
@@ -121,7 +121,8 @@ Notes:
 
 Notes:
 - `site_id` on catalog read is currently an access-context check, not a true data partition for items/categories/units.
-- `root`, `chief_storekeeper`, `storekeeper`, `observer` can read if access rules pass.
+- `root` and `chief_storekeeper` have global business read access across all sites.
+- `storekeeper` and `observer` read only within assigned scopes.
 - `/catalog/read/*` is the new browse/read-model layer for UI/Django usage.
 - `/catalog/items|categories|units` remain the sync-style incremental feed and are not replaced by `/catalog/read/*`.
 - `include` on `/catalog/read/categories` and `/catalog/read/categories/{category_id}/children` supports `parent`, `parent_chain_summary`, `items_preview`; default is all three.
@@ -141,7 +142,7 @@ Notes:
 
 Notes:
 - `root` may call these without `X-Site-Id`.
-- `chief_storekeeper` must send `X-Site-Id` and have `can_manage_catalog=true` on that site.
+- `chief_storekeeper` must send `X-Site-Id` as action context and has global business catalog access.
 - `storekeeper` and `observer` cannot mutate catalog.
 - `POST /api/v1/catalog/admin/items`: missing or `null` `category_id` resolves to the system category `__UNCATEGORIZED__` (`"Без категории"`).
 - `POST /api/v1/catalog/admin/items`: unknown or inactive `category_id` also resolves to `__UNCATEGORIZED__`.
@@ -166,11 +167,12 @@ Notes:
 - Supported operation types: `RECEIVE`, `EXPENSE`, `WRITE_OFF`, `MOVE`, `ADJUSTMENT`, `ISSUE`, `ISSUE_RETURN`
 - `ADJUSTMENT` accepts signed `qty`; other operation types require positive `qty`
 - `ISSUE` and `ISSUE_RETURN` are accepted by the API, but submit/rollback currently returns `501 Not Implemented`
-- `chief_storekeeper` has global operational access across all sites for operations
+- `chief_storekeeper` is a global business supervisor across all sites
 - `storekeeper` may create operations on sites where `can_operate=true`
 - `storekeeper` may update only own draft operations
 - only `chief_storekeeper` and `root` may submit operations
 - `storekeeper` may cancel only own drafts; `chief_storekeeper` and `root` may cancel any draft or submitted operation
+- rollback is blocked when reversing a submitted operation would make the affected balance invalid
 
 ### Balances API
 
@@ -182,7 +184,10 @@ Notes:
 
 Notes:
 - Read roles: `root`, `chief_storekeeper`, `storekeeper`, `observer`
-- Non-root users only see balances for accessible sites
+- `chief_storekeeper` sees balances across all sites
+- `storekeeper` and `observer` see balances only for accessible sites
+- `/balances` returns UI-ready rows with site/item/category/unit labels, not only raw `(site_id, item_id, qty)`
+- `category_id`, `search`, `only_positive`, pagination and total count are applied on the server side
 
 ### Device Sync API
 
@@ -213,7 +218,7 @@ Notes:
 
 ## Real Auth Rules
 - `root` = global authority
-- `chief_storekeeper` = site-level admin for catalog and device/site admin basics
+- `chief_storekeeper` = global business supervisor across all sites
 - `storekeeper` = operational user
 - `observer` = read-only user
 - device routes do not use user roles; they use registered device token

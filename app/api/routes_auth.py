@@ -77,6 +77,10 @@ def _user_payload(user: User) -> dict:
     }
 
 
+def _has_global_business_access(user: User) -> bool:
+    return user.is_root or user.role == "chief_storekeeper"
+
+
 def _user_sync_payload(user: User) -> dict:
     payload = _user_payload(user)
     payload["user_token"] = str(user.user_token)
@@ -220,7 +224,7 @@ async def get_user_sites(
         user = await _resolve_current_user(uow, x_user_token)
         await _resolve_current_device(uow, x_device_token, x_device_id)
 
-        if user.is_root:
+        if _has_global_business_access(user):
             sites, _ = await uow.sites.list_sites(
                 filter=SiteFilter(is_active=True),
                 user_site_ids=None,
@@ -228,7 +232,7 @@ async def get_user_sites(
                 page_size=1000,
             )
             return {
-                "is_root": True,
+                "is_root": user.is_root,
                 "available_sites": [
                     {
                         "site_id": site.id,
@@ -290,7 +294,7 @@ async def get_auth_context(
         device = await _resolve_current_device(uow, x_device_token, x_device_id)
         access_service = AccessService(uow)
 
-        if user.is_root:
+        if _has_global_business_access(user):
             sites, _ = await uow.sites.list_sites(
                 filter=SiteFilter(is_active=True),
                 user_site_ids=None,

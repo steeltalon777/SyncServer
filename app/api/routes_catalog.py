@@ -40,7 +40,7 @@ SUPPORTED_CATEGORY_READ_INCLUDES = set(DEFAULT_CATEGORY_READ_INCLUDES)
 
 
 async def _resolve_accessible_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if identity.is_root:
+    if identity.has_global_business_access:
         sites, _ = await uow.sites.list_sites(
             filter=SiteFilter(is_active=True),
             user_site_ids=None,
@@ -54,7 +54,7 @@ async def _resolve_accessible_site_ids(uow: UnitOfWork, identity: Identity) -> l
 
 
 def _require_catalog_read_access(identity: Identity, accessible_site_ids: list[int], site_id: int | None = None) -> None:
-    if identity.is_root:
+    if identity.has_global_business_access:
         return
     if identity.role not in ALLOWED_CATALOG_READ_ROLES:
         raise HTTPException(
@@ -160,7 +160,7 @@ async def list_sites(
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogSitesResponse:
     async with uow:
-        if identity.is_root:
+        if identity.has_global_business_access:
             sites, _ = await uow.sites.list_sites(
                 filter=SiteFilter(is_active=is_active),
                 user_site_ids=None,

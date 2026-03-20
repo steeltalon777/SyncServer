@@ -28,6 +28,10 @@ class AccessService:
     def __init__(self, uow: UnitOfWork):
         self.uow = uow
 
+    @staticmethod
+    def _has_global_business_access(user) -> bool:
+        return user is not None and user.is_active and (user.is_root or user.role == ROLE_CHIEF_STOREKEEPER)
+
     # ============================================================================
     # USER VALIDATION
     # ============================================================================
@@ -115,8 +119,8 @@ class AccessService:
         if not user or not user.is_active:
             return False
         
-        # Root users can view everything
-        if user.is_root:
+        # Root and chief_storekeeper users can view everything
+        if self._has_global_business_access(user):
             return True
         
         # Non-root users need explicit scope with can_view=True
@@ -129,8 +133,8 @@ class AccessService:
         if not user or not user.is_active:
             return False
         
-        # Root users can operate everywhere
-        if user.is_root:
+        # Root and chief_storekeeper users can operate everywhere
+        if self._has_global_business_access(user):
             return True
         
         # Non-root users need explicit scope with can_view=True and can_operate=True
@@ -148,8 +152,8 @@ class AccessService:
         if not user or not user.is_active:
             return False
         
-        # Root users can manage catalog everywhere
-        if user.is_root:
+        # Root and chief_storekeeper users can manage catalog everywhere
+        if self._has_global_business_access(user):
             return True
         
         # Non-root users need explicit scope with all permissions
@@ -335,15 +339,15 @@ class AccessService:
                 "is_root": False,
             }
 
-        # Root users have all permissions
-        if user.is_root:
+        # Root and chief_storekeeper users have full business permissions.
+        if self._has_global_business_access(user):
             return {
                 "can_read_operations": True,
                 "can_create_operations": True,
                 "can_read_balances": True,
                 "can_manage_catalog": True,
-                "can_manage_root_admin": True,
-                "is_root": True,
+                "can_manage_root_admin": user.is_root,
+                "is_root": user.is_root,
             }
 
         # Check scope for non-root users
@@ -385,8 +389,8 @@ class AccessService:
         if user is None or not user.is_active:
             return []
         
-        # Root users have access to all sites
-        if user.is_root:
+        # Root and chief_storekeeper users have access to all sites
+        if self._has_global_business_access(user):
             # Simplified: get all sites
             # In production, implement proper pagination
             from app.schemas.admin import SiteFilter

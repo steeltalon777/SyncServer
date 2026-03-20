@@ -51,6 +51,32 @@ class OperationsService:
             )
 
     @staticmethod
+    async def _apply_balance_delta(
+        uow: UnitOfWork,
+        *,
+        site_id: int,
+        item_id: int,
+        quantity_delta: Decimal,
+        error_context: str,
+    ) -> None:
+        if quantity_delta < 0:
+            await OperationsService._ensure_sufficient_balance(
+                uow,
+                site_id=site_id,
+                item_id=item_id,
+                required_qty=abs(quantity_delta),
+                error_message=(
+                    f"insufficient stock for {error_context}: "
+                    f"item={item_id}, site={site_id}, required={abs(quantity_delta)}"
+                ),
+            )
+        await uow.balances.update_balance_quantity(
+            site_id=site_id,
+            item_id=item_id,
+            quantity_delta=quantity_delta,
+        )
+
+    @staticmethod
     async def _validate_operation_sites(uow: UnitOfWork, operation_data: OperationCreate) -> None:
         site = await uow.sites.get_by_id(operation_data.site_id)
         if not site:
@@ -314,34 +340,54 @@ class OperationsService:
             for line in operation.lines:
                 quantity = Decimal(line.qty)
                 if operation.operation_type == "RECEIVE":
-                    await uow.balances.update_balance_quantity(
+                    await OperationsService._apply_balance_delta(
+                        uow,
                         site_id=operation.site_id,
                         item_id=line.item_id,
                         quantity_delta=-quantity,
+                        error_context="RECEIVE rollback",
                     )
                 elif operation.operation_type in DECREMENT_OPERATION_TYPES:
-                    await uow.balances.update_balance_quantity(
+                    await OperationsService._apply_balance_delta(
+                        uow,
                         site_id=operation.site_id,
                         item_id=line.item_id,
                         quantity_delta=quantity,
+                        error_context=f"{operation.operation_type} rollback",
                     )
                 elif operation.operation_type == "ADJUSTMENT":
-                    await uow.balances.update_balance_quantity(
+                    await OperationsService._apply_balance_delta(
+                        uow,
                         site_id=operation.site_id,
                         item_id=line.item_id,
                         quantity_delta=-quantity,
+                        error_context="ADJUSTMENT rollback",
                     )
                 elif operation.operation_type == "MOVE":
                     if operation.source_site_id and operation.destination_site_id:
-                        await uow.balances.update_balance_quantity(
+                        await OperationsService._ensure_sufficient_balance(
+                            uow,
+                            site_id=operation.destination_site_id,
+                            item_id=line.item_id,
+                            required_qty=quantity,
+                            error_message=(
+                                f"insufficient stock for MOVE rollback from destination: "
+                                f"item={line.item_id}, site={operation.destination_site_id}, required={line.qty}"
+                            ),
+                        )
+                        await OperationsService._apply_balance_delta(
+                            uow,
                             site_id=operation.source_site_id,
                             item_id=line.item_id,
                             quantity_delta=quantity,
+                            error_context="MOVE rollback to source",
                         )
-                        await uow.balances.update_balance_quantity(
+                        await OperationsService._apply_balance_delta(
+                            uow,
                             site_id=operation.destination_site_id,
                             item_id=line.item_id,
                             quantity_delta=-quantity,
+                            error_context="MOVE rollback from destination",
                         )
 
         cancelled_operation = await uow.operations.cancel_operation(

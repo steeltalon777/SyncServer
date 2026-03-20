@@ -22,7 +22,7 @@ READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 
 
 def _require_read_access(identity: Identity) -> None:
-    if identity.is_root:
+    if identity.has_global_business_access:
         return
     if identity.role not in READ_ROLES:
         raise HTTPException(
@@ -32,7 +32,7 @@ def _require_read_access(identity: Identity) -> None:
 
 
 async def _resolve_visible_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if identity.is_root:
+    if identity.has_global_business_access:
         sites, _ = await uow.sites.list_sites(
             filter=SiteFilter(is_active=None),
             user_site_ids=None,
