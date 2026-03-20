@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import ORMBaseModel
 
@@ -181,10 +181,17 @@ class CategoryResponse(ORMBaseModel):
 class ItemCreateRequest(BaseModel):
     sku: str | None = Field(default=None, max_length=100)
     name: str = Field(min_length=1, max_length=255)
-    category_id: int
+    category_id: int | None = None
     unit_id: int
     description: str | None = None
     is_active: bool = True
+
+    @field_validator("category_id", mode="before")
+    @classmethod
+    def normalize_category_id(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 class ItemUpdateRequest(BaseModel):
@@ -194,6 +201,13 @@ class ItemUpdateRequest(BaseModel):
     unit_id: int | None = None
     description: str | None = None
     is_active: bool | None = None
+
+    @field_validator("category_id", mode="before")
+    @classmethod
+    def normalize_category_id(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 class ItemResponse(ORMBaseModel):

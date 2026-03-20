@@ -48,6 +48,8 @@ Base prefix: `/api/v1`
 - `PATCH /catalog/admin/categories/{category_id}` - update category
 - `POST /catalog/admin/items` - create item
 - `PATCH /catalog/admin/items/{item_id}` - update item
+- `POST /catalog/admin/items` fallback: missing/null/unknown/inactive category resolves to `__UNCATEGORIZED__`
+- `PATCH /catalog/admin/items/{item_id}` category semantics: omitted keeps current category, `null` moves to `__UNCATEGORIZED__`
 
 ## Operations
 - `GET /operations` - list operations by visible scope

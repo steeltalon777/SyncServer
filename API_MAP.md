@@ -136,13 +136,17 @@ Notes:
 | `PATCH` | `/catalog/admin/units/{unit_id}` | `X-User-Token` | partial unit payload | `UnitResponse` |
 | `POST` | `/catalog/admin/categories` | `X-User-Token` | `{name, code, parent_id, sort_order, is_active}` | `CategoryResponse` |
 | `PATCH` | `/catalog/admin/categories/{category_id}` | `X-User-Token` | partial category payload | `CategoryResponse` |
-| `POST` | `/catalog/admin/items` | `X-User-Token` | `{sku, name, category_id, unit_id, description, is_active}` | `ItemResponse` |
-| `PATCH` | `/catalog/admin/items/{item_id}` | `X-User-Token` | partial item payload | `ItemResponse` |
+| `POST` | `/catalog/admin/items` | `X-User-Token` | `{sku, name, category_id?, unit_id, description, is_active}` | `ItemResponse` |
+| `PATCH` | `/catalog/admin/items/{item_id}` | `X-User-Token` | partial item payload; `category_id: null` -> `__UNCATEGORIZED__` | `ItemResponse` |
 
 Notes:
 - `root` may call these without `X-Site-Id`.
 - `chief_storekeeper` must send `X-Site-Id` and have `can_manage_catalog=true` on that site.
 - `storekeeper` and `observer` cannot mutate catalog.
+- `POST /api/v1/catalog/admin/items`: missing or `null` `category_id` resolves to the system category `__UNCATEGORIZED__` (`"Без категории"`).
+- `POST /api/v1/catalog/admin/items`: unknown or inactive `category_id` also resolves to `__UNCATEGORIZED__`.
+- `PATCH /api/v1/catalog/admin/items/{item_id}`: omitted `category_id` keeps the current category; explicit `null` moves the item to `__UNCATEGORIZED__`.
+- `__UNCATEGORIZED__` is a reserved read-only system category and cannot be created or edited through catalog admin.
 
 ### Operations API
 

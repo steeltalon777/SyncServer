@@ -320,6 +320,10 @@ class CatalogRepo:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_categories_by_code(self, code: str) -> list[Category]:
+        result = await self.session.execute(select(Category).where(Category.code == code))
+        return list(result.scalars().all())
+
     async def update_category(self, category: Category) -> Category:
         await self.session.flush()
         await self.session.refresh(category)

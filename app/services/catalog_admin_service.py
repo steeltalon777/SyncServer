@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
+from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
 from app.models.category import Category
 from app.models.item import Item
 from app.models.unit import Unit
@@ -53,6 +54,9 @@ class CatalogAdminService:
         return await uow.catalog.update_unit(unit)
 
     async def create_category(self, uow: UnitOfWork, payload: CategoryCreateRequest) -> Category:
+        if payload.code == UNCATEGORIZED_CATEGORY_CODE:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="reserved category code")
+
         if payload.parent_id is not None:
             parent = await uow.catalog.get_category_by_id(payload.parent_id)
             if parent is None:
@@ -75,6 +79,10 @@ class CatalogAdminService:
         category = await uow.catalog.get_category_by_id(category_id)
         if category is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
+        if category.code == UNCATEGORIZED_CATEGORY_CODE:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="system category is read-only")
+        if payload.code == UNCATEGORIZED_CATEGORY_CODE:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="reserved category code")
 
         parent_updated = "parent_id" in payload.model_fields_set
         target_parent_id = payload.parent_id if parent_updated else category.parent_id
@@ -107,13 +115,14 @@ class CatalogAdminService:
         return await uow.catalog.update_category(category)
 
     async def create_item(self, uow: UnitOfWork, payload: ItemCreateRequest) -> Item:
-        await self._validate_item_relations(uow, payload.category_id, payload.unit_id)
+        category = await self._resolve_item_category(uow, payload.category_id)
+        await self._validate_unit_exists(uow, payload.unit_id)
         await self._ensure_item_sku_unique(uow, payload.sku)
 
         item = Item(
             sku=payload.sku,
             name=payload.name,
-            category_id=payload.category_id,
+            category_id=category.id,
             unit_id=payload.unit_id,
             description=payload.description,
             is_active=payload.is_active,
@@ -125,9 +134,13 @@ class CatalogAdminService:
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
 
-        category_id = payload.category_id if payload.category_id is not None else item.category_id
+        if "category_id" in payload.model_fields_set:
+            category = await self._resolve_item_category(uow, payload.category_id)
+            category_id = category.id
+        else:
+            category_id = item.category_id
         unit_id = payload.unit_id if payload.unit_id is not None else item.unit_id
-        await self._validate_item_relations(uow, category_id, unit_id)
+        await self._validate_unit_exists(uow, unit_id)
 
         if payload.sku is not None and payload.sku != item.sku:
             existing = await uow.catalog.get_item_by_sku(payload.sku)
@@ -137,8 +150,8 @@ class CatalogAdminService:
 
         if payload.name is not None:
             item.name = payload.name
-        if payload.category_id is not None:
-            item.category_id = payload.category_id
+        if "category_id" in payload.model_fields_set:
+            item.category_id = category_id
         if payload.unit_id is not None:
             item.unit_id = payload.unit_id
         if "description" in payload.model_fields_set:
@@ -159,11 +172,40 @@ class CatalogAdminService:
         if category_id in ancestors:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="category cycle detected")
 
-    async def _validate_item_relations(self, uow: UnitOfWork, category_id: int, unit_id: int) -> None:
-        if await uow.catalog.get_category_by_id(category_id) is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
+    async def _validate_unit_exists(self, uow: UnitOfWork, unit_id: int) -> None:
         if await uow.catalog.get_unit_by_id(unit_id) is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unit not found")
+
+    async def _resolve_item_category(self, uow: UnitOfWork, category_id: int | None) -> Category:
+        if category_id is not None:
+            category = await uow.catalog.get_category_by_id(category_id)
+            if category is not None and category.is_active:
+                return category
+        return await self._get_or_create_uncategorized_category(uow)
+
+    async def _get_or_create_uncategorized_category(self, uow: UnitOfWork) -> Category:
+        categories = await uow.catalog.list_categories_by_code(UNCATEGORIZED_CATEGORY_CODE)
+        if len(categories) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="multiple uncategorized categories configured",
+            )
+        if categories:
+            category = categories[0]
+            category.name = UNCATEGORIZED_CATEGORY_NAME
+            category.parent_id = None
+            category.is_active = True
+            await uow.catalog.update_category(category)
+            return category
+
+        category = Category(
+            name=UNCATEGORIZED_CATEGORY_NAME,
+            code=UNCATEGORIZED_CATEGORY_CODE,
+            parent_id=None,
+            sort_order=None,
+            is_active=True,
+        )
+        return await uow.catalog.create_category(category)
 
     async def _ensure_item_sku_unique(self, uow: UnitOfWork, sku: str | None) -> None:
         if sku is None:

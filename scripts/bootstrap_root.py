@@ -3,8 +3,10 @@ import uuid
 
 from sqlalchemy import select
 
+from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
 from app.core.db import SessionFactory, engine
 from app.models import Base
+from app.models.category import Category
 from app.models.user import User
 from app.models.device import Device
 
@@ -78,6 +80,32 @@ async def bootstrap() -> None:
                 django_device.device_token = uuid.uuid4()
             await session.flush()
 
+        # ---- Uncategorized category ----
+        result = await session.execute(
+            select(Category).where(Category.code == UNCATEGORIZED_CATEGORY_CODE)
+        )
+        uncategorized_categories = list(result.scalars().all())
+
+        if not uncategorized_categories:
+            print("Creating uncategorized category...")
+            uncategorized_category = Category(
+                name=UNCATEGORIZED_CATEGORY_NAME,
+                code=UNCATEGORIZED_CATEGORY_CODE,
+                parent_id=None,
+                is_active=True,
+            )
+            session.add(uncategorized_category)
+            await session.flush()
+        elif len(uncategorized_categories) == 1:
+            print("Uncategorized category already exists. Updating...")
+            uncategorized_category = uncategorized_categories[0]
+            uncategorized_category.name = UNCATEGORIZED_CATEGORY_NAME
+            uncategorized_category.parent_id = None
+            uncategorized_category.is_active = True
+            await session.flush()
+        else:
+            raise RuntimeError("multiple uncategorized categories configured")
+
         await session.commit()
 
         # ---- Output ----
@@ -93,6 +121,10 @@ async def bootstrap() -> None:
         print(f"  id:       {django_device.id}")
         print(f"  code:     {django_device.device_code}")
         print(f"  token:    {django_device.device_token}")
+        print()
+        print("System category:")
+        print(f"  code:     {UNCATEGORIZED_CATEGORY_CODE}")
+        print(f"  name:     {UNCATEGORIZED_CATEGORY_NAME}")
         print("=" * 60)
 
 

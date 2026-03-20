@@ -250,6 +250,12 @@ Body:
 }
 ```
 
+Notes:
+- `category_id` may be omitted or sent as `null`; the server assigns the system category `__UNCATEGORIZED__` (`"Без категории"`).
+- If `category_id` points to a missing or inactive category, the server also assigns `__UNCATEGORIZED__`.
+- On `PATCH /api/v1/catalog/admin/items/{item_id}`, omitted `category_id` keeps the current category, while explicit `null` moves the item to `__UNCATEGORIZED__`.
+- `__UNCATEGORIZED__` is seeded during bootstrap and treated as a reserved read-only category in catalog admin.
+
 ### 5) Browse catalog categories for Django/UI
 `GET /api/v1/catalog/read/categories?search=Milk&page=1&page_size=20&include=parent,parent_chain_summary,items_preview&items_preview_limit=5`
 Headers:
