@@ -57,6 +57,63 @@ class CatalogUnitsResponse(ORMBaseModel):
     next_updated_after: datetime | None = None
 
 
+class CategorySummaryDto(ORMBaseModel):
+    id: int
+    name: str
+
+
+class ItemPreviewDto(ORMBaseModel):
+    id: int
+    name: str
+
+
+class CatalogBrowseCategoryDto(ORMBaseModel):
+    id: int
+    name: str
+    code: str | None = None
+    parent_id: int | None = None
+    parent: CategorySummaryDto | None = None
+    parent_chain_summary: list[CategorySummaryDto] = Field(default_factory=list)
+    children_count: int = 0
+    items_count: int = 0
+    items_preview: list[ItemPreviewDto] = Field(default_factory=list)
+    is_active: bool
+    updated_at: datetime
+    sort_order: int | None = None
+
+
+class CatalogBrowseCategoriesResponse(ORMBaseModel):
+    categories: list[CatalogBrowseCategoryDto]
+    total_count: int
+    page: int
+    page_size: int
+
+
+class CatalogBrowseItemDto(ORMBaseModel):
+    id: int
+    sku: str | None = None
+    name: str
+    category_id: int
+    category_name: str
+    unit_id: int
+    unit_symbol: str
+    description: str | None = None
+    is_active: bool
+    updated_at: datetime
+
+
+class CatalogBrowseItemsResponse(ORMBaseModel):
+    items: list[CatalogBrowseItemDto]
+    total_count: int
+    page: int
+    page_size: int
+
+
+class CategoryParentChainResponse(ORMBaseModel):
+    category_id: int
+    parent_chain_summary: list[CategorySummaryDto] = Field(default_factory=list)
+
+
 class CategoryTreeNode(ORMBaseModel):
     id: int
     name: str

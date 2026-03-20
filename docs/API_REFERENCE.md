@@ -83,6 +83,13 @@ Read (primary, user token):
 - `GET /catalog/units`
 - `GET /catalog/sites`
 
+Read model (browse/UI, user token):
+- `GET /catalog/read/items`
+- `GET /catalog/read/categories`
+- `GET /catalog/read/categories/{category_id}/items`
+- `GET /catalog/read/categories/{category_id}/children`
+- `GET /catalog/read/categories/{category_id}/parent-chain`
+
 Read (legacy compatibility):
 - `POST /catalog/items`
 - `POST /catalog/categories`
@@ -242,3 +249,76 @@ Body:
   "is_active": true
 }
 ```
+
+### 5) Browse catalog categories for Django/UI
+`GET /api/v1/catalog/read/categories?search=Milk&page=1&page_size=20&include=parent,parent_chain_summary,items_preview&items_preview_limit=5`
+Headers:
+- `X-User-Token: {{user_token}}`
+
+Response:
+```json
+{
+  "categories": [
+    {
+      "id": 12,
+      "name": "Whole Milk",
+      "code": "MILK-WHOLE",
+      "parent_id": 4,
+      "parent": { "id": 4, "name": "Milk" },
+      "parent_chain_summary": [
+        { "id": 1, "name": "Food" },
+        { "id": 4, "name": "Milk" }
+      ],
+      "children_count": 0,
+      "items_count": 1,
+      "items_preview": [
+        { "id": 55, "name": "Whole Milk 1L" }
+      ],
+      "is_active": true,
+      "updated_at": "2026-03-20T10:00:00+00:00",
+      "sort_order": 1
+    }
+  ],
+  "total_count": 1,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+Notes:
+- `include` supports `parent`, `parent_chain_summary`, `items_preview`
+- when `include` is omitted, the endpoint returns all three by default
+- browse/read-model endpoints return only active categories/items/units
+
+### 6) Browse catalog items for Django/UI
+`GET /api/v1/catalog/read/items?search=milk&category_id=12&page=1&page_size=20`
+Headers:
+- `X-User-Token: {{user_token}}`
+
+Response:
+```json
+{
+  "items": [
+    {
+      "id": 55,
+      "sku": "MILK-001",
+      "name": "Whole Milk 1L",
+      "category_id": 12,
+      "category_name": "Whole Milk",
+      "unit_id": 2,
+      "unit_symbol": "l",
+      "description": "Shelf item",
+      "is_active": true,
+      "updated_at": "2026-03-20T10:00:00+00:00"
+    }
+  ],
+  "total_count": 1,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+### 7) Category-scoped helpers for Django/UI
+- `GET /api/v1/catalog/read/categories/{category_id}/items?search=&page=&page_size=&site_id=`
+- `GET /api/v1/catalog/read/categories/{category_id}/children?page=&page_size=&include=&items_preview_limit=&site_id=`
+- `GET /api/v1/catalog/read/categories/{category_id}/parent-chain?site_id=`
