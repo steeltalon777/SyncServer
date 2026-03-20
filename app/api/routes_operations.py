@@ -28,10 +28,15 @@ logger = logging.getLogger(__name__)
 
 READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
+GLOBAL_OPERATIONS_ROLES = {"chief_storekeeper"}
+
+
+def _is_global_operations_manager(identity: Identity) -> bool:
+    return identity.is_root or identity.role in GLOBAL_OPERATIONS_ROLES
 
 
 def _require_read_site(identity: Identity, site_id: int) -> None:
-    if identity.is_root:
+    if _is_global_operations_manager(identity):
         return
     if identity.role not in READ_ROLES:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read operations permission required")
@@ -40,7 +45,7 @@ def _require_read_site(identity: Identity, site_id: int) -> None:
 
 
 def _require_operate_site(identity: Identity, site_id: int) -> None:
-    if identity.is_root:
+    if _is_global_operations_manager(identity):
         return
     if identity.role not in WRITE_ROLES:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="operate permission required")
@@ -58,8 +63,38 @@ def _validate_move_access(identity: Identity, source_site_id: int | None, destin
     _require_operate_site(identity, destination_site_id)
 
 
+def _require_operation_owner_or_supervisor(identity: Identity, operation) -> None:
+    if _is_global_operations_manager(identity):
+        return
+    if operation.created_by_user_id != identity.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only the operation creator, chief_storekeeper, or root may modify this draft",
+        )
+
+
+def _require_operation_submit_permission(identity: Identity) -> None:
+    if _is_global_operations_manager(identity):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="only chief_storekeeper or root may submit operations",
+    )
+
+
+def _require_operation_cancel_permission(identity: Identity, operation) -> None:
+    if _is_global_operations_manager(identity):
+        return
+    if operation.status == "draft" and operation.created_by_user_id == identity.user_id:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="only chief_storekeeper or root may cancel submitted or other users operations",
+    )
+
+
 async def _resolve_readable_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if identity.is_root:
+    if _is_global_operations_manager(identity):
         sites, _ = await uow.sites.list_sites(
             filter=SiteFilter(is_active=None),
             user_site_ids=None,
@@ -176,6 +211,7 @@ async def update_operation(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
         _require_operate_site(identity, operation.site_id)
+        _require_operation_owner_or_supervisor(identity, operation)
         if operation.operation_type == "MOVE":
             source_site_id = update_data.source_site_id if "source_site_id" in update_data.model_fields_set else operation.source_site_id
             destination_site_id = (
@@ -212,6 +248,7 @@ async def submit_operation(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
         _require_operate_site(identity, operation.site_id)
+        _require_operation_submit_permission(identity)
         if operation.operation_type == "MOVE":
             _validate_move_access(identity, operation.source_site_id, operation.destination_site_id)
 
@@ -241,6 +278,7 @@ async def cancel_operation(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
         _require_operate_site(identity, operation.site_id)
+        _require_operation_cancel_permission(identity, operation)
         if operation.operation_type == "MOVE":
             _validate_move_access(identity, operation.source_site_id, operation.destination_site_id)
 

@@ -22,7 +22,7 @@ class OperationsRepo:
     async def create_operation(
         self,
         site_id: int,
-        operation_type: Literal["RECEIVE", "WRITE_OFF", "MOVE"],
+        operation_type: Literal["RECEIVE", "EXPENSE", "WRITE_OFF", "MOVE", "ADJUSTMENT", "ISSUE", "ISSUE_RETURN"],
         created_by_user_id: UUID,
         notes: str | None = None,
         source_site_id: int | None = None,

@@ -11,7 +11,17 @@ from app.services.uow import UnitOfWork
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_OPERATION_TYPES: set[OperationType] = {"RECEIVE", "WRITE_OFF", "MOVE"}
+SUPPORTED_OPERATION_TYPES: set[OperationType] = {
+    "RECEIVE",
+    "EXPENSE",
+    "WRITE_OFF",
+    "MOVE",
+    "ADJUSTMENT",
+    "ISSUE",
+    "ISSUE_RETURN",
+}
+DECREMENT_OPERATION_TYPES: set[OperationType] = {"EXPENSE", "WRITE_OFF"}
+ISSUE_STUB_OPERATION_TYPES: set[OperationType] = {"ISSUE", "ISSUE_RETURN"}
 
 
 class OperationsService:
@@ -66,6 +76,20 @@ class OperationsService:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="destination site not found")
 
     @staticmethod
+    def _validate_line_quantities(
+        operation_type: OperationType,
+        lines,
+    ) -> None:
+        if operation_type == "ADJUSTMENT":
+            return
+        for line in lines:
+            if line.qty <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"{operation_type} operations require positive qty values",
+                )
+
+    @staticmethod
     async def create_operation(
         uow: UnitOfWork,
         operation_data: OperationCreate,
@@ -73,6 +97,7 @@ class OperationsService:
     ) -> dict[str, object]:
         await OperationsService._validate_operation_type(operation_data.operation_type)
         await OperationsService._validate_operation_sites(uow, operation_data)
+        OperationsService._validate_line_quantities(operation_data.operation_type, operation_data.lines)
 
         for line in operation_data.lines:
             item = await uow.catalog.get_item_by_id(line.item_id)
@@ -139,6 +164,8 @@ class OperationsService:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="MOVE source and destination must be different",
                 )
+        if update_data.lines is not None:
+            OperationsService._validate_line_quantities(operation.operation_type, update_data.lines)
 
         updated = await uow.operations.update_operation(
             operation_id=operation_id,
@@ -184,6 +211,11 @@ class OperationsService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"operation is already {operation.status}",
             )
+        if operation.operation_type in ISSUE_STUB_OPERATION_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=f"{operation.operation_type} submit is not implemented yet",
+            )
 
         for line in operation.lines:
             quantity = Decimal(line.qty)
@@ -193,14 +225,14 @@ class OperationsService:
                     item_id=line.item_id,
                     quantity_delta=quantity,
                 )
-            elif operation.operation_type == "WRITE_OFF":
+            elif operation.operation_type in DECREMENT_OPERATION_TYPES:
                 await OperationsService._ensure_sufficient_balance(
                     uow,
                     site_id=operation.site_id,
                     item_id=line.item_id,
                     required_qty=quantity,
                     error_message=(
-                        f"insufficient stock for WRITE_OFF: item={line.item_id}, "
+                        f"insufficient stock for {operation.operation_type}: item={line.item_id}, "
                         f"site={operation.site_id}, required={line.qty}"
                     ),
                 )
@@ -208,6 +240,23 @@ class OperationsService:
                     site_id=operation.site_id,
                     item_id=line.item_id,
                     quantity_delta=-quantity,
+                )
+            elif operation.operation_type == "ADJUSTMENT":
+                if quantity < 0:
+                    await OperationsService._ensure_sufficient_balance(
+                        uow,
+                        site_id=operation.site_id,
+                        item_id=line.item_id,
+                        required_qty=abs(quantity),
+                        error_message=(
+                            f"insufficient stock for ADJUSTMENT: item={line.item_id}, "
+                            f"site={operation.site_id}, delta={line.qty}"
+                        ),
+                    )
+                await uow.balances.update_balance_quantity(
+                    site_id=operation.site_id,
+                    item_id=line.item_id,
+                    quantity_delta=quantity,
                 )
             elif operation.operation_type == "MOVE":
                 if operation.source_site_id is None or operation.destination_site_id is None:
@@ -257,6 +306,11 @@ class OperationsService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="operation is already cancelled")
 
         if operation.status == "submitted":
+            if operation.operation_type in ISSUE_STUB_OPERATION_TYPES:
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    detail=f"{operation.operation_type} cancel rollback is not implemented yet",
+                )
             for line in operation.lines:
                 quantity = Decimal(line.qty)
                 if operation.operation_type == "RECEIVE":
@@ -265,11 +319,17 @@ class OperationsService:
                         item_id=line.item_id,
                         quantity_delta=-quantity,
                     )
-                elif operation.operation_type == "WRITE_OFF":
+                elif operation.operation_type in DECREMENT_OPERATION_TYPES:
                     await uow.balances.update_balance_quantity(
                         site_id=operation.site_id,
                         item_id=line.item_id,
                         quantity_delta=quantity,
+                    )
+                elif operation.operation_type == "ADJUSTMENT":
+                    await uow.balances.update_balance_quantity(
+                        site_id=operation.site_id,
+                        item_id=line.item_id,
+                        quantity_delta=-quantity,
                     )
                 elif operation.operation_type == "MOVE":
                     if operation.source_site_id and operation.destination_site_id:

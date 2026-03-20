@@ -127,7 +127,7 @@ class Operation(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "operation_type IN ('RECEIVE', 'WRITE_OFF', 'MOVE')",
+            "operation_type IN ('RECEIVE', 'EXPENSE', 'WRITE_OFF', 'MOVE', 'ADJUSTMENT', 'ISSUE', 'ISSUE_RETURN')",
             name="ck_operations_type",
         ),
         CheckConstraint(
@@ -168,5 +168,5 @@ class OperationLine(Base):
     item = relationship("Item")
 
     __table_args__ = (
-        CheckConstraint("qty > 0", name="ck_operation_lines_qty_positive"),
+        CheckConstraint("qty <> 0", name="ck_operation_lines_qty_non_zero"),
     )

@@ -163,6 +163,14 @@ Notes:
 - Read roles: `root`, `chief_storekeeper`, `storekeeper`, `observer`
 - Write roles: `root`, `chief_storekeeper`, `storekeeper`
 - MOVE requires both `source_site_id` and `destination_site_id`
+- Supported operation types: `RECEIVE`, `EXPENSE`, `WRITE_OFF`, `MOVE`, `ADJUSTMENT`, `ISSUE`, `ISSUE_RETURN`
+- `ADJUSTMENT` accepts signed `qty`; other operation types require positive `qty`
+- `ISSUE` and `ISSUE_RETURN` are accepted by the API, but submit/rollback currently returns `501 Not Implemented`
+- `chief_storekeeper` has global operational access across all sites for operations
+- `storekeeper` may create operations on sites where `can_operate=true`
+- `storekeeper` may update only own draft operations
+- only `chief_storekeeper` and `root` may submit operations
+- `storekeeper` may cancel only own drafts; `chief_storekeeper` and `root` may cancel any draft or submitted operation
 
 ### Balances API
 

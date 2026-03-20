@@ -54,6 +54,7 @@ Alternative container setup:
 - Docker: `docker compose up --build`
 - OpenAPI docs: `/api/docs`
 - OpenAPI JSON: `/api/openapi.json`
+- Existing databases: after expanding supported operation types, run `python scripts/migrate_operation_constraints.py` once to refresh operation check constraints.
 
 ## Main Modules
 - `auth` - user bootstrap, session context, available sites

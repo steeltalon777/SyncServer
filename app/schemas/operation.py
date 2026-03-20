@@ -11,8 +11,12 @@ from app.schemas.common import ORMBaseModel
 
 OperationType = Literal[
     "RECEIVE",
+    "EXPENSE",
     "WRITE_OFF",
     "MOVE",
+    "ADJUSTMENT",
+    "ISSUE",
+    "ISSUE_RETURN",
 ]
 OperationStatus = Literal["draft", "submitted", "cancelled"]
 
@@ -22,7 +26,7 @@ class OperationLineCreate(BaseModel):
 
     line_number: int = Field(ge=1)
     item_id: int
-    qty: int = Field(ge=1, validation_alias=AliasChoices("qty", "quantity"))
+    qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
     batch: str | None = None
     comment: str | None = None
 
@@ -33,6 +37,13 @@ class OperationLineCreate(BaseModel):
     @property
     def notes(self) -> str | None:
         return self.comment
+
+    @field_validator("qty")
+    @classmethod
+    def validate_qty_not_zero(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("qty must not be zero")
+        return value
 
 
 class OperationCreate(BaseModel):
@@ -62,6 +73,11 @@ class OperationCreate(BaseModel):
                 raise ValueError("MOVE operations require source and destination site ids")
             if src == dst:
                 raise ValueError("Source and destination sites must differ")
+        if operation_type == "ADJUSTMENT":
+            return lines
+        for line in lines:
+            if line.qty <= 0:
+                raise ValueError(f"{operation_type} operations require positive qty values")
         return lines
 
 

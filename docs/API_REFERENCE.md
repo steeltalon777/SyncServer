@@ -106,8 +106,12 @@ Admin:
 ## Operations API
 Supported operation types:
 - `RECEIVE`
+- `EXPENSE`
 - `WRITE_OFF`
 - `MOVE`
+- `ADJUSTMENT`
+- `ISSUE`
+- `ISSUE_RETURN`
 
 Endpoints:
 - `GET /operations`
@@ -121,6 +125,12 @@ Rules:
 - submit updates balances
 - cancel rolls back submitted deltas
 - server validates site access and MOVE source/destination
+- `ADJUSTMENT` uses signed `qty`: positive adds stock, negative subtracts stock
+- `ISSUE` and `ISSUE_RETURN` are accepted by the API, but submit/rollback is currently a placeholder and returns `501`
+- `storekeeper` may create operations on allowed sites, but submit is reserved for `chief_storekeeper` and `root`
+- `storekeeper` may update only own draft operations
+- `storekeeper` may cancel only own draft operations
+- `chief_storekeeper` has global operational access across all sites and may submit/cancel operations created by other users
 
 ## Balances API (read-only)
 - `GET /balances`
