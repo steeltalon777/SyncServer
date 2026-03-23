@@ -51,6 +51,7 @@ class OperationCreate(BaseModel):
 
     operation_type: OperationType = Field(validation_alias=AliasChoices("operation_type", "type"))
     site_id: int
+    effective_at: datetime | None = None
     source_site_id: int | None = None
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
     issued_to_user_id: UUID | None = None
@@ -83,6 +84,7 @@ class OperationCreate(BaseModel):
 
 class OperationUpdate(BaseModel):
     notes: str | None = Field(default=None, max_length=1000)
+    effective_at: datetime | None = None
     source_site_id: int | None = None
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
     issued_to_user_id: UUID | None = None
@@ -121,6 +123,7 @@ class OperationResponse(ORMBaseModel):
     site_id: int
     operation_type: OperationType = Field(validation_alias=AliasChoices("operation_type", "type"))
     status: OperationStatus
+    effective_at: datetime | None = None
     source_site_id: int | None = None
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
     issued_to_user_id: UUID | None = None
@@ -152,6 +155,8 @@ class OperationFilter(BaseModel):
     operation_type: OperationType | None = Field(default=None, validation_alias=AliasChoices("operation_type", "type"))
     status: OperationStatus | None = None
     created_by_user_id: UUID | None = None
+    effective_after: datetime | None = None
+    effective_before: datetime | None = None
     created_after: datetime | None = None
     created_before: datetime | None = None
     updated_after: datetime | None = None

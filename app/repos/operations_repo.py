@@ -25,6 +25,7 @@ class OperationsRepo:
         operation_type: Literal["RECEIVE", "EXPENSE", "WRITE_OFF", "MOVE", "ADJUSTMENT", "ISSUE", "ISSUE_RETURN"],
         created_by_user_id: UUID,
         notes: str | None = None,
+        effective_at: datetime | None = None,
         source_site_id: int | None = None,
         destination_site_id: int | None = None,
         issued_to_user_id: UUID | None = None,
@@ -34,6 +35,7 @@ class OperationsRepo:
             site_id=site_id,
             operation_type=operation_type,
             status="draft",
+            effective_at=effective_at,
             source_site_id=source_site_id,
             destination_site_id=destination_site_id,
             issued_to_user_id=issued_to_user_id,
@@ -59,6 +61,7 @@ class OperationsRepo:
         operation_id: UUID,
         *,
         notes: str | None = None,
+        effective_at: datetime | None = None,
         source_site_id: int | None = None,
         destination_site_id: int | None = None,
         issued_to_user_id: UUID | None = None,
@@ -71,6 +74,8 @@ class OperationsRepo:
 
         if notes is not None:
             operation.notes = notes
+        if fields_set is not None and "effective_at" in fields_set:
+            operation.effective_at = effective_at
         if fields_set is not None and "source_site_id" in fields_set:
             operation.source_site_id = source_site_id
         if fields_set is not None and "destination_site_id" in fields_set:
@@ -138,6 +143,10 @@ class OperationsRepo:
             where_clauses.append(
                 Operation.created_by_user_id == filter.created_by_user_id
             )
+        if filter.effective_after is not None:
+            where_clauses.append(Operation.effective_at >= filter.effective_after)
+        if filter.effective_before is not None:
+            where_clauses.append(Operation.effective_at <= filter.effective_before)
         if filter.created_after is not None:
             where_clauses.append(Operation.created_at >= filter.created_after)
         if filter.created_before is not None:
