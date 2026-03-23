@@ -33,7 +33,6 @@ SyncServer is an async backend for warehouse data, inventory operations, site ac
 - Balances
 - Sync
 - Health
-- Legacy Business Compatibility
 
 ## Entry Points
 - `main.py`
@@ -61,7 +60,6 @@ SyncServer is an async backend for warehouse data, inventory operations, site ac
 
 ## Future Modules
 - More explicit client-specific integration docs
-- Stronger separation of legacy compatibility flows
 - Broader end-to-end testing around admin and sync integration
 
 ## Architecture Decisions

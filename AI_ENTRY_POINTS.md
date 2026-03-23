@@ -12,7 +12,6 @@
 - `app/api/routes_balances.py`
 - `app/api/routes_sync.py`
 - `app/api/routes_health.py`
-- `app/api/routes_business.py` - legacy compatibility
 - `app/api/deps.py` - auth and request dependency wiring
 
 ## Service Layer

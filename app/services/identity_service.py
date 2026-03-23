@@ -100,8 +100,7 @@ class IdentityService:
                 client_version=client_version,
             )
 
-        # Device-token auth is primary. User binding for device principals
-        # will be completed during endpoint migration.
+        # Device-token auth yields a device principal for sync flows.
         from app.models.user import User
         from uuid import uuid4
 
@@ -163,71 +162,6 @@ class IdentityService:
             detail="No authentication tokens provided",
         )
 
-    async def resolve_service_identity(
-        self,
-        service_token: str,
-    ) -> Identity:
-        """
-        Resolve identity for service-to-service authentication.
-        This is the legacy path that will be replaced by token-based auth.
-
-        Args:
-            service_token: Service token from Authorization header
-
-        Returns:
-            Identity object representing service context
-
-        Raises:
-            HTTPException: if service token invalid
-        """
-        # This is a legacy method that simulates the old service auth
-        # In the new model, services should use user tokens or device tokens
-        # This is kept for backward compatibility during transition
-
-        from app.core.config import get_settings
-        settings = get_settings()
-
-        if not settings.SYNC_SERVER_SERVICE_TOKEN:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Service authentication not configured",
-            )
-
-        if service_token != settings.SYNC_SERVER_SERVICE_TOKEN:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid service token",
-            )
-
-        # Service identity doesn't have a specific user
-        # This is a placeholder that represents "system" identity
-        # In production, you might want to create a system user
-
-        # For now, return a minimal identity that represents system access
-        # This should only be used for legacy compatibility
-
-        from app.models.user import User
-        from uuid import uuid4
-
-        # Create a minimal system user representation
-        system_user = User(
-            id=uuid4(),
-            username="system",
-            email=None,
-            full_name="System",
-            user_token=uuid4(),
-            is_active=True,
-            is_root=True,
-            role="root",
-            default_site_id=None,
-        )
-
-        return Identity.from_user_and_device(
-            user=system_user,
-            device=None,
-            scopes=[],
-        )
-
     async def validate_identity_for_site(
         self,
         identity: Identity,
@@ -263,43 +197,3 @@ class IdentityService:
             return False
 
         return True
-
-    async def resolve_legacy_acting_user(
-        self,
-        acting_user_id: int,
-        acting_site_id: int,
-    ) -> Identity:
-        """
-        LEGACY: Resolve identity from legacy acting user/site IDs.
-        This is for backward compatibility during transition.
-
-        Args:
-            acting_user_id: Legacy integer user ID
-            acting_site_id: Legacy integer site ID
-
-        Returns:
-            Identity object
-
-        Raises:
-            HTTPException: if user not found or no access to site
-        """
-        # First, we need to find the user by legacy integer ID
-        # Since new User model uses UUID, we need a mapping or alternative
-
-        # This is a complex problem because:
-        # 1. Old user_id is integer, new User.id is UUID
-        # 2. We need to map between them or find another way
-
-        # For Phase 2, we'll implement a simplified version that
-        # demonstrates the concept but may not work in production
-
-        # Option 1: Search users by some other field (username, email)
-        # Option 2: Maintain a mapping table
-        # Option 3: Migrate all data to new UUID format
-
-        # For now, we'll raise an error indicating this needs implementation
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Legacy acting user resolution not implemented. "
-                   "Need to implement mapping between integer user_id and UUID.",
-        )

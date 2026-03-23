@@ -91,16 +91,13 @@ Example:
 - Repositories do not own business decisions
 - Token-based auth is the primary integration path
 - Root permissions are global; non-root permissions are site-scoped
-- Legacy endpoints remain compatibility-only and should not guide new work
 
 ## External Integrations
 - PostgreSQL database
 - Django-based admin / client integration over HTTP API
 - Device sync clients using token-authenticated sync endpoints
-- Optional legacy service-to-service integration via compatibility auth
 
 ## Future Architecture
-- Remove or further isolate legacy compatibility endpoints
 - Expand test coverage for end-to-end admin integration flows
-- Separate public client contracts from internal compatibility contracts more clearly
+- Keep public client contracts explicit and stable
 - Continue documenting stable architectural decisions in ADRs

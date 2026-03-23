@@ -5,7 +5,6 @@ from uuid import UUID
 from fastapi import HTTPException, status
 
 from app.models.user_access_scope import UserAccessScope
-from app.schemas.admin import UserSiteAccessCreate, UserSiteAccessUpdate
 from app.services.uow import UnitOfWork
 
 
@@ -13,14 +12,6 @@ ROLE_ROOT = "root"
 ROLE_CHIEF_STOREKEEPER = "chief_storekeeper"
 ROLE_STOREKEEPER = "storekeeper"
 ROLE_OBSERVER = "observer"
-
-ROLE_PRIORITY: dict[str, int] = {
-    ROLE_OBSERVER: 1,
-    ROLE_STOREKEEPER: 2,
-    ROLE_CHIEF_STOREKEEPER: 3,
-    ROLE_ROOT: 4,
-}
-
 
 class AccessService:
     """Domain access and permission service using new UserAccessScope model."""
@@ -32,26 +23,8 @@ class AccessService:
     def _has_global_business_access(user) -> bool:
         return user is not None and user.is_active and (user.is_root or user.role == ROLE_CHIEF_STOREKEEPER)
 
-    # ============================================================================
-    # USER VALIDATION
-    # ============================================================================
-
-    async def validate_acting_user(self, acting_user_id: int) -> None:
-        """LEGACY: Validate acting user (uses integer user_id)."""
-        # This is a legacy method that needs integer user_id
-        # In the new model, we should use UUID
-        # For backward compatibility, we try to find the user
-        
-        # First try to get by integer ID (legacy)
-        user = await self.uow.users.get(acting_user_id)
-        if user is None or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Acting user is not registered or inactive",
-            )
-
     async def validate_acting_user_uuid(self, acting_user_id: UUID) -> None:
-        """NEW: Validate acting user using UUID."""
+        """Validate acting user using UUID."""
         user = await self.uow.users.get_by_id(acting_user_id)
         if user is None or not user.is_active:
             raise HTTPException(
@@ -59,24 +32,8 @@ class AccessService:
                 detail="Acting user is not registered or inactive",
             )
 
-    # ============================================================================
-    # ROOT PERMISSIONS
-    # ============================================================================
-
-    async def validate_root_permission(self, acting_user_id: int) -> None:
-        """LEGACY: Validate root permission (uses integer user_id)."""
-        await self.validate_acting_user(acting_user_id)
-
-        # Get user by integer ID (legacy)
-        user = await self.uow.users.get(acting_user_id)
-        if not user or not user.is_root:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Root permission required",
-            )
-
     async def validate_root_permission_uuid(self, acting_user_id: UUID) -> None:
-        """NEW: Validate root permission using UUID."""
+        """Validate root permission using UUID."""
         await self.validate_acting_user_uuid(acting_user_id)
 
         user = await self.uow.users.get_by_id(acting_user_id)
@@ -170,158 +127,6 @@ class AccessService:
         """Check if user can manage root admin functions."""
         return await self.is_root(user_id)
 
-    # ============================================================================
-    # LEGACY COMPATIBILITY METHODS
-    # ============================================================================
-
-    async def get_user_site_role(
-        self,
-        user_id: int,
-        site_id: UUID,
-    ) -> str | None:
-        """
-        LEGACY: Get user's role at site (for backward compatibility).
-        Maps new granular permissions to old role-based model.
-        """
-        # This is complex because:
-        # 1. user_id is integer (legacy) but we need UUID
-        # 2. site_id is UUID but new model uses int
-        
-        # For Phase 2, we'll implement a simplified version
-        # that demonstrates the mapping concept
-        
-        # Step 1: Convert integer user_id to UUID (need mapping)
-        # Step 2: Convert UUID site_id to int (need mapping)
-        # Step 3: Check permissions and map to role
-        
-        # Since we don't have mapping tables yet, we'll return None
-        # This will cause legacy code to fail, which is intentional
-        # to force migration to new methods
-        
-        return None
-
-    async def has_site_role(
-        self,
-        user_id: int,
-        site_id: UUID,
-        role: str,
-    ) -> bool:
-        """LEGACY: Check if user has specific role at site."""
-        current_role = await self.get_user_site_role(user_id, site_id)
-        return current_role == role
-
-    async def has_minimum_site_role(
-        self,
-        user_id: int,
-        site_id: UUID,
-        minimum_role: str,
-    ) -> bool:
-        """LEGACY: Check if user has minimum role at site."""
-        current_role = await self.get_user_site_role(user_id, site_id)
-        if current_role is None:
-            return False
-
-        current_priority = ROLE_PRIORITY.get(current_role, 0)
-        minimum_priority = ROLE_PRIORITY.get(minimum_role, 0)
-        return current_priority >= minimum_priority
-
-    async def can_read_site(self, user_id: int, site_id: UUID) -> bool:
-        """LEGACY: Check if user can read site data."""
-        # Map to new model: can_read = can_view
-        # Need user_id and site_id conversion
-        return False  # Placeholder
-
-    async def can_create_operations(self, user_id: int, site_id: UUID) -> bool:
-        """LEGACY: Check if user can create operations."""
-        # Map to new model: can_create_operations = can_operate
-        return False  # Placeholder
-
-    async def can_manage_catalog_legacy(self, user_id: int, site_id: UUID) -> bool:
-        """LEGACY: Check if user can manage catalog."""
-        # Map to new model: can_manage_catalog = can_manage_catalog
-        return False  # Placeholder
-
-    # ============================================================================
-    # ADMIN METHODS (ROOT ONLY)
-    # ============================================================================
-
-    async def list_user_access_entries(self, acting_user_id: int) -> list[UserAccessScope]:
-        """LEGACY: List all access scopes (root only)."""
-        await self.validate_root_permission(acting_user_id)
-        return list(await self.uow.user_access_scopes.list_all_scopes())
-
-    async def create_user_site_access(
-        self,
-        acting_user_id: int,
-        payload: UserSiteAccessCreate,
-    ) -> UserAccessScope:
-        """LEGACY: Create user site access (uses legacy schemas)."""
-        await self.validate_root_permission(acting_user_id)
-
-        # Convert legacy payload to new model
-        # Need to map integer user_id to UUID
-        # Need to map UUID site_id to int
-        
-        # For Phase 2, we'll raise an error to force migration
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Legacy create_user_site_access not supported. "
-                   "Use new methods with UUID user_id and int site_id.",
-        )
-
-    async def update_user_site_access(
-        self,
-        acting_user_id: int,
-        access_id: int,
-        payload: UserSiteAccessUpdate,
-    ) -> UserAccessScope:
-        """LEGACY: Update user site access."""
-        await self.validate_root_permission(acting_user_id)
-
-        # This should update UserAccessScope, not UserSiteRole
-        scope = await self.uow.user_access_scopes.get_by_id(access_id)
-        if scope is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Access scope not found",
-            )
-
-        # Map legacy role updates to granular permissions
-        # This is complex and depends on business rules
-        
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Legacy update_user_site_access not supported. "
-                   "Use new methods with granular permissions.",
-        )
-
-    # ============================================================================
-    # PERMISSION SUMMARIES
-    # ============================================================================
-
-    async def get_user_permissions(
-        self,
-        user_id: int,
-        site_id: UUID,
-    ) -> dict[str, bool]:
-        """
-        LEGACY: Get comprehensive permissions for user at site.
-        Returns permissions in old format for backward compatibility.
-        """
-        # This is a legacy method that needs to be reimplemented
-        # using new model with proper type conversions
-        
-        # Placeholder implementation that returns minimal permissions
-        # This will cause legacy code to fail, forcing migration
-        
-        return {
-            "can_read_operations": False,
-            "can_create_operations": False,
-            "can_read_balances": False,
-            "can_manage_catalog": False,
-            "can_manage_root_admin": False,
-        }
-
     async def get_user_permissions_uuid(
         self,
         user_id: UUID,
@@ -362,7 +167,6 @@ class AccessService:
                 "is_root": False,
             }
 
-        # Map granular permissions to legacy permission names
         return {
             "can_read_operations": scope.can_view,
             "can_create_operations": scope.can_operate,

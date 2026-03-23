@@ -38,20 +38,12 @@ Used by:
 - `/ping`
 - `/push`
 - `/pull`
-- legacy `POST /catalog/items`
-- legacy `POST /catalog/categories`
-- legacy `POST /catalog/units`
 
 ### Optional auth context headers
 - `X-Device-Id: <device_id>`
   - optional on `/auth/me`, `/auth/context`, `/auth/sync-user`
 - `X-Site-Id: <site_id>`
   - required for `chief_storekeeper` on `/catalog/admin/*` as action context
-- `Authorization: Bearer <service_token>`
-  - legacy compatibility only, used by `/business/*`
-- `X-Acting-User-Id`
-- `X-Acting-Site-Id`
-  - legacy compatibility only, used by `/business/*`
 
 ### Common request header
 - `Content-Type: application/json`
@@ -61,8 +53,7 @@ Used by:
 | Mode | Real Header(s) | Where Used |
 |---|---|---|
 | User token | `X-User-Token` | primary app/admin/catalog/operations/balances |
-| Device token | `X-Device-Token` | sync and legacy catalog read |
-| Service token | `Authorization: Bearer ...` | legacy `/business/*` only |
+| Device token | `X-Device-Token` | sync routes and optional auth context |
 
 ## Endpoint Groups
 
@@ -204,18 +195,6 @@ Notes:
 | `GET` | `/health` | none | no body | health payload |
 | `GET` | `/ready` | none | no body | readiness payload |
 
-### Legacy Compatibility API
-
-| Method | Path | Auth | Request | Response |
-|---|---|---|---|---|
-| `POST` | `/catalog/items` | `X-Device-Token` + catalog headers | `CatalogRequest` | `CatalogItemsResponse` |
-| `POST` | `/catalog/categories` | `X-Device-Token` + catalog headers | `CatalogRequest` | `CatalogCategoriesResponse` |
-| `POST` | `/catalog/units` | `X-Device-Token` + catalog headers | `CatalogRequest` | `CatalogUnitsResponse` |
-| `POST` | `/business/catalog/items` | `Authorization: Bearer ...` + acting headers | compatibility payload | `CatalogItemsResponse` |
-| `POST` | `/business/catalog/categories` | `Authorization: Bearer ...` + acting headers | compatibility payload | `CatalogCategoriesResponse` |
-| `POST` | `/business/catalog/units` | `Authorization: Bearer ...` + acting headers | compatibility payload | `CatalogUnitsResponse` |
-| `GET` | `/business/catalog/categories/tree` | `Authorization: Bearer ...` + acting headers | no body | `list[CategoryTreeNode]` |
-
 ## Real Auth Rules
 - `root` = global authority
 - `chief_storekeeper` = global business supervisor across all sites
@@ -229,7 +208,6 @@ Verified in repository tests:
 - `POST /api/v1/ping`
 - `POST /api/v1/push`
 - `POST /api/v1/pull`
-- `POST /api/v1/catalog/items` (legacy device-auth read)
 - `GET /api/v1/catalog/read/items`
 - `GET /api/v1/catalog/read/categories`
 - `GET /api/v1/catalog/read/categories/{category_id}/items`
@@ -263,7 +241,6 @@ High-priority verification TODO:
 - dedicated tests for `/operations/*`
 - dedicated tests for `/balances*`
 - dedicated tests for `/health` and `/ready`
-- dedicated tests for `/business/*` legacy compatibility routes
 
 Documentation TODO:
 - keep `docs/API_REFERENCE.md` and this file in sync when routes change

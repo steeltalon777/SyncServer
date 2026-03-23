@@ -179,7 +179,7 @@ class UserSyncStateResponse(BaseModel):
     scopes: list[UserAccessScopeResponse]
 
 
-# Legacy names kept for route compatibility during migration
+# Alias names kept for stable route payloads
 class UserSiteAccessCreate(UserAccessScopeCreate):
     pass
 

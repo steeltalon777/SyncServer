@@ -26,7 +26,7 @@ class Event(Base):
         ForeignKey("devices.id"),
         nullable=True,
     )
-    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # legacy, not a FK
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # event payload actor id, intentionally not a FK
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     event_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     received_at: Mapped[datetime] = mapped_column(

@@ -14,11 +14,6 @@ Optional device context (auth endpoints):
 Device sync auth:
 - `X-Device-Token: <uuid>`
 
-Legacy compatibility headers (not primary):
-- `Authorization: Bearer <service_token>`
-- `X-Acting-User-Id`
-- `X-Acting-Site-Id`
-
 ## Error Model
 Most errors return FastAPI default:
 ```json
@@ -90,11 +85,6 @@ Read model (browse/UI, user token):
 - `GET /catalog/read/categories/{category_id}/children`
 - `GET /catalog/read/categories/{category_id}/parent-chain`
 
-Read (legacy compatibility):
-- `POST /catalog/items`
-- `POST /catalog/categories`
-- `POST /catalog/units`
-
 Admin:
 - `POST /catalog/admin/units`
 - `PATCH /catalog/admin/units/{unit_id}`
@@ -158,14 +148,6 @@ Access:
 ## Health
 - `GET /health`
 - `GET /ready`
-
-## Legacy Compatibility API
-- `POST /business/catalog/items`
-- `POST /business/catalog/categories`
-- `POST /business/catalog/units`
-- `GET /business/catalog/categories/tree`
-
-These are compatibility endpoints and should not be used for new clients.
 
 ## Postman Examples
 

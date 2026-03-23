@@ -23,7 +23,7 @@ This file maps the requested TZ requirements to current implementation status.
 - `items`: DONE
 - `events`: DONE
 - `balances`: DONE
-- `user_site_roles`: DONE
+- `user_access_scopes`: DONE
 
 Notes:
 - ORM maps existing tables, but app does not auto-migrate schema.

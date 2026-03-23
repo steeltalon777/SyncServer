@@ -10,7 +10,4 @@ Canonical client contract is maintained in:
   - `X-Device-Token` (device/sync context)
 - Access is evaluated server-side via `User.is_root` + `UserAccessScope`.
 - Business logic remains server-side.
-
-## Compatibility Note
-Legacy service/acting-user flows are compatibility-only and not the primary integration model.
-Use the token-based API paths for all new clients.
+- Use the documented token-based API paths for all clients.

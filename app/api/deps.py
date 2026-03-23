@@ -10,11 +10,9 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.identity import Identity
 from app.models.device import Device
-from app.services.access_service import AccessService
 from app.services.identity_service import IdentityService
 from app.services.uow import UnitOfWork
 
@@ -152,131 +150,6 @@ async def require_device_auth(
         client_version=client_version,
     )
     return device
-
-
-async def require_service_auth(
-    *,
-    request: Request,
-    authorization: str | None = Header(default=None),
-) -> None:
-    """
-    LEGACY COMPATIBILITY AUTH.
-    Service token is kept temporarily for endpoints not yet migrated
-    to X-User-Token / X-Device-Token.
-    """
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing authorization header",
-        )
-
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid authorization format, expected 'Bearer <token>'",
-        )
-
-    token = authorization[7:].strip()
-    settings = get_settings()
-
-    if not settings.SYNC_SERVER_SERVICE_TOKEN:
-        logger.warning("SYNC_SERVER_SERVICE_TOKEN is not configured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="service authentication not configured",
-        )
-
-    if token != settings.SYNC_SERVER_SERVICE_TOKEN:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid service token",
-        )
-
-
-async def require_acting_user(
-    *,
-    request: Request,
-    uow: UnitOfWork,
-    x_acting_user_id: str = Header(alias="X-Acting-User-Id"),
-    x_acting_site_id: str = Header(alias="X-Acting-Site-Id"),
-) -> dict[str, UUID | int | str | None]:
-    """
-    LEGACY COMPATIBILITY CONTEXT.
-    Acting-user headers are still accepted, but validation is performed
-    through the new model: User.is_root + UserAccessScope.
-    """
-    if not x_acting_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="missing acting user id",
-        )
-    if not x_acting_site_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="missing acting site id",
-        )
-
-    try:
-        user_uuid = UUID(str(x_acting_user_id))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="legacy integer acting_user_id is no longer supported in primary path",
-        ) from exc
-
-    try:
-        site_id_int = int(str(x_acting_site_id))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="legacy UUID acting_site_id is no longer supported in primary path",
-        ) from exc
-
-    access_service = AccessService(uow)
-    await access_service.validate_acting_user_uuid(user_uuid)
-
-    can_view = await access_service.can_view_site(user_uuid, site_id_int)
-    if not can_view:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="user does not have access to this site",
-        )
-
-    role = await access_service.get_user_role(user_uuid)
-    return {
-        "user_id": user_uuid,
-        "user_uuid": user_uuid,
-        "site_id": site_id_int,
-        "site_id_int": site_id_int,
-        "role": role,
-        "legacy_headers": True,
-    }
-
-
-async def auth_catalog_headers(
-    x_site_id: int = Header(alias="X-Site-Id"),
-    x_device_id: int = Header(alias="X-Device-Id"),
-    x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
-) -> dict[str, int | str | None]:
-    return {
-        "site_id": x_site_id,
-        "device_id": x_device_id,
-        "device_token": x_device_token,
-        "client_version": x_client_version,
-    }
-
-
-async def auth_service_headers(
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_acting_user_id: str | None = Header(default=None, alias="X-Acting-User-Id"),
-    x_acting_site_id: str | None = Header(default=None, alias="X-Acting-Site-Id"),
-) -> dict[str, str | None]:
-    return {
-        "authorization": authorization,
-        "acting_user_id": x_acting_user_id,
-        "acting_site_id": x_acting_site_id,
-    }
 
 
 async def enforce_rate_limit(request: Request, device_id: UUID, route_name: str) -> None:

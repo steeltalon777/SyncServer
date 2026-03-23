@@ -252,23 +252,3 @@ class AccessServiceV2:
             require_can_operate=require_can_operate,
             require_can_manage_catalog=require_can_manage_catalog,
         )
-
-    # Legacy compatibility methods for transition period
-    async def get_user_site_role_legacy(
-        self,
-        user_id: int,
-        site_id: UUID,
-    ) -> str | None:
-        """DEPRECATED: Legacy method for compatibility."""
-        # This maps new permissions to old roles
-        # In a real migration, you'd need to convert between models
-        raise NotImplementedError("Legacy method not supported in V2")
-
-    async def has_minimum_site_role_legacy(
-        self,
-        user_id: int,
-        site_id: UUID,
-        minimum_role: str,
-    ) -> bool:
-        """DEPRECATED: Legacy method for compatibility."""
-        raise NotImplementedError("Legacy method not supported in V2")

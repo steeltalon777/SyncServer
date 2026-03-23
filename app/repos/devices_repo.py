@@ -14,7 +14,7 @@ class DevicesRepo:
         self.session = session
 
     async def get_by_id(self, device_id: int | UUID | str) -> Device | None:
-        # Compatibility: tolerate string id in legacy flows.
+        # Accept numeric IDs from HTTP headers without extra parsing at call sites.
         if isinstance(device_id, str) and device_id.isdigit():
             device_id = int(device_id)
         result = await self.session.execute(select(Device).where(Device.id == device_id))
@@ -33,7 +33,7 @@ class DevicesRepo:
         return result.scalar_one_or_none()
 
     async def create(self, site_id: int | None, name: str | None = None) -> Device:
-        # Legacy compatibility: "name" maps to current "device_name".
+        # Keep the short "name" argument for repo callers and map it to device_name.
         device = Device(
             site_id=site_id,
             device_name=name or "Unnamed Device",

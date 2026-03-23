@@ -6,7 +6,6 @@ SyncServer is the backend source of truth for warehouse data: users, site access
 - Backend API for warehouse workflows and synchronization.
 - Stores authoritative business state in PostgreSQL.
 - Exposes token-based HTTP APIs for user clients, admin clients, and device sync clients.
-- Keeps legacy compatibility routes while the primary contract moves to `X-User-Token` / `X-Device-Token`.
 
 ## Architecture Overview
 Clients call FastAPI routes, routes validate/authenticate requests, services enforce business rules, repositories load/store state, and PostgreSQL remains the authoritative datastore.
@@ -65,7 +64,6 @@ Alternative container setup:
 - `balances` - read-only inventory balances
 - `sync` - device event synchronization
 - `health` - health and readiness
-- `business` - legacy compatibility routes
 
 ## API Overview
 Base prefix: `/api/v1`

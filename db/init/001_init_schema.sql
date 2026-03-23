@@ -101,10 +101,3 @@ CREATE TABLE IF NOT EXISTS balances (
     PRIMARY KEY (site_id, item_id)
 );
 
-
-CREATE TABLE IF NOT EXISTS user_site_roles (
-    user_id INTEGER NOT NULL,
-    site_id UUID NOT NULL REFERENCES sites(id),
-    role_code VARCHAR(64) NOT NULL,
-    PRIMARY KEY (user_id, site_id, role_code)
-);

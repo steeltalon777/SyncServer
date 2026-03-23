@@ -116,14 +116,18 @@
 - references `Site`
 - references `Item`
 
-## Entity: UserSiteRole
-**Description:** User authorization role per site (ORM-level model).
+## Entity: UserAccessScope
+**Description:** Per-site permissions for a user.
 
 **Fields:**
 - `id`
 - `user_id`
 - `site_id`
-- `role`
+- `can_view`
+- `can_operate`
+- `can_manage_catalog`
+- `is_active`
 
 **Relations:**
+- references `User`
 - references `Site`

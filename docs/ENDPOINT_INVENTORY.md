@@ -37,9 +37,6 @@ Base prefix: `/api/v1`
 - `GET /catalog/read/categories/{category_id}/items` - browse items scoped to one category
 - `GET /catalog/read/categories/{category_id}/children` - browse direct child categories
 - `GET /catalog/read/categories/{category_id}/parent-chain` - get parent chain summary for one category
-- `POST /catalog/items` - list items (legacy compatibility)
-- `POST /catalog/categories` - list categories (legacy compatibility)
-- `POST /catalog/units` - list units (legacy compatibility)
 
 ## Catalog Admin
 - `POST /catalog/admin/units` - create unit
@@ -72,9 +69,3 @@ Base prefix: `/api/v1`
 ## Health
 - `GET /health` - liveness
 - `GET /ready` - readiness + DB check
-
-## Legacy Compatibility (not primary)
-- `POST /business/catalog/items` - legacy catalog items read
-- `POST /business/catalog/categories` - legacy catalog categories read
-- `POST /business/catalog/units` - legacy catalog units read
-- `GET /business/catalog/categories/tree` - legacy category tree read

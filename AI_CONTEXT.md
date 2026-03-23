@@ -10,7 +10,6 @@
 - Put business rules and workflows in `app/services/`
 - Put only persistence/query logic in `app/repos/`
 - Use `UnitOfWork` for transaction-scoped access to repositories
-- Treat legacy compatibility endpoints as transitional, not canonical
 
 ## Database Rules
 - PostgreSQL is the source of persisted state
@@ -46,7 +45,7 @@
 ## Client Rules
 - Django admin / web clients should use token-based endpoints
 - Device clients use sync endpoints with `X-Device-Token`
-- New integrations should prefer `/api/v1` primary routes over legacy compatibility routes
+- New integrations should prefer documented `/api/v1` routes and avoid reviving removed compatibility paths
 
 ## Architecture Constraints
 - Root access is global via `User.is_root`
@@ -54,4 +53,4 @@
 - Catalog entities are global
 - `site_id` on some catalog reads is an access-context check, not a data partition
 - Operation lifecycle is constrained to `draft -> submitted -> cancelled`
-- Compatibility code exists and should be changed cautiously
+- Django auth may include optional device context on `/auth/*`

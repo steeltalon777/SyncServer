@@ -10,7 +10,6 @@ from app.api.exceptions import SyncServerException
 from app.api.routes_admin import router as admin_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_balances import router as balances_router
-from app.api.routes_business import router as business_router
 from app.api.routes_catalog import router as catalog_router
 from app.api.routes_catalog_admin import router as catalog_admin_router
 from app.api.routes_health import router as health_router
@@ -88,19 +87,16 @@ api_v1_prefix = "/api/v1"
 # Sync API (device auth only)
 app.include_router(sync_router, prefix=api_v1_prefix)
 
-# Catalog API (dual auth)
+# Catalog API (user token auth)
 app.include_router(catalog_router, prefix=api_v1_prefix)
 
-# Business API (service auth only)
-app.include_router(business_router, prefix=api_v1_prefix)
-
-# Operations API (service auth only)
+# Operations API (user token auth)
 app.include_router(operations_router, prefix=api_v1_prefix)
 
-# Balances API (service auth only)
+# Balances API (user token auth)
 app.include_router(balances_router, prefix=api_v1_prefix)
 
-# Catalog Admin API (service auth + role-based)
+# Catalog Admin API (user token auth + role-based)
 app.include_router(catalog_admin_router, prefix=api_v1_prefix)
 
 # Admin API (root only)

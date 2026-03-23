@@ -12,8 +12,8 @@ from app.models.base import Base
 class UserAccessScope(Base):
     """
     Defines a user's access scope to a specific site.
-    This replaces the old user_site_role model and allows
-    per-site granular permissions without binding the user's role to a single site.
+    Supports per-site granular permissions without binding the user's role
+    to a single site.
     """
     __tablename__ = "user_access_scopes"
 

@@ -128,24 +128,6 @@ class SitesRepo:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_user_sites_legacy(self, user_id: int) -> list[Site]:
-        """DEPRECATED: Legacy method using UserSiteRole. Use get_user_sites with UUID instead."""
-        from app.models.user_site_role import UserSiteRole
-
-        stmt = (
-            select(Site)
-            .join(UserSiteRole, Site.id == UserSiteRole.site_id)
-            .where(
-                and_(
-                    UserSiteRole.user_id == user_id,
-                    UserSiteRole.role.in_(["root", "chief_storekeeper", "storekeeper"]),
-                )
-            )
-            .order_by(Site.name)
-        )
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
     async def site_exists(self, site_id: UUID) -> bool:
         """Check if a site exists."""
         site = await self.get_by_id(site_id)

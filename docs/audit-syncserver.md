@@ -4,7 +4,6 @@
 - `POST /ping`: device auth + last seen update + `server_seq_upto` response.
 - `POST /push`: idempotent ingest (`accepted`/`duplicates`/`rejected`) with per-site sequence tracking.
 - `POST /pull`: incremental events by `(site_id, since_seq, limit)` ordered by `server_seq`.
-- `POST /catalog/items` and `POST /catalog/categories`: incremental catalog pages by `updated_after`.
 - `GET /`, `GET /health`, `GET /ready`, `GET /db_check`.
 
 ## Gaps found during audit
@@ -23,7 +22,7 @@ Minimum required for target flow `ping -> push -> pull` and catalog:
 
 Additional mapped but not required for transport-only sync loop:
 - `balances`
-- `user_site_roles`
+- `user_access_scopes`
 
 ## Blocking issues for full flow before fix
 - Fresh environment had no schema bootstrap path.
