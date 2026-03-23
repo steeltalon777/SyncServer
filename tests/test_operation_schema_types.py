@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
@@ -42,3 +44,13 @@ def test_adjustment_allows_negative_qty() -> None:
 def test_all_operations_reject_zero_qty() -> None:
     with pytest.raises(ValidationError):
         OperationCreate.model_validate(_base_payload("ADJUSTMENT", 0))
+
+
+def test_operation_create_accepts_optional_effective_at() -> None:
+    effective_at = datetime(2026, 1, 15, 10, 30, tzinfo=timezone.utc)
+    payload = _base_payload("RECEIVE", 3)
+    payload["effective_at"] = effective_at.isoformat()
+
+    model = OperationCreate.model_validate(payload)
+
+    assert model.effective_at == effective_at

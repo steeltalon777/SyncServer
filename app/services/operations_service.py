@@ -136,6 +136,7 @@ class OperationsService:
         operation = await uow.operations.create_operation(
             site_id=operation_data.site_id,
             operation_type=operation_data.operation_type,
+            effective_at=operation_data.effective_at,
             source_site_id=operation_data.source_site_id,
             destination_site_id=operation_data.destination_site_id,
             issued_to_user_id=operation_data.issued_to_user_id,
@@ -196,6 +197,7 @@ class OperationsService:
         updated = await uow.operations.update_operation(
             operation_id=operation_id,
             notes=update_data.notes,
+            effective_at=update_data.effective_at,
             source_site_id=source_site_id,
             destination_site_id=destination_site_id,
             issued_to_user_id=update_data.issued_to_user_id,

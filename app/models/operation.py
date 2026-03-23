@@ -81,6 +81,11 @@ class Operation(Base):
         onupdate=func.now(),
     )
 
+    effective_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     submitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
