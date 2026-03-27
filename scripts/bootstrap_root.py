@@ -1,7 +1,13 @@
 import asyncio
+import sys
 import uuid
+from pathlib import Path
 
 from sqlalchemy import select
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
 from app.core.db import SessionFactory, engine
