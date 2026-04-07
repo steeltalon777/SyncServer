@@ -67,6 +67,7 @@ Alternative container setup:
 - `catalog/admin` - catalog mutations
 - `operations` - warehouse operation lifecycle
 - `balances` - read-only inventory balances
+- `machine` - machine-oriented snapshots/read/analysis/reports/batches
 - `sync` - device event synchronization
 - `health` - health and readiness
 
@@ -80,6 +81,7 @@ Primary auth:
 Primary documentation:
 - [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
 - [docs/ENDPOINT_INVENTORY.md](docs/ENDPOINT_INVENTORY.md)
+- [docs/MACHINE_API_STAGE1.md](docs/MACHINE_API_STAGE1.md)
 
 ## Canonical Architecture Docs
 - [ARCHITECTURE.md](ARCHITECTURE.md)

@@ -20,11 +20,18 @@ from app.schemas.catalog import (
 from app.services.uow import UnitOfWork
 
 
+def _normalize_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return " ".join(value.strip().lower().split())
+
+
 class CatalogAdminService:
     async def create_unit(self, uow: UnitOfWork, payload: UnitCreateRequest) -> Unit:
         await self._ensure_unit_unique(uow, name=payload.name, symbol=payload.symbol)
 
         unit = Unit(
+            code=payload.symbol.upper(),
             name=payload.name,
             symbol=payload.symbol,
             sort_order=payload.sort_order,
@@ -47,7 +54,10 @@ class CatalogAdminService:
             existing = await uow.catalog.get_unit_by_symbol(payload.symbol)
             if existing is not None and existing.id != unit.id:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="unit symbol already exists")
+            previous_symbol = unit.symbol
             unit.symbol = payload.symbol
+            if unit.code is None or unit.code == previous_symbol.upper():
+                unit.code = payload.symbol.upper()
 
         if payload.sort_order is not None:
             unit.sort_order = payload.sort_order
@@ -71,6 +81,7 @@ class CatalogAdminService:
 
         category = Category(
             name=payload.name,
+            normalized_name=_normalize_text(payload.name),
             code=payload.code,
             parent_id=payload.parent_id,
             sort_order=payload.sort_order,
@@ -108,6 +119,7 @@ class CatalogAdminService:
 
         if payload.name is not None:
             category.name = payload.name
+            category.normalized_name = _normalize_text(payload.name)
         if "code" in payload.model_fields_set:
             category.code = payload.code
         if "sort_order" in payload.model_fields_set:
@@ -125,6 +137,7 @@ class CatalogAdminService:
         item = Item(
             sku=payload.sku,
             name=payload.name,
+            normalized_name=_normalize_text(payload.name),
             category_id=category.id,
             unit_id=payload.unit_id,
             description=payload.description,
@@ -154,6 +167,7 @@ class CatalogAdminService:
 
         if payload.name is not None:
             item.name = payload.name
+            item.normalized_name = _normalize_text(payload.name)
         if "category_id" in payload.model_fields_set:
             item.category_id = category_id
         if payload.unit_id is not None:
@@ -206,6 +220,7 @@ class CatalogAdminService:
 
         category = Category(
             name=UNCATEGORIZED_CATEGORY_NAME,
+            normalized_name=_normalize_text(UNCATEGORIZED_CATEGORY_NAME),
             code=UNCATEGORIZED_CATEGORY_CODE,
             parent_id=None,
             sort_order=None,

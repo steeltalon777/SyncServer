@@ -300,6 +300,10 @@ class CatalogRepo:
         result = await self.session.execute(select(Unit).where(Unit.symbol == symbol))
         return result.scalar_one_or_none()
 
+    async def get_unit_by_code(self, code: str) -> Unit | None:
+        result = await self.session.execute(select(Unit).where(Unit.code == code))
+        return result.scalar_one_or_none()
+
     async def update_unit(self, unit: Unit) -> Unit:
         await self.session.flush()
         await self.session.refresh(unit)

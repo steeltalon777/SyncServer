@@ -169,6 +169,72 @@ Rules:
 - `total_quantity`
 - `last_balance_at`
 
+## Machine API
+Namespace:
+- `/machine/snapshots/*`
+- `/machine/read/*`
+- `/machine/analysis/*`
+- `/machine/batches/*`
+- `/machine/reports/*`
+
+Auth and roles:
+- same tokens as existing contour: `X-User-Token` and `X-Device-Token`
+- read endpoints are available for `observer`, `storekeeper`, `chief_storekeeper`, `root`
+- batch preview/apply is restricted to users with matching write permissions
+- observer cannot apply catalog/operations machine batches
+
+Cross-cutting fields in JSON responses:
+- `request_id`
+- `schema_version` (current: `2026-04-07`)
+- `snapshot_id` (for read/analysis responses)
+
+Snapshots:
+- `GET /machine/snapshots/latest`
+- `GET /machine/snapshots/{snapshot_id}`
+
+Machine read-model endpoints:
+- `GET /machine/read/catalog/items`
+- `GET /machine/read/catalog/categories`
+- `GET /machine/read/catalog/units`
+- `GET /machine/read/operations`
+- `GET /machine/read/operations/{operation_id}`
+
+Supported query params for machine read:
+- `snapshot_id` (optional; if omitted, server creates a snapshot)
+- `cursor`
+- `limit`
+- `fields`
+- `format=json|jsonl`
+
+Analysis endpoints:
+- `GET /machine/analysis/duplicate-candidates/items`
+- `GET /machine/analysis/duplicate-candidates/categories`
+- `GET /machine/analysis/integrity-issues`
+
+Machine reports:
+- `POST /machine/reports`
+- `GET /machine/reports/{report_id}`
+- `GET /machine/reports/{report_id}/result`
+
+Catalog batch endpoints:
+- `POST /machine/batches/catalog/preview`
+- `POST /machine/batches/catalog/apply`
+
+Operations batch endpoints:
+- `POST /machine/batches/operations/preview`
+- `POST /machine/batches/operations/apply`
+
+Machine batch notes:
+- preview is idempotent via `idempotency_key`
+- apply accepts `batch_id` + `plan_id`
+- stage 1 mode is atomic only
+- operations batch supports:
+  - `operation.create_draft`
+  - `operation.update_draft`
+  - `operation.submit`
+  - `operation.cancel`
+  - update/submit/cancel actions require `expected_version` (optimistic lock)
+
 ## Sync API (device)
 - `POST /ping`
 - `POST /push`

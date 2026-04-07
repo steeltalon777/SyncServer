@@ -56,6 +56,16 @@ from app.schemas.operation import (
     OperationSubmit,
     OperationUpdate,
 )
+from app.schemas.machine import (
+    MachineAnalysisResponse,
+    MachineBatchApplyRequest,
+    MachineBatchEnvelope,
+    MachineBatchResponse,
+    MachineReadResponse,
+    MachineReportCreateRequest,
+    MachineReportResponse,
+    MachineSnapshotResponse,
+)
 from app.schemas.report import (
     ItemMovementFilter,
     ItemMovementReportResponse,
@@ -98,6 +108,14 @@ __all__ = [
     "OperationLineResponse",
     "OperationListResponse",
     "OperationFilter",
+    "MachineSnapshotResponse",
+    "MachineReadResponse",
+    "MachineAnalysisResponse",
+    "MachineReportCreateRequest",
+    "MachineReportResponse",
+    "MachineBatchEnvelope",
+    "MachineBatchApplyRequest",
+    "MachineBatchResponse",
     "ItemMovementRow",
     "ItemMovementReportResponse",
     "ItemMovementFilter",

@@ -12,8 +12,10 @@ class Unit(Base):
     __tablename__ = "units"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str | None] = mapped_column(String(50), nullable=True, unique=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+    machine_last_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -33,5 +35,6 @@ class Unit(Base):
     )
 
     __table_args__ = (
+        Index("ix_units_code", "code"),
         Index("ix_units_updated_at", "updated_at"),
     )

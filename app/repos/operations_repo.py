@@ -35,6 +35,7 @@ class OperationsRepo:
             site_id=site_id,
             operation_type=operation_type,
             status="draft",
+            version=1,
             effective_at=effective_at,
             source_site_id=source_site_id,
             destination_site_id=destination_site_id,
@@ -85,6 +86,7 @@ class OperationsRepo:
         if fields_set is not None and "issued_to_name" in fields_set:
             operation.issued_to_name = issued_to_name
 
+        operation.version = int(operation.version) + 1
         await self.session.flush()
         return operation
 
@@ -99,6 +101,7 @@ class OperationsRepo:
             operation.status = "submitted"
             operation.submitted_by_user_id = submitted_by_user_id
             operation.submitted_at = submitted_at or datetime.now(UTC)
+            operation.version = int(operation.version) + 1
             await self.session.flush()
         return await self.get_operation_by_id(operation_id)
         return operation
@@ -114,6 +117,7 @@ class OperationsRepo:
             operation.status = "cancelled"
             operation.cancelled_by_user_id = cancelled_by_user_id
             operation.cancelled_at = cancelled_at or datetime.now(UTC)
+            operation.version = int(operation.version) + 1
             await self.session.flush()
         return await self.get_operation_by_id(operation_id)
         return operation

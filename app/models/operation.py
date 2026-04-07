@@ -107,6 +107,13 @@ class Operation(Base):
     )
 
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="1",
+        default=1,
+    )
+    machine_last_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     lines: Mapped[list["OperationLine"]] = relationship(
         "OperationLine",

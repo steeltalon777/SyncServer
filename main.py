@@ -13,6 +13,7 @@ from app.api.routes_balances import router as balances_router
 from app.api.routes_catalog import router as catalog_router
 from app.api.routes_catalog_admin import router as catalog_admin_router
 from app.api.routes_health import router as health_router
+from app.api.routes_machine import router as machine_router
 from app.api.routes_operations import router as operations_router
 from app.api.routes_reports import router as reports_router
 from app.api.routes_sync import router as sync_router
@@ -60,6 +61,12 @@ async def sync_server_exception_handler(request: Request, exc: SyncServerExcepti
     if exc.details:
         error_body["error"]["details"] = exc.details
 
+    request_id = getattr(request.state, "request_id", "")
+    if request_id:
+        error_body["request_id"] = request_id
+    if request.url.path.startswith("/api/v1/machine"):
+        error_body["schema_version"] = "2026-04-07"
+
     return JSONResponse(
         status_code=exc.status_code,
         content=error_body,
@@ -99,6 +106,9 @@ app.include_router(balances_router, prefix=api_v1_prefix)
 
 # Reports API (user token auth)
 app.include_router(reports_router, prefix=api_v1_prefix)
+
+# Machine API (user/device token auth, role-based)
+app.include_router(machine_router, prefix=api_v1_prefix)
 
 # Catalog Admin API (user token auth + role-based)
 app.include_router(catalog_admin_router, prefix=api_v1_prefix)

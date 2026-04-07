@@ -13,12 +13,14 @@ class Category(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     parent_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("categories.id"),
         nullable=True,
     )
+    machine_last_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -42,6 +44,7 @@ class Category(Base):
 
     __table_args__ = (
         UniqueConstraint("parent_id", "name", name="uq_categories_parent_name"),
+        Index("ix_categories_normalized_name", "normalized_name"),
         Index("ix_categories_parent_id", "parent_id"),
         Index("ix_categories_updated_at", "updated_at"),
     )
