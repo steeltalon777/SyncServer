@@ -1,12 +1,16 @@
-﻿import os
+import os
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
+from dotenv import load_dotenv
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.models import Base
+
+load_dotenv()
 
 
 def _test_database_url() -> str:
@@ -21,10 +25,10 @@ def test_db_url() -> str:
     return _test_database_url()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def session_factory(test_db_url: str) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     schema = f"test_sync_{uuid4().hex[:8]}"
-    admin_engine = create_async_engine(test_db_url)
+    admin_engine = create_async_engine(test_db_url, poolclass=NullPool)
 
     async with admin_engine.begin() as conn:
         await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -32,6 +36,7 @@ async def session_factory(test_db_url: str) -> AsyncIterator[async_sessionmaker[
     engine = create_async_engine(
         test_db_url,
         connect_args={"server_settings": {"search_path": schema}},
+        poolclass=NullPool,
     )
 
     async with engine.begin() as conn:

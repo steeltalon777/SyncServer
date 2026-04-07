@@ -55,6 +55,11 @@ Alternative container setup:
 - OpenAPI JSON: `/api/openapi.json`
 - Existing databases: after expanding supported operation types, run `python scripts/migrate_operation_constraints.py` once to refresh operation check constraints.
 
+## Database Migrations
+- Fresh database: `python -m alembic upgrade head`
+- Existing database that already matches the current schema baseline: `python -m alembic stamp head`
+- Alembic reads the connection string from `.env` through `app.core.config`, so `DATABASE_URL` remains the single source of truth.
+
 ## Main Modules
 - `auth` - user bootstrap, session context, available sites
 - `admin` - users, sites, scopes, devices, roles

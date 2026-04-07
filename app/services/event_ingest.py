@@ -27,7 +27,7 @@ class EventIngestService:
     def __init__(self, events_repo: EventsRepo):
         self.events_repo = events_repo
 
-    async def process_event(self, site_id: UUID, device_id: UUID | None, event_in: EventIn) -> ProcessResult:
+    async def process_event(self, site_id: int, device_id: int | None, event_in: EventIn) -> ProcessResult:
         existing = await self.events_repo.get_by_uuid(event_in.event_uuid)
         payload = event_in.payload.model_dump(mode="json")
         payload_hash = self.events_repo.compute_payload_hash(payload)

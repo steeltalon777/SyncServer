@@ -7,6 +7,7 @@ from app.repos.catalog_repo import CatalogRepo
 from app.repos.devices_repo import DevicesRepo
 from app.repos.events_repo import EventsRepo
 from app.repos.operations_repo import OperationsRepo
+from app.repos.reports_repo import ReportsRepo
 from app.repos.sites_repo import SitesRepo
 from app.repos.user_access_scopes_repo import UserAccessScopesRepo
 from app.repos.users_repo import UsersRepo
@@ -25,6 +26,7 @@ class UnitOfWork:
         self.balances = BalancesRepo(session)
         self.user_access_scopes = UserAccessScopesRepo(session)
         self.operations = OperationsRepo(session)
+        self.reports = ReportsRepo(session)
         self.users = UsersRepo(session)
 
     async def __aenter__(self) -> "UnitOfWork":

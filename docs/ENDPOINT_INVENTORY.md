@@ -61,6 +61,10 @@ Base prefix: `/api/v1`
 - `GET /balances/by-site` - list balances for one site
 - `GET /balances/summary` - aggregated balances summary
 
+## Reports
+- `GET /reports/item-movement` - aggregated item movement by site and item for a period
+- `GET /reports/stock-summary` - aggregated current balance summary by site
+
 ## Sync
 - `POST /ping` - device heartbeat and seq status
 - `POST /push` - upload events

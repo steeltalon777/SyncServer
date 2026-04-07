@@ -3,6 +3,7 @@ from app.repos.catalog_repo import CatalogRepo
 from app.repos.devices_repo import DevicesRepo
 from app.repos.events_repo import EventsRepo
 from app.repos.operations_repo import OperationsRepo
+from app.repos.reports_repo import ReportsRepo
 from app.repos.sites_repo import SitesRepo
 from app.repos.user_access_scopes_repo import UserAccessScopesRepo
 from app.repos.users_repo import UsersRepo
@@ -16,4 +17,5 @@ __all__ = [
     "UserAccessScopesRepo",
     "UsersRepo",
     "OperationsRepo",
+    "ReportsRepo",
 ]

@@ -140,6 +140,35 @@ Access:
 - `category_id`, `category_name`
 - `qty`, `updated_at`
 
+## Reports API (read-only)
+- `GET /reports/item-movement`
+- `GET /reports/stock-summary`
+
+Access:
+- root: all sites
+- chief_storekeeper: all sites as global business supervisor
+- storekeeper/observer: only active `UserAccessScope` with `can_view=true`
+
+`GET /reports/item-movement` returns aggregated rows with:
+- `site_id`, `site_name`
+- `item_id`, `item_name`, `sku`
+- `unit_id`, `unit_symbol`
+- `category_id`, `category_name`
+- `incoming_qty`, `outgoing_qty`, `net_qty`
+- `last_operation_at`
+
+Rules:
+- only `submitted` operations participate in movement reports
+- report period uses `effective_at` when present, otherwise falls back to `created_at`
+- movement is grouped by `(site_id, item_id)` so internal `MOVE` operations appear as outgoing on source and incoming on destination
+
+`GET /reports/stock-summary` returns grouped current-balance aggregates per site:
+- `site_id`, `site_name`
+- `items_count`
+- `positive_items_count`
+- `total_quantity`
+- `last_balance_at`
+
 ## Sync API (device)
 - `POST /ping`
 - `POST /push`
@@ -231,6 +260,16 @@ Body:
 
 ### 3) Balances summary
 `GET /api/v1/balances/summary`
+Headers:
+- `X-User-Token: {{user_token}}`
+
+### 3.1) Item movement report for dashboard/documents
+`GET /api/v1/reports/item-movement?site_id=1&date_from=2026-01-01T00:00:00Z&date_to=2026-01-31T23:59:59Z&page=1&page_size=50`
+Headers:
+- `X-User-Token: {{user_token}}`
+
+### 3.2) Stock summary report
+`GET /api/v1/reports/stock-summary?page=1&page_size=50`
 Headers:
 - `X-User-Token: {{user_token}}`
 

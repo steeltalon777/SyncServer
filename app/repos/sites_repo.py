@@ -1,7 +1,5 @@
 ﻿from __future__ import annotations
 
-from uuid import UUID
-
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +14,7 @@ class SitesRepo:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_by_id(self, site_id: UUID) -> Site | None:
+    async def get_by_id(self, site_id: int) -> Site | None:
         result = await self.session.execute(select(Site).where(Site.id == site_id))
         return result.scalar_one_or_none()
 
@@ -44,7 +42,7 @@ class SitesRepo:
 
     async def update_site(
         self,
-        site_id: UUID,
+        site_id: int,
         name: str | None = None,
         code: str | None = None,
         description: str | None = None,
@@ -67,7 +65,7 @@ class SitesRepo:
     async def list_sites(
         self,
         filter: SiteFilter,
-        user_site_ids: list[UUID] | None = None,
+        user_site_ids: list[int] | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> tuple[list[Site], int]:
@@ -128,7 +126,7 @@ class SitesRepo:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def site_exists(self, site_id: UUID) -> bool:
+    async def site_exists(self, site_id: int) -> bool:
         """Check if a site exists."""
         site = await self.get_by_id(site_id)
         return site is not None

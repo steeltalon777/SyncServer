@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
+from app.core.catalog_defaults import (
+    UNCATEGORIZED_CATEGORY_CODE,
+    UNCATEGORIZED_CATEGORY_NAME,
+)
 from app.models.category import Category
 from app.models.item import Item
 from app.models.unit import Unit
@@ -125,6 +128,7 @@ class CatalogAdminService:
             category_id=category.id,
             unit_id=payload.unit_id,
             description=payload.description,
+            hashtags=payload.hashtags,
             is_active=payload.is_active,
         )
         return await uow.catalog.create_item(item)
@@ -156,6 +160,8 @@ class CatalogAdminService:
             item.unit_id = payload.unit_id
         if "description" in payload.model_fields_set:
             item.description = payload.description
+        if "hashtags" in payload.model_fields_set:
+            item.hashtags = payload.hashtags
         if payload.is_active is not None:
             item.is_active = payload.is_active
 

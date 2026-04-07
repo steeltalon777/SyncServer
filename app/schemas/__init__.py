@@ -56,6 +56,14 @@ from app.schemas.operation import (
     OperationSubmit,
     OperationUpdate,
 )
+from app.schemas.report import (
+    ItemMovementFilter,
+    ItemMovementReportResponse,
+    ItemMovementRow,
+    StockSummaryFilter,
+    StockSummaryReportResponse,
+    StockSummaryRow,
+)
 from app.schemas.sync import (
     PingRequest,
     PingResponse,
@@ -90,6 +98,12 @@ __all__ = [
     "OperationLineResponse",
     "OperationListResponse",
     "OperationFilter",
+    "ItemMovementRow",
+    "ItemMovementReportResponse",
+    "ItemMovementFilter",
+    "StockSummaryRow",
+    "StockSummaryReportResponse",
+    "StockSummaryFilter",
     "BalanceResponse",
     "BalanceListResponse",
     "BalanceSummaryResponse",

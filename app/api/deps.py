@@ -152,7 +152,7 @@ async def require_device_auth(
     return device
 
 
-async def enforce_rate_limit(request: Request, device_id: UUID, route_name: str) -> None:
+async def enforce_rate_limit(request: Request, device_id: int | str, route_name: str) -> None:
     ip = get_client_ip(request)
 
     if route_name == "ping":

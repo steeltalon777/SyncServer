@@ -180,6 +180,20 @@ Notes:
 - `/balances` returns UI-ready rows with site/item/category/unit labels, not only raw `(site_id, item_id, qty)`
 - `category_id`, `search`, `only_positive`, pagination and total count are applied on the server side
 
+### Reports API
+
+| Method | Path | Auth | Request | Response |
+|---|---|---|---|---|
+| `GET` | `/reports/item-movement` | `X-User-Token` | query: `site_id`, `item_id`, `category_id`, `search`, `date_from`, `date_to`, `page`, `page_size` | `{items, total_count, page, page_size, date_from, date_to}` |
+| `GET` | `/reports/stock-summary` | `X-User-Token` | query: `site_id`, `category_id`, `search`, `only_positive`, `page`, `page_size` | `{items, total_count, page, page_size}` |
+
+Notes:
+- Read roles: `root`, `chief_storekeeper`, `storekeeper`, `observer`
+- Reports inherit the same site-visibility rules as `/balances`
+- `/reports/item-movement` uses `effective_at`, with fallback to `created_at`, as the report date dimension
+- `/reports/item-movement` returns server-side aggregated incoming/outgoing/net movement grouped by `(site_id, item_id)`
+- `/reports/stock-summary` returns current balance aggregates grouped by site
+
 ### Device Sync API
 
 | Method | Path | Auth | Request | Response |
@@ -213,6 +227,8 @@ Verified in repository tests:
 - `GET /api/v1/catalog/read/categories/{category_id}/items`
 - `GET /api/v1/catalog/read/categories/{category_id}/children`
 - `GET /api/v1/catalog/read/categories/{category_id}/parent-chain`
+- `GET /api/v1/reports/item-movement`
+- `GET /api/v1/reports/stock-summary`
 - `POST /api/v1/catalog/admin/units`
 - `POST /api/v1/catalog/admin/categories`
 - `POST /api/v1/catalog/admin/items`
@@ -227,6 +243,7 @@ Verified in repository tests:
 Verification sources:
 - `tests/test_http_sync.py`
 - `tests/test_auth_routes.py`
+- `tests/test_reports_read_model.py`
 - `tests/test_user_admin_flow.py`
 
 ## TODO
@@ -240,6 +257,7 @@ High-priority verification TODO:
 - dedicated tests for browse/read-model include validation edge cases
 - dedicated tests for `/operations/*`
 - dedicated tests for `/balances*`
+- dedicated tests for `/reports*`
 - dedicated tests for `/health` and `/ready`
 
 Documentation TODO:

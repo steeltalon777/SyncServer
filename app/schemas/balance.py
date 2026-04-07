@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer
 
 from app.schemas.common import ORMBaseModel
 
@@ -22,6 +22,14 @@ class BalanceResponse(ORMBaseModel):
     category_name: str
     qty: Decimal = Field(validation_alias=AliasChoices("qty", "quantity"))
     updated_at: datetime
+
+    @field_serializer("qty")
+    def serialize_qty(self, value: Decimal) -> str:
+        text = format(value.normalize(), "f")
+        if "." not in text:
+            return text
+        stripped = text.rstrip("0").rstrip(".")
+        return stripped or "0"
 
 
 class BalanceListResponse(ORMBaseModel):

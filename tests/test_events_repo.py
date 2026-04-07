@@ -15,9 +15,16 @@ from app.services.uow import UnitOfWork
 
 
 async def _seed_site_device(session: AsyncSession) -> tuple[Site, Device]:
-    site = Site(id=uuid4(), code=f"S-{uuid4().hex[:6]}", name="Test Site")
-    device = Device(id=uuid4(), site_id=site.id, registration_token=uuid4(), name="Test Device")
+    site = Site(code=f"S-{uuid4().hex[:6]}", name="Test Site")
     session.add(site)
+    await session.flush()
+
+    device = Device(
+        site_id=site.id,
+        device_code=f"device-{uuid4().hex[:8]}",
+        device_name="Test Device",
+        device_token=uuid4(),
+    )
     session.add(device)
     await session.flush()
     return site, device

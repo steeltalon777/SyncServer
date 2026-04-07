@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -30,6 +31,11 @@ class Item(Base):
         nullable=False,
         server_default="true",
     )
+    hashtags: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=list,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -49,4 +55,5 @@ class Item(Base):
         Index("ix_items_category_id", "category_id"),
         Index("ix_items_unit_id", "unit_id"),
         Index("ix_items_updated_at", "updated_at"),
+        Index("idx_items_hashtags", "hashtags", postgresql_using="gin"),
     )

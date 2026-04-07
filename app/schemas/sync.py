@@ -1,4 +1,4 @@
-﻿from datetime import UTC, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -11,7 +11,7 @@ ReasonCode = Literal["uuid_collision", "processing_error", "validation_error"]
 
 
 class EventLine(BaseModel):
-    item_id: UUID
+    item_id: int
     qty: Decimal = Field(max_digits=18, decimal_places=3)
     batch: str | None = None
 
@@ -32,8 +32,8 @@ class EventIn(BaseModel):
 
 
 class PushRequest(BaseModel):
-    site_id: UUID
-    device_id: UUID
+    site_id: int
+    device_id: int
     batch_id: UUID
     events: list[EventIn] = Field(default_factory=list)
 
@@ -63,8 +63,8 @@ class PushResponse(ORMBaseModel):
 
 
 class PingRequest(BaseModel):
-    site_id: UUID
-    device_id: UUID
+    site_id: int
+    device_id: int
     last_server_seq: int | None = None
     outbox_count: int = 0
     client_time: datetime | None = None
@@ -77,8 +77,8 @@ class PingResponse(ORMBaseModel):
 
 
 class PullRequest(BaseModel):
-    site_id: UUID
-    device_id: UUID
+    site_id: int
+    device_id: int
     since_seq: int = 0
     limit: int = Field(default=200, ge=1, le=1000)
 

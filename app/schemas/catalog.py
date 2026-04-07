@@ -28,6 +28,7 @@ class ItemDto(ORMBaseModel):
     unit_id: int
     description: str | None = None
     is_active: bool
+    hashtags: list[str] | None = None
     updated_at: datetime
 
 
@@ -184,6 +185,7 @@ class ItemCreateRequest(BaseModel):
     category_id: int | None = None
     unit_id: int
     description: str | None = None
+    hashtags: list[str] | None = None
     is_active: bool = True
 
     @field_validator("category_id", mode="before")
@@ -200,6 +202,7 @@ class ItemUpdateRequest(BaseModel):
     category_id: int | None = None
     unit_id: int | None = None
     description: str | None = None
+    hashtags: list[str] | None = None
     is_active: bool | None = None
 
     @field_validator("category_id", mode="before")
@@ -218,6 +221,7 @@ class ItemResponse(ORMBaseModel):
     unit_id: int
     description: str | None = None
     is_active: bool
+    hashtags: list[str] | None = None
     created_at: datetime
     updated_at: datetime
 

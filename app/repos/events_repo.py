@@ -24,7 +24,7 @@ class EventsRepo:
         await self.session.flush()
         return event
 
-    async def pull(self, site_id: UUID, since_seq: int, limit: int) -> list[Event]:
+    async def pull(self, site_id: int, since_seq: int, limit: int) -> list[Event]:
         stmt = (
             select(Event)
             .where(and_(Event.site_id == site_id, Event.server_seq > since_seq))
@@ -34,7 +34,7 @@ class EventsRepo:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_max_server_seq(self, site_id: UUID) -> int:
+    async def get_max_server_seq(self, site_id: int) -> int:
         stmt = select(Event.server_seq).where(Event.site_id == site_id).order_by(Event.server_seq.desc()).limit(1)
         result = await self.session.execute(stmt)
         max_seq = result.scalar_one_or_none()

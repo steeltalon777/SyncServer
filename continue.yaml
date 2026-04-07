@@ -1,0 +1,250 @@
+name: DeepSeek Agent RU
+version: 1.1.0
+schema: v1
+
+models:
+  - name: DeepSeek Main
+    provider: deepseek
+    model: deepseek-reasoner
+    apiKey: ${{ secrets.DEEPSEEK_API_KEY }}
+    roles:
+      - chat
+      - edit
+      - apply
+    defaultCompletionOptions:
+      temperature: 0.2
+      maxTokens: 8192
+      topP: 0.95
+
+  - name: DeepSeek Fast
+    provider: deepseek
+    model: deepseek-chat
+    apiKey: ${{ secrets.DEEPSEEK_API_KEY }}
+    roles:
+      - autocomplete
+    defaultCompletionOptions:
+      temperature: 0.1
+      maxTokens: 256
+      topP: 0.9
+
+context:
+  - provider: code
+    params:
+      autoInclude: true
+      maxPrefixLines: 140
+      maxSuffixLines: 140
+
+  - provider: docs
+  - provider: diff
+
+  - provider: terminal
+    params:
+      maxLines: 120
+
+  - provider: problems
+    params:
+      autoInclude: true
+
+  - provider: folder
+    params:
+      maxDepth: 4
+
+  - provider: open
+
+rules:
+  - name: environment
+    rule: |
+      Runtime environment: Windows, shell: PowerShell.
+      All terminal commands MUST be PowerShell-compatible.
+      Do NOT use bash syntax or commands (&&, ||, rm, mv, cp, export, chmod, grep).
+
+      Use UTF-8 encoding without BOM.
+      In terminal commands and output, use ASCII only.
+      Do NOT use emojis, decorative Unicode symbols, or non-standard characters.
+
+      Stay strictly within the current project directory.
+      Do NOT modify .env, docker, CI/CD, secrets, or system files unless explicitly required.
+
+  - name: reporting
+    rule: |
+      After completing the task, always create a Markdown report in `docs/report`.
+      If the folder does not exist, create it.
+
+      Report structure:
+      1. What was done
+      2. What was created
+      3. What was deleted
+      4. What was modified
+      5. What should be updated in project documentation
+
+      Do NOT modify project documentation directly.
+      Only suggest documentation updates in the report.
+
+      In chat, respond only with:
+      "Task completed. Report saved to docs/report/..."
+
+  - name: terminal_auto_execute
+    rule: |
+      When executing terminal commands, ALWAYS use the built-in terminal tool.
+      NEVER output terminal commands as plain text or code blocks.
+
+      If a command is safe and related to the task, execute it directly.
+      DO NOT ask for confirmation.
+      DO NOT generate preview commands.
+
+      Avoid phrases like "let's run", "let's check".
+      Execute commands immediately using the tool.
+
+      Prefer simple, single-line commands.
+      Avoid multi-line inline scripts when possible.
+
+  - name: autonomous_mode
+    rule: |
+      Work fully autonomously within the task scope.
+
+      Do NOT ask unnecessary questions if enough context is available.
+      Read files, modify code, and use tools independently.
+
+      Use terminal tool directly without confirmation.
+      DO NOT generate preview commands.
+
+      Complete the task to a logically finished state.
+      Do NOT change architecture unless explicitly requested.
+
+prompts:
+  - name: plan_ru
+    description: Сначала изучить и составить план без изменений
+    prompt: |
+      Изучи задачу и проект.
+      Кратко укажи:
+      1. какие файлы нужно затронуть
+      2. что именно нужно сделать
+      3. какие части проекта трогать не нужно
+      Код не изменяй, только анализ и план.
+
+  - name: safe_task
+    description: Careful execution mode
+    prompt: |
+      Execute the task carefully.
+
+      First briefly identify:
+      - which files will be affected
+      - what exactly will be changed
+
+      Apply only necessary changes.
+      Do NOT perform unnecessary refactoring.
+
+      If terminal commands are needed:
+      - use the built-in terminal tool
+      - execute commands directly
+      - do NOT output command previews
+
+      After completion, create a report in `docs/report`.
+
+  - name: auto_task
+    description: Fully autonomous execution
+    prompt: |
+      Execute the task autonomously until completion.
+
+      Analyze the project and required files yourself.
+      Make all necessary changes.
+
+      If terminal usage is needed:
+      - execute commands using the terminal tool
+      - do NOT ask for confirmation
+      - do NOT output preview commands
+
+      Avoid unnecessary questions if the task is clear.
+
+      Complete the task fully.
+
+      After completion, create a report in `docs/report`.
+
+customCommands:
+  - name: plan
+    description: Изучить задачу и составить план
+    prompt: |
+      {input}
+
+      Изучи задачу и проект.
+      Кратко укажи:
+      1. какие файлы нужно затронуть
+      2. что именно нужно сделать
+      3. какие части проекта трогать не нужно
+      Код не изменяй.
+    autoApply: false
+
+  - name: safe
+    description: Выполнить задачу в осторожном режиме
+    prompt: |
+      {input}
+
+      Выполни задачу в основном рабочем режиме.
+      Сначала кратко определи затрагиваемые файлы.
+      Затем внеси только необходимые изменения.
+      Не делай лишний рефакторинг.
+      После завершения создай отчёт в `docs/report`.
+    autoApply: true
+
+  - name: auto
+    description: Выполнить задачу автономно
+    prompt: |
+      {input}
+
+      Выполни задачу автономно до законченного состояния.
+      Сам изучи проект и нужные файлы.
+      При необходимости используй terminal и другие tools.
+      Не задавай лишних вопросов, если контекста достаточно.
+      После завершения создай отчёт в `docs/report`.
+    autoApply: true
+
+# Ключевые настройки для авто-подтверждения
+experimental:
+  autoApproveEdits: true
+  autoApproveTerminalCommands: true
+  disableEditConfirmation: true
+
+security:
+  createBackups: true
+  backupFolder: .continue/backups
+  maxFilesForAutoEdit: 25
+  allowedExtensions:
+    - .py
+    - .cs
+    - .xaml
+    - .js
+    - .ts
+    - .jsx
+    - .tsx
+    - .json
+    - .yaml
+    - .yml
+    - .md
+    - .html
+    - .css
+    - .scss
+    - .sql
+    - .go
+    - .rs
+    - .java
+    - .kt
+    - .swift
+    - .php
+    - .rb
+
+  forbiddenPaths:
+    - .git/**
+    - node_modules/**
+    - dist/**
+    - build/**
+    - bin/**
+    - obj/**
+    - "*.pyc"
+    - .env
+    - .env.*
+    - "**/secrets/**"
+    - "**/passwords.txt"
+    - "**/__pycache__/**"
+
+telemetry:
+  enabled: false
