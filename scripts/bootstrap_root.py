@@ -10,8 +10,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
-from app.core.db import SessionFactory, engine
-from app.models import Base
+from app.core.db import SessionFactory
+from app.core.migrations import ensure_database_ready
 from app.models.category import Category
 from app.models.user import User
 from app.models.device import Device
@@ -24,9 +24,8 @@ DJANGO_DEVICE_NAME = "Django Web Client"
 
 
 async def bootstrap() -> None:
-    print("Creating database tables...")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    print("Ensuring database schema is up to date...")
+    await ensure_database_ready()
 
     async with SessionFactory() as session:
         # ---- Root user ----

@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.db import get_db
 from app.models.site import Site
 from app.models.user import User
-from main import app
+from main import create_app
+
+app = create_app(enable_startup_migrations=False)
 
 
 @pytest.fixture
@@ -198,3 +200,30 @@ async def test_user_sync_state_scope_replace_and_rotate_token(
     )
     assert new_token_response.status_code == 200
     assert new_token_response.json()["user"]["id"] == str(user_id)
+
+
+@pytest.mark.asyncio
+async def test_create_device_returns_device_token(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    root_user, site_1, _ = await _seed_root_and_sites(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/admin/devices",
+        headers={"X-User-Token": str(root_user.user_token)},
+        json={
+            "device_code": "django-web",
+            "device_name": "Django Web Client",
+            "site_id": site_1.id,
+            "is_active": True,
+        },
+    )
+
+    assert create_response.status_code == 200
+    body = create_response.json()
+    assert body["device_code"] == "django-web"
+    assert body["device_name"] == "Django Web Client"
+    assert body["site_id"] == site_1.id
+    assert body["is_active"] is True
+    assert body["device_token"]

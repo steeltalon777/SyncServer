@@ -12,6 +12,7 @@ from app.schemas.admin import SiteFilter
 from app.schemas.operation import (
     OperationCancel,
     OperationCreate,
+    OperationEffectiveAtUpdate,
     OperationFilter,
     OperationListResponse,
     OperationResponse,
@@ -85,6 +86,15 @@ def _require_operation_cancel_permission(identity: Identity, operation) -> None:
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="only chief_storekeeper or root may cancel submitted or other users operations",
+    )
+
+
+def _require_operation_effective_at_permission(identity: Identity) -> None:
+    if identity.has_global_business_access:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="only chief_storekeeper or root may change operation effective_at",
     )
 
 
@@ -204,6 +214,12 @@ async def update_operation(
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_token_auth),
 ) -> OperationResponse:
+    if "effective_at" in update_data.model_fields_set:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="effective_at must be changed via PATCH /operations/{operation_id}/effective-at",
+        )
+
     async with uow:
         operation = await uow.operations.get_operation_by_id(operation_id)
         if not operation:
@@ -227,6 +243,37 @@ async def update_operation(
         )
 
     logger.info("request_id=%s update_operation id=%s user=%s", get_request_id(request), operation_id, identity.user_id)
+    return OperationResponse.model_validate(updated_operation)
+
+
+@router.patch("/{operation_id}/effective-at", response_model=OperationResponse)
+async def update_operation_effective_at(
+    operation_id: UUID,
+    payload: OperationEffectiveAtUpdate,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_token_auth),
+) -> OperationResponse:
+    async with uow:
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        if not operation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
+
+        _require_read_site(identity, operation.site_id)
+        _require_operation_effective_at_permission(identity)
+
+        updated_operation = await OperationsService.update_operation_effective_at(
+            uow=uow,
+            operation_id=operation_id,
+            effective_at=payload.effective_at,
+        )
+
+    logger.info(
+        "request_id=%s update_operation_effective_at id=%s user=%s",
+        get_request_id(request),
+        operation_id,
+        identity.user_id,
+    )
     return OperationResponse.model_validate(updated_operation)
 
 

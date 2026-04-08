@@ -75,6 +75,12 @@ class DeviceResponse(ORMBaseModel):
     updated_at: datetime
 
 
+class DeviceWithTokenResponse(DeviceResponse):
+    """Schema for device create response including the generated token."""
+
+    device_token: UUID = Field(validation_alias=AliasChoices("device_token", "registration_token"))
+
+
 class DeviceTokenResponse(BaseModel):
     """
     Token output schema.

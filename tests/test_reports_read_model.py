@@ -15,7 +15,9 @@ from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user import User
 from app.models.user_access_scope import UserAccessScope
-from main import app
+from main import create_app
+
+app = create_app(enable_startup_migrations=False)
 
 
 @pytest.fixture

@@ -6,7 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import get_db
 from app.models.user import User
-from main import app
+from main import create_app
+
+app = create_app(enable_startup_migrations=False)
 
 
 @pytest.fixture

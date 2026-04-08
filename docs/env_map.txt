@@ -71,11 +71,6 @@ SYNC
   - docs/env_map.txt
   - tools/update_ai_maps.py
 
-SYNC_SERVER_SERVICE_TOKEN
-  - app/api/deps.py
-  - app/core/config.py
-  - docs/env_map.txt
-
 TOKEN
   - docs/env_map.txt
   - tools/update_ai_maps.py

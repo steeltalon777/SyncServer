@@ -14,6 +14,11 @@ Optional device context (auth endpoints):
 Device sync auth:
 - `X-Device-Token: <uuid>`
 
+Authorization model:
+- there is no separate service or AI contour
+- all clients use the same token headers and role/scope checks
+- access is determined by user role plus `UserAccessScope`
+
 ## Error Model
 Most errors return FastAPI default:
 ```json
@@ -63,7 +68,7 @@ Access scopes (root only):
 
 Devices:
 - `GET /admin/devices`
-- `POST /admin/devices`
+- `POST /admin/devices` - creates device and returns its token
 - `PATCH /admin/devices/{device_id}`
 - `POST /admin/devices/{device_id}/rotate-token`
 
@@ -108,12 +113,17 @@ Endpoints:
 - `GET /operations/{operation_id}`
 - `POST /operations`
 - `PATCH /operations/{operation_id}`
+- `PATCH /operations/{operation_id}/effective-at`
 - `POST /operations/{operation_id}/submit`
 - `POST /operations/{operation_id}/cancel`
 
 Rules:
 - submit updates balances
 - cancel rolls back submitted deltas
+- if `effective_at` is omitted on create, the server sets it to the current timestamp
+- `effective_at` cannot be changed through the general `PATCH /operations/{operation_id}` endpoint
+- `PATCH /operations/{operation_id}/effective-at` is reserved for `chief_storekeeper` and `root`
+- `PATCH /operations/{operation_id}/effective-at` is allowed for `draft` and `submitted` operations and blocked for `cancelled`
 - rollback is blocked if reversing a submitted operation would make a balance invalid (for example, negative stock on the affected site)
 - server validates site access and MOVE source/destination
 - `ADJUSTMENT` uses signed `qty`: positive adds stock, negative subtracts stock
@@ -121,6 +131,7 @@ Rules:
 - `storekeeper` may create operations on allowed sites, but submit is reserved for `chief_storekeeper` and `root`
 - `storekeeper` may update only own draft operations
 - `storekeeper` may cancel only own draft operations
+- `storekeeper` may not change `effective_at`
 - `chief_storekeeper` is a global business supervisor and may work with operations across all sites
 
 ## Balances API (read-only)
@@ -168,72 +179,6 @@ Rules:
 - `positive_items_count`
 - `total_quantity`
 - `last_balance_at`
-
-## Machine API
-Namespace:
-- `/machine/snapshots/*`
-- `/machine/read/*`
-- `/machine/analysis/*`
-- `/machine/batches/*`
-- `/machine/reports/*`
-
-Auth and roles:
-- same tokens as existing contour: `X-User-Token` and `X-Device-Token`
-- read endpoints are available for `observer`, `storekeeper`, `chief_storekeeper`, `root`
-- batch preview/apply is restricted to users with matching write permissions
-- observer cannot apply catalog/operations machine batches
-
-Cross-cutting fields in JSON responses:
-- `request_id`
-- `schema_version` (current: `2026-04-07`)
-- `snapshot_id` (for read/analysis responses)
-
-Snapshots:
-- `GET /machine/snapshots/latest`
-- `GET /machine/snapshots/{snapshot_id}`
-
-Machine read-model endpoints:
-- `GET /machine/read/catalog/items`
-- `GET /machine/read/catalog/categories`
-- `GET /machine/read/catalog/units`
-- `GET /machine/read/operations`
-- `GET /machine/read/operations/{operation_id}`
-
-Supported query params for machine read:
-- `snapshot_id` (optional; if omitted, server creates a snapshot)
-- `cursor`
-- `limit`
-- `fields`
-- `format=json|jsonl`
-
-Analysis endpoints:
-- `GET /machine/analysis/duplicate-candidates/items`
-- `GET /machine/analysis/duplicate-candidates/categories`
-- `GET /machine/analysis/integrity-issues`
-
-Machine reports:
-- `POST /machine/reports`
-- `GET /machine/reports/{report_id}`
-- `GET /machine/reports/{report_id}/result`
-
-Catalog batch endpoints:
-- `POST /machine/batches/catalog/preview`
-- `POST /machine/batches/catalog/apply`
-
-Operations batch endpoints:
-- `POST /machine/batches/operations/preview`
-- `POST /machine/batches/operations/apply`
-
-Machine batch notes:
-- preview is idempotent via `idempotency_key`
-- apply accepts `batch_id` + `plan_id`
-- stage 1 mode is atomic only
-- operations batch supports:
-  - `operation.create_draft`
-  - `operation.update_draft`
-  - `operation.submit`
-  - `operation.cancel`
-  - update/submit/cancel actions require `expected_version` (optimistic lock)
 
 ## Sync API (device)
 - `POST /ping`
@@ -307,6 +252,24 @@ Notes:
 - root-only
 - root token rotation is not allowed via API
 
+### 1.5) Create device and receive token
+`POST /api/v1/admin/devices`
+Headers:
+- `X-User-Token: {{admin_user_token}}`
+- `Content-Type: application/json`
+Body:
+```json
+{
+  "device_code": "django-web",
+  "device_name": "Django Web Client",
+  "site_id": null,
+  "is_active": true
+}
+```
+Notes:
+- allowed for `root` and `chief_storekeeper`
+- response includes `device_id` and `device_token`
+
 ### 2) Create operation
 `POST /api/v1/operations`
 Headers:
@@ -323,6 +286,21 @@ Body:
   "notes": "incoming"
 }
 ```
+
+### 2.1) Change operation effective date
+`PATCH /api/v1/operations/{operation_id}/effective-at`
+Headers:
+- `X-User-Token: {{chief_or_root_user_token}}`
+- `Content-Type: application/json`
+Body:
+```json
+{
+  "effective_at": "2026-04-08T12:30:00Z"
+}
+```
+Notes:
+- allowed only for `root` and `chief_storekeeper`
+- use this endpoint instead of the general operation patch endpoint when changing posting date
 
 ### 3) Balances summary
 `GET /api/v1/balances/summary`

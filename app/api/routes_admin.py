@@ -16,6 +16,7 @@ from app.schemas.admin import (
     DeviceListResponse,
     DeviceResponse,
     DeviceTokenResponse,
+    DeviceWithTokenResponse,
     DeviceUpdate,
     SiteCreate,
     SiteFilter,
@@ -635,12 +636,12 @@ async def list_devices(
     )
 
 
-@router.post("/devices", response_model=DeviceResponse)
+@router.post("/devices", response_model=DeviceWithTokenResponse)
 async def create_device(
     payload: DeviceCreate,
     uow: UnitOfWork = Depends(get_uow),
     x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
-) -> DeviceResponse:
+) -> DeviceWithTokenResponse:
     async with uow:
         current_user = await _resolve_current_user(uow, x_user_token)
         _require_admin_basic(current_user)
@@ -660,7 +661,7 @@ async def create_device(
         uow.session.add(device)
         await uow.session.flush()
         await uow.session.refresh(device)
-    return DeviceResponse.model_validate(device)
+    return DeviceWithTokenResponse.model_validate(device)
 
 
 @router.patch("/devices/{device_id}", response_model=DeviceResponse)

@@ -53,10 +53,14 @@ Alternative container setup:
 - Docker: `docker compose up --build`
 - OpenAPI docs: `/api/docs`
 - OpenAPI JSON: `/api/openapi.json`
+- On service startup, SyncServer automatically brings the database schema to Alembic `head`
 - Existing databases: after expanding supported operation types, run `python scripts/migrate_operation_constraints.py` once to refresh operation check constraints.
 
 ## Database Migrations
-- Fresh database: `python -m alembic upgrade head`
+- Service startup automatically runs Alembic reconciliation and upgrade to `head`
+- `scripts/bootstrap_root.py` now runs migrations before seeding bootstrap data
+- `scripts/bootstrap_root.py` still returns the bootstrap root token and bootstrap Django device token
+- Fresh database manual path: `python -m alembic upgrade head`
 - Existing database that already matches the current schema baseline: `python -m alembic stamp head`
 - Alembic reads the connection string from `.env` through `app.core.config`, so `DATABASE_URL` remains the single source of truth.
 
@@ -67,7 +71,6 @@ Alternative container setup:
 - `catalog/admin` - catalog mutations
 - `operations` - warehouse operation lifecycle
 - `balances` - read-only inventory balances
-- `machine` - machine-oriented snapshots/read/analysis/reports/batches
 - `sync` - device event synchronization
 - `health` - health and readiness
 
@@ -78,10 +81,19 @@ Primary auth:
 - `X-User-Token`
 - `X-Device-Token`
 
+Access model:
+- one shared API contour for all clients
+- no separate service or AI-only API contour
+- permissions are determined by role plus site-scoped `UserAccessScope`
+
+Operations note:
+- `effective_at` is the operation posting date
+- if omitted on create, the server sets it to the current timestamp
+- changing `effective_at` is done only through `PATCH /api/v1/operations/{operation_id}/effective-at`
+
 Primary documentation:
 - [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
 - [docs/ENDPOINT_INVENTORY.md](docs/ENDPOINT_INVENTORY.md)
-- [docs/MACHINE_API_STAGE1.md](docs/MACHINE_API_STAGE1.md)
 
 ## Canonical Architecture Docs
 - [ARCHITECTURE.md](ARCHITECTURE.md)

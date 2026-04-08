@@ -1,10 +1,13 @@
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.schemas.health import HealthStatus
-from main import app
+from main import create_app
+
+app = create_app(enable_startup_migrations=False)
 
 
 class TestHealthEndpoints:
@@ -111,8 +114,8 @@ class TestHealthEndpoints:
         """Тест детализированного health с моком неудачи."""
         # Мокаем HealthService чтобы симулировать неудачу
         with patch('app.api.routes_health.HealthService') as MockHealthService:
-            mock_service = AsyncMock()
-            mock_service.check_health.return_value = {
+            mock_service = MagicMock()
+            mock_service.check_health = AsyncMock(return_value={
                 "database": {
                     "status": HealthStatus.UNHEALTHY,
                     "latency_ms": None,
@@ -131,7 +134,7 @@ class TestHealthEndpoints:
                     "details": "Redis health check is disabled",
                     "error": None,
                 },
-            }
+            })
             mock_service.aggregate_status.return_value = HealthStatus.UNHEALTHY
             MockHealthService.return_value = mock_service
 
@@ -146,11 +149,11 @@ class TestHealthEndpoints:
     async def test_readiness_with_mocked_failure(self, client):
         """Тест readiness с моком неудачи."""
         with patch('app.api.routes_health.HealthService') as MockHealthService:
-            mock_service = AsyncMock()
-            mock_service.check_readiness.return_value = {
+            mock_service = MagicMock()
+            mock_service.check_readiness = AsyncMock(return_value={
                 "database": False,
                 "config": True,
-            }
+            })
             MockHealthService.return_value = mock_service
 
             response = client.get("/api/v1/health/readiness")
@@ -164,9 +167,9 @@ class TestHealthEndpoints:
     @pytest.mark.asyncio
     async def test_liveness_with_mocked_failure(self, client):
         """Тест liveness с моком неудачи."""
-        with patch('app.api.routes_health.ConfigHealthChecker') as MockChecker:
-            mock_checker = AsyncMock()
-            mock_checker.check.return_value.status = HealthStatus.UNHEALTHY
+        with patch('app.services.health_service.ConfigHealthChecker') as MockChecker:
+            mock_checker = MagicMock()
+            mock_checker.check = AsyncMock(return_value=SimpleNamespace(status=HealthStatus.UNHEALTHY))
             MockChecker.return_value = mock_checker
 
             response = client.get("/api/v1/health/liveness")
@@ -190,6 +193,7 @@ class TestHealthEndpoints:
         assert "/api/v1/health/detailed" in paths
         assert "/api/v1/health/readiness" in paths
         assert "/api/v1/health/liveness" in paths
+        assert all(not path.startswith("/api/v1/machine") for path in paths)
 
         # Проверяем методы
         assert "get" in paths["/api/v1/health"]

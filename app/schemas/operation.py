@@ -92,6 +92,10 @@ class OperationUpdate(BaseModel):
     lines: list[OperationLineCreate] | None = None
 
 
+class OperationEffectiveAtUpdate(BaseModel):
+    effective_at: datetime
+
+
 class OperationSubmit(BaseModel):
     submit: bool = True
 

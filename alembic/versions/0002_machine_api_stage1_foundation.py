@@ -66,7 +66,7 @@ UPGRADE_STATEMENTS = (
         created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
         summary TEXT NOT NULL,
         findings JSONB NOT NULL,
-        references JSONB NOT NULL,
+        "references" JSONB NOT NULL,
         PRIMARY KEY (report_id),
         FOREIGN KEY(snapshot_id) REFERENCES machine_snapshots (snapshot_id),
         FOREIGN KEY(created_by_user_id) REFERENCES users (id)

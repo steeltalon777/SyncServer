@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.api.routes_operations import (
     _require_operation_cancel_permission,
+    _require_operation_effective_at_permission,
     _require_operation_owner_or_supervisor,
     _require_operation_submit_permission,
     _require_operate_site,
@@ -71,6 +72,21 @@ def test_storekeeper_cannot_submit_operations() -> None:
         _require_operation_submit_permission(identity)
 
     assert exc.value.status_code == 403
+
+
+def test_storekeeper_cannot_change_operation_effective_at() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+
+    with pytest.raises(HTTPException) as exc:
+        _require_operation_effective_at_permission(identity)
+
+    assert exc.value.status_code == 403
+
+
+def test_chief_storekeeper_can_change_operation_effective_at() -> None:
+    identity = _identity(role="chief_storekeeper")
+
+    _require_operation_effective_at_permission(identity)
 
 
 def test_storekeeper_may_update_only_own_draft() -> None:

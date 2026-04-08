@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -136,7 +137,7 @@ class OperationsService:
         operation = await uow.operations.create_operation(
             site_id=operation_data.site_id,
             operation_type=operation_data.operation_type,
-            effective_at=operation_data.effective_at,
+            effective_at=operation_data.effective_at or datetime.now(UTC),
             source_site_id=operation_data.source_site_id,
             destination_site_id=operation_data.destination_site_id,
             issued_to_user_id=operation_data.issued_to_user_id,
@@ -157,6 +158,29 @@ class OperationsService:
 
         created_operation = await uow.operations.get_operation_by_id(operation.id)
         return {"operation": created_operation}
+
+    @staticmethod
+    async def update_operation_effective_at(
+        uow: UnitOfWork,
+        operation_id: UUID,
+        *,
+        effective_at: datetime,
+    ):
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        if not operation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
+        if operation.status == "cancelled":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="cannot change effective_at for cancelled operation",
+            )
+
+        updated = await uow.operations.update_operation(
+            operation_id=operation_id,
+            effective_at=effective_at,
+            fields_set={"effective_at"},
+        )
+        return await uow.operations.get_operation_by_id(updated.id)
 
     @staticmethod
     async def update_operation(

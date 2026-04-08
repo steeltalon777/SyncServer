@@ -22,7 +22,7 @@ Base prefix: `/api/v1`
 - `POST /admin/access/scopes` - create access scope (root)
 - `PATCH /admin/access/scopes/{scope_id}` - update access scope (root)
 - `GET /admin/devices` - list devices
-- `POST /admin/devices` - create device
+- `POST /admin/devices` - create device and return token
 - `PATCH /admin/devices/{device_id}` - update device
 - `POST /admin/devices/{device_id}/rotate-token` - rotate device token
 
@@ -53,6 +53,7 @@ Base prefix: `/api/v1`
 - `GET /operations/{operation_id}` - get operation
 - `POST /operations` - create operation
 - `PATCH /operations/{operation_id}` - update draft operation
+- `PATCH /operations/{operation_id}/effective-at` - change operation effective date (`chief_storekeeper` and `root` only)
 - `POST /operations/{operation_id}/submit` - submit operation and apply deltas
 - `POST /operations/{operation_id}/cancel` - cancel operation and rollback if submitted
 
@@ -64,25 +65,6 @@ Base prefix: `/api/v1`
 ## Reports
 - `GET /reports/item-movement` - aggregated item movement by site and item for a period
 - `GET /reports/stock-summary` - aggregated current balance summary by site
-
-## Machine
-- `GET /machine/snapshots/latest` - latest snapshot metadata
-- `GET /machine/snapshots/{snapshot_id}` - snapshot metadata by id
-- `GET /machine/read/catalog/items` - machine-oriented catalog items read model
-- `GET /machine/read/catalog/categories` - machine-oriented categories read model
-- `GET /machine/read/catalog/units` - machine-oriented units read model
-- `GET /machine/read/operations` - machine-oriented operations read model
-- `GET /machine/read/operations/{operation_id}` - machine-oriented single operation read model
-- `GET /machine/analysis/duplicate-candidates/items` - duplicate candidates for items
-- `GET /machine/analysis/duplicate-candidates/categories` - duplicate candidates for categories
-- `GET /machine/analysis/integrity-issues` - integrity issues dataset
-- `POST /machine/reports` - create machine report tied to snapshot
-- `GET /machine/reports/{report_id}` - get machine report metadata
-- `GET /machine/reports/{report_id}/result` - get machine report findings payload
-- `POST /machine/batches/catalog/preview` - preview catalog package batch
-- `POST /machine/batches/catalog/apply` - apply prepared catalog plan
-- `POST /machine/batches/operations/preview` - preview operations actions batch
-- `POST /machine/batches/operations/apply` - apply prepared operations plan
 
 ## Sync
 - `POST /ping` - device heartbeat and seq status

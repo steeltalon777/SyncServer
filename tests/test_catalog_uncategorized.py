@@ -12,7 +12,9 @@ from app.models.item import Item
 from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user import User
-from main import app
+from main import create_app
+
+app = create_app(enable_startup_migrations=False)
 
 
 @pytest.fixture
