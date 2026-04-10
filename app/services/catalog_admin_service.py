@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+from uuid import UUID
+
 from fastapi import HTTPException, status
 
 from app.core.catalog_defaults import (
@@ -234,3 +237,108 @@ class CatalogAdminService:
         existing = await uow.catalog.get_item_by_sku(sku)
         if existing is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="item sku already exists")
+
+    async def get_unit(self, uow: UnitOfWork, unit_id: int) -> Unit:
+        unit = await uow.catalog.get_unit_by_id(unit_id)
+        if unit is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unit not found")
+        return unit
+
+    async def get_category(self, uow: UnitOfWork, category_id: int) -> Category:
+        category = await uow.catalog.get_category_by_id(category_id)
+        if category is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
+        return category
+
+    async def get_item(self, uow: UnitOfWork, item_id: int) -> Item:
+        item = await uow.catalog.get_item_by_id(item_id)
+        if item is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
+        return item
+
+    async def delete_unit(self, uow: UnitOfWork, unit_id: int, user_id: UUID) -> None:
+        unit = await uow.catalog.get_unit_by_id(unit_id)
+        if unit is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unit not found")
+        if unit.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="unit already deleted")
+        if unit.is_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot delete active unit")
+        try:
+            await uow.catalog.soft_delete_unit(unit_id, user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    async def delete_category(self, uow: UnitOfWork, category_id: int, user_id: UUID) -> None:
+        category = await uow.catalog.get_category_by_id(category_id)
+        if category is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
+        if category.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="category already deleted")
+        if category.is_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot delete active category")
+        try:
+            await uow.catalog.soft_delete_category(category_id, user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    async def delete_item(self, uow: UnitOfWork, item_id: int, user_id: UUID) -> None:
+        item = await uow.catalog.get_item_by_id(item_id)
+        if item is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
+        if item.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="item already deleted")
+        if item.is_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot delete active item")
+        try:
+            await uow.catalog.soft_delete_item(item_id, user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    async def list_units(
+        self,
+        uow: UnitOfWork,
+        *,
+        include_inactive: bool = False,
+        include_deleted: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Unit], int]:
+        return await uow.catalog.list_units_with_filters(
+            include_inactive=include_inactive,
+            include_deleted=include_deleted,
+            page=page,
+            page_size=page_size,
+        )
+
+    async def list_categories(
+        self,
+        uow: UnitOfWork,
+        *,
+        include_inactive: bool = False,
+        include_deleted: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Category], int]:
+        return await uow.catalog.list_categories_with_filters(
+            include_inactive=include_inactive,
+            include_deleted=include_deleted,
+            page=page,
+            page_size=page_size,
+        )
+
+    async def list_items(
+        self,
+        uow: UnitOfWork,
+        *,
+        include_inactive: bool = False,
+        include_deleted: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Item], int]:
+        return await uow.catalog.list_items_with_filters(
+            include_inactive=include_inactive,
+            include_deleted=include_deleted,
+            page=page,
+            page_size=page_size,
+        )

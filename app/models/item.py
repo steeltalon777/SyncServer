@@ -1,9 +1,11 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -52,6 +54,8 @@ class Item(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
 
     category = relationship("Category")
     unit = relationship("Unit")
@@ -62,5 +66,6 @@ class Item(Base):
         Index("ix_items_import_batch_id", "import_batch_id"),
         Index("ix_items_unit_id", "unit_id"),
         Index("ix_items_updated_at", "updated_at"),
+        Index("ix_items_deleted_at", "deleted_at"),
         Index("idx_items_hashtags", "hashtags", postgresql_using="gin"),
     )

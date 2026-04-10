@@ -126,10 +126,19 @@ Notes:
 |---|---|---|---|---|
 | `POST` | `/catalog/admin/units` | `X-User-Token` | `{name, symbol, sort_order, is_active}` | `UnitResponse` |
 | `PATCH` | `/catalog/admin/units/{unit_id}` | `X-User-Token` | partial unit payload | `UnitResponse` |
+| `GET` | `/catalog/admin/units/{unit_id}` | `X-User-Token` | no body | `UnitResponse` |
+| `DELETE` | `/catalog/admin/units/{unit_id}` | `X-User-Token` | no body | `204 No Content` (архивное удаление) |
+| `GET` | `/catalog/admin/units` | `X-User-Token` | query: `include_inactive`, `include_deleted`, `page`, `page_size` | `{items, total_count, page, page_size}` |
 | `POST` | `/catalog/admin/categories` | `X-User-Token` | `{name, code, parent_id, sort_order, is_active}` | `CategoryResponse` |
 | `PATCH` | `/catalog/admin/categories/{category_id}` | `X-User-Token` | partial category payload | `CategoryResponse` |
+| `GET` | `/catalog/admin/categories/{category_id}` | `X-User-Token` | no body | `CategoryResponse` |
+| `DELETE` | `/catalog/admin/categories/{category_id}` | `X-User-Token` | no body | `204 No Content` (архивное удаление) |
+| `GET` | `/catalog/admin/categories` | `X-User-Token` | query: `include_inactive`, `include_deleted`, `page`, `page_size` | `{items, total_count, page, page_size}` |
 | `POST` | `/catalog/admin/items` | `X-User-Token` | `{sku, name, category_id?, unit_id, description, is_active}` | `ItemResponse` |
 | `PATCH` | `/catalog/admin/items/{item_id}` | `X-User-Token` | partial item payload; `category_id: null` -> `__UNCATEGORIZED__` | `ItemResponse` |
+| `GET` | `/catalog/admin/items/{item_id}` | `X-User-Token` | no body | `ItemResponse` |
+| `DELETE` | `/catalog/admin/items/{item_id}` | `X-User-Token` | no body | `204 No Content` (архивное удаление) |
+| `GET` | `/catalog/admin/items` | `X-User-Token` | query: `include_inactive`, `include_deleted`, `page`, `page_size` | `{items, total_count, page, page_size}` |
 
 Notes:
 - `root` may call these without `X-Site-Id`.
@@ -139,6 +148,12 @@ Notes:
 - `POST /api/v1/catalog/admin/items`: unknown or inactive `category_id` also resolves to `__UNCATEGORIZED__`.
 - `PATCH /api/v1/catalog/admin/items/{item_id}`: omitted `category_id` keeps the current category; explicit `null` moves the item to `__UNCATEGORIZED__`.
 - `__UNCATEGORIZED__` is a reserved read-only system category and cannot be created or edited through catalog admin.
+- `DELETE` выполняет архивное удаление (soft delete) с заполнением полей `deleted_at` и `deleted_by_user_id`
+- `GET` endpoints с параметрами `include_inactive` и `include_deleted` позволяют фильтровать списки
+- Нельзя удалить категорию с активными подкатегориями или номенклатурами
+- Нельзя удалить единицу измерения с активными номенклатурами
+- Нельзя удалить номенклатуру с ненулевым балансом на складах
+- По умолчанию списки возвращают только активные и не удаленные записи
 
 ### Operations API
 
@@ -201,6 +216,25 @@ Notes:
 | `POST` | `/ping` | `X-Device-Token` | `{site_id, device_id, last_server_seq, outbox_count, client_time}` | `{server_seq_upto, backoff_seconds}` |
 | `POST` | `/push` | `X-Device-Token` | `{site_id, device_id, batch_id, events:[...]}` | `{accepted, duplicates, rejected, server_seq_upto?}` |
 | `POST` | `/pull` | `X-Device-Token` | `{site_id, device_id, since_seq, limit}` | `{events, next_since_seq, server_seq_upto}` |
+
+### Recipients API
+
+| Method | Path | Auth | Request | Response |
+|---|---|---|---|---|
+| `POST` | `/recipients` | `X-User-Token` | `{display_name, recipient_type, personnel_no}` | `RecipientResponse` |
+| `GET` | `/recipients/{recipient_id}` | `X-User-Token` | no body | `RecipientResponse` |
+| `PATCH` | `/recipients/{recipient_id}` | `X-User-Token` | partial recipient payload | `RecipientResponse` |
+| `DELETE` | `/recipients/{recipient_id}` | `X-User-Token` | no body | `204 No Content` (архивное удаление) |
+| `GET` | `/recipients` | `X-User-Token` | query: `search`, `recipient_type`, `is_active`, `include_deleted`, `page`, `page_size` | `{items, total_count, page, page_size}` |
+| `POST` | `/recipients/merge` | `X-User-Token` | `{source_id, target_id}` | `RecipientResponse` (объединенный получатель) |
+
+Notes:
+- Read roles: `root`, `chief_storekeeper`, `storekeeper`, `observer`
+- Write roles: `root`, `chief_storekeeper`, `storekeeper`
+- `DELETE` выполняет архивное удаление (soft delete) с заполнением полей `deleted_at` и `deleted_by_user_id`
+- Нельзя удалить получателя, которому выданы активы (не нулевой баланс в `issued_asset_balances`)
+- `include_deleted` включает архивные записи в результаты поиска
+- `merge` объединяет двух получателей, перенося все ссылки с source на target
 
 ### Health API
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -150,6 +151,8 @@ class UnitResponse(ORMBaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    deleted_at: datetime | None = None
+    deleted_by_user_id: UUID | None = None
 
 
 class CategoryCreateRequest(BaseModel):
@@ -177,6 +180,8 @@ class CategoryResponse(ORMBaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    deleted_at: datetime | None = None
+    deleted_by_user_id: UUID | None = None
 
 
 class ItemCreateRequest(BaseModel):
@@ -224,6 +229,8 @@ class ItemResponse(ORMBaseModel):
     hashtags: list[str] | None = None
     created_at: datetime
     updated_at: datetime
+    deleted_at: datetime | None = None
+    deleted_by_user_id: UUID | None = None
 
 
 class CatalogSiteDto(ORMBaseModel):
@@ -237,6 +244,51 @@ class CatalogSiteDto(ORMBaseModel):
 class CatalogSitesResponse(ORMBaseModel):
     sites: list[CatalogSiteDto]
     server_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class UnitFilter(BaseModel):
+    """Фильтры для списка единиц измерения."""
+    search: str | None = None
+    is_active: bool | None = None
+    include_deleted: bool = False
+
+
+class CategoryFilter(BaseModel):
+    """Фильтры для списка категорий."""
+    search: str | None = None
+    is_active: bool | None = None
+    parent_id: int | None = None
+    include_deleted: bool = False
+
+
+class ItemFilter(BaseModel):
+    """Фильтры для списка номенклатуры."""
+    search: str | None = None
+    is_active: bool | None = None
+    category_id: int | None = None
+    unit_id: int | None = None
+    include_deleted: bool = False
+
+
+class UnitListResponse(ORMBaseModel):
+    items: list[UnitResponse]
+    total_count: int
+    page: int
+    page_size: int
+
+
+class CategoryListResponse(ORMBaseModel):
+    items: list[CategoryResponse]
+    total_count: int
+    page: int
+    page_size: int
+
+
+class ItemListResponse(ORMBaseModel):
+    items: list[ItemResponse]
+    total_count: int
+    page: int
+    page_size: int
 
 
 CategoryTreeNode.model_rebuild()

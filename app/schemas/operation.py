@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -19,6 +20,7 @@ OperationType = Literal[
     "ISSUE_RETURN",
 ]
 OperationStatus = Literal["draft", "submitted", "cancelled"]
+AcceptanceState = Literal["not_required", "pending", "in_progress", "resolved"]
 
 
 class OperationLineCreate(BaseModel):
@@ -56,6 +58,12 @@ class OperationCreate(BaseModel):
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
     issued_to_user_id: UUID | None = None
     issued_to_name: str | None = Field(default=None, max_length=255)
+    recipient_id: int | None = None
+    recipient_name_snapshot: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("recipient_name_snapshot", "recipient_name", "issued_to_name"),
+        max_length=255,
+    )
     lines: list[OperationLineCreate] = Field(min_length=1)
     notes: str | None = Field(default=None, max_length=1000)
 
@@ -76,10 +84,24 @@ class OperationCreate(BaseModel):
                 raise ValueError("Source and destination sites must differ")
         if operation_type == "ADJUSTMENT":
             return lines
+        if operation_type in {"ISSUE", "ISSUE_RETURN"}:
+            recipient_id = info.data.get("recipient_id")
+            recipient_name = info.data.get("recipient_name_snapshot") or info.data.get("issued_to_name")
+            if recipient_id is None and not recipient_name:
+                raise ValueError("ISSUE and ISSUE_RETURN require recipient_id or recipient_name")
         for line in lines:
             if line.qty <= 0:
                 raise ValueError(f"{operation_type} operations require positive qty values")
         return lines
+
+    @field_validator("recipient_name_snapshot")
+    @classmethod
+    def validate_recipient_name_not_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("recipient_name_snapshot must not be blank")
+        return value.strip()
 
 
 class OperationUpdate(BaseModel):
@@ -89,6 +111,12 @@ class OperationUpdate(BaseModel):
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
     issued_to_user_id: UUID | None = None
     issued_to_name: str | None = Field(default=None, max_length=255)
+    recipient_id: int | None = None
+    recipient_name_snapshot: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("recipient_name_snapshot", "recipient_name", "issued_to_name"),
+        max_length=255,
+    )
     lines: list[OperationLineCreate] | None = None
 
 
@@ -110,6 +138,8 @@ class OperationLineResponse(ORMBaseModel):
     line_number: int
     item_id: int
     qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
+    accepted_qty: Decimal = Decimal("0")
+    lost_qty: Decimal = Decimal("0")
     batch: str | None = None
     comment: str | None = Field(default=None, validation_alias=AliasChoices("comment", "notes"))
 
@@ -120,6 +150,10 @@ class OperationLineResponse(ORMBaseModel):
     @property
     def notes(self) -> str | None:
         return self.comment
+
+    @property
+    def pending_qty(self) -> Decimal:
+        return Decimal(self.qty) - Decimal(self.accepted_qty) - Decimal(self.lost_qty)
 
 
 class OperationResponse(ORMBaseModel):
@@ -132,6 +166,12 @@ class OperationResponse(ORMBaseModel):
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
     issued_to_user_id: UUID | None = None
     issued_to_name: str | None = None
+    recipient_id: int | None = None
+    recipient_name_snapshot: str | None = None
+    acceptance_required: bool = False
+    acceptance_state: AcceptanceState = "not_required"
+    acceptance_resolved_at: datetime | None = None
+    acceptance_resolved_by_user_id: UUID | None = None
     created_by_user_id: UUID
     created_at: datetime
     updated_at: datetime

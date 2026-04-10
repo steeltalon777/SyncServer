@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, Index, Integer, String, func
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -33,8 +35,11 @@ class Unit(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
 
     __table_args__ = (
         Index("ix_units_code", "code"),
         Index("ix_units_updated_at", "updated_at"),
+        Index("ix_units_deleted_at", "deleted_at"),
     )

@@ -5,6 +5,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     BigInteger,
     CheckConstraint,
     DateTime,
@@ -61,6 +62,12 @@ class Operation(Base):
         nullable=True,
     )
     issued_to_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    recipient_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("recipients.id"),
+        nullable=True,
+    )
+    recipient_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_by_user_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
@@ -106,6 +113,28 @@ class Operation(Base):
         nullable=True,
     )
 
+    acceptance_required: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    acceptance_state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="not_required",
+        server_default="not_required",
+    )
+    acceptance_resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    acceptance_resolved_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(
         Integer,
@@ -146,6 +175,10 @@ class Operation(Base):
             "status IN ('draft', 'submitted', 'cancelled')",
             name="ck_operations_status",
         ),
+        CheckConstraint(
+            "acceptance_state IN ('not_required', 'pending', 'in_progress', 'resolved')",
+            name="ck_operations_acceptance_state",
+        ),
     )
 
 
@@ -172,13 +205,34 @@ class OperationLine(Base):
         Numeric(18, 3),
         nullable=False,
     )
+    accepted_qty: Mapped[Decimal] = mapped_column(
+        Numeric(18, 3),
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    lost_qty: Mapped[Decimal] = mapped_column(
+        Numeric(18, 3),
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
 
     batch: Mapped[str | None] = mapped_column(String(100), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Historical snapshots
+    item_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    item_sku_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    unit_name_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    unit_symbol_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    category_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     operation: Mapped[Operation] = relationship("Operation", back_populates="lines")
     item = relationship("Item")
 
     __table_args__ = (
         CheckConstraint("qty <> 0", name="ck_operation_lines_qty_non_zero"),
+        CheckConstraint("accepted_qty >= 0", name="ck_operation_lines_accepted_qty_non_negative"),
+        CheckConstraint("lost_qty >= 0", name="ck_operation_lines_lost_qty_non_negative"),
     )

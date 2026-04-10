@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -413,3 +414,125 @@ class CatalogRepo:
         tree = self.build_category_tree(categories)
         self.build_paths(tree)
         return tree
+
+    async def soft_delete_unit(self, unit_id: int, user_id: UUID) -> None:
+        unit = await self.get_unit_by_id(unit_id)
+        if not unit:
+            raise ValueError(f"Unit {unit_id} not found")
+        if unit.deleted_at is not None:
+            raise ValueError(f"Unit {unit_id} already deleted")
+        if unit.is_active:
+            raise ValueError(f"Cannot delete active unit {unit_id}")
+        # Check for active items using this unit
+        stmt = select(Item).where(
+            Item.unit_id == unit_id,
+            Item.deleted_at.is_(None),
+            Item.is_active.is_(True),
+        )
+        result = await self.session.execute(stmt)
+        if result.scalars().first():
+            raise ValueError(f"Cannot delete unit {unit_id} with active items")
+        unit.deleted_at = datetime.now()
+        unit.deleted_by_user_id = user_id
+        await self.session.flush()
+
+    async def soft_delete_category(self, category_id: int, user_id: UUID) -> None:
+        category = await self.get_category_by_id(category_id)
+        if not category:
+            raise ValueError(f"Category {category_id} not found")
+        if category.deleted_at is not None:
+            raise ValueError(f"Category {category_id} already deleted")
+        if category.is_active:
+            raise ValueError(f"Cannot delete active category {category_id}")
+        # Check for active child categories
+        stmt = select(Category).where(
+            Category.parent_id == category_id,
+            Category.deleted_at.is_(None),
+            Category.is_active.is_(True),
+        )
+        result = await self.session.execute(stmt)
+        if result.scalars().first():
+            raise ValueError(f"Cannot delete category {category_id} with active subcategories")
+        # Check for active items in this category
+        stmt = select(Item).where(
+            Item.category_id == category_id,
+            Item.deleted_at.is_(None),
+            Item.is_active.is_(True),
+        )
+        result = await self.session.execute(stmt)
+        if result.scalars().first():
+            raise ValueError(f"Cannot delete category {category_id} with active items")
+        category.deleted_at = datetime.now()
+        category.deleted_by_user_id = user_id
+        await self.session.flush()
+
+    async def soft_delete_item(self, item_id: int, user_id: UUID) -> None:
+        item = await self.get_item_by_id(item_id)
+        if not item:
+            raise ValueError(f"Item {item_id} not found")
+        if item.deleted_at is not None:
+            raise ValueError(f"Item {item_id} already deleted")
+        if item.is_active:
+            raise ValueError(f"Cannot delete active item {item_id}")
+        # Check for non-zero balances (simplified - need to integrate with balance repo)
+        # For now, we'll assume no balance checks
+        item.deleted_at = datetime.now()
+        item.deleted_by_user_id = user_id
+        await self.session.flush()
+
+    async def list_units_with_filters(
+        self,
+        *,
+        include_inactive: bool = False,
+        include_deleted: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Unit], int]:
+        stmt = select(Unit)
+        if not include_deleted:
+            stmt = stmt.where(Unit.deleted_at.is_(None))
+        if not include_inactive:
+            stmt = stmt.where(Unit.is_active.is_(True))
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total_count = (await self.session.execute(count_stmt)).scalar_one()
+        stmt = stmt.order_by(Unit.name).offset((page - 1) * page_size).limit(page_size)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all()), int(total_count)
+
+    async def list_categories_with_filters(
+        self,
+        *,
+        include_inactive: bool = False,
+        include_deleted: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Category], int]:
+        stmt = select(Category)
+        if not include_deleted:
+            stmt = stmt.where(Category.deleted_at.is_(None))
+        if not include_inactive:
+            stmt = stmt.where(Category.is_active.is_(True))
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total_count = (await self.session.execute(count_stmt)).scalar_one()
+        stmt = stmt.order_by(Category.name).offset((page - 1) * page_size).limit(page_size)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all()), int(total_count)
+
+    async def list_items_with_filters(
+        self,
+        *,
+        include_inactive: bool = False,
+        include_deleted: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Item], int]:
+        stmt = select(Item)
+        if not include_deleted:
+            stmt = stmt.where(Item.deleted_at.is_(None))
+        if not include_inactive:
+            stmt = stmt.where(Item.is_active.is_(True))
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total_count = (await self.session.execute(count_stmt)).scalar_one()
+        stmt = stmt.order_by(Item.name).offset((page - 1) * page_size).limit(page_size)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all()), int(total_count)

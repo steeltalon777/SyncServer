@@ -7,6 +7,8 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
+from app.repos.recipients_repo import normalize_recipient_name
+from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
 from app.services.uow import UnitOfWork
 
@@ -22,7 +24,8 @@ SUPPORTED_OPERATION_TYPES: set[OperationType] = {
     "ISSUE_RETURN",
 }
 DECREMENT_OPERATION_TYPES: set[OperationType] = {"EXPENSE", "WRITE_OFF"}
-ISSUE_STUB_OPERATION_TYPES: set[OperationType] = {"ISSUE", "ISSUE_RETURN"}
+ACCEPTANCE_REQUIRED_TYPES: set[OperationType] = {"RECEIVE", "MOVE"}
+ISSUE_OPERATION_TYPES: set[OperationType] = {"ISSUE", "ISSUE_RETURN"}
 
 
 class OperationsService:
@@ -78,6 +81,81 @@ class OperationsService:
         )
 
     @staticmethod
+    async def _upsert_pending(
+        uow: UnitOfWork,
+        *,
+        operation_id,
+        operation_line_id: int,
+        destination_site_id: int,
+        source_site_id: int | None,
+        item_id: int,
+        qty_delta: Decimal,
+        error_context: str,
+    ) -> None:
+        try:
+            await uow.asset_registers.upsert_pending(
+                operation_id=operation_id,
+                operation_line_id=operation_line_id,
+                destination_site_id=destination_site_id,
+                source_site_id=source_site_id,
+                item_id=item_id,
+                qty_delta=qty_delta,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"pending acceptance quantity conflict for {error_context}",
+            ) from exc
+
+    @staticmethod
+    async def _upsert_lost(
+        uow: UnitOfWork,
+        *,
+        operation_id,
+        operation_line_id: int,
+        site_id: int,
+        source_site_id: int | None,
+        item_id: int,
+        qty_delta: Decimal,
+        error_context: str,
+    ) -> None:
+        try:
+            await uow.asset_registers.upsert_lost(
+                operation_id=operation_id,
+                operation_line_id=operation_line_id,
+                site_id=site_id,
+                source_site_id=source_site_id,
+                item_id=item_id,
+                qty_delta=qty_delta,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"lost asset quantity conflict for {error_context}",
+            ) from exc
+
+    @staticmethod
+    async def _upsert_issued(
+        uow: UnitOfWork,
+        *,
+        recipient_id: int,
+        item_id: int,
+        qty_delta: Decimal,
+        error_context: str,
+    ) -> None:
+        try:
+            await uow.asset_registers.upsert_issued(
+                recipient_id=recipient_id,
+                item_id=item_id,
+                qty_delta=qty_delta,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"issued asset quantity conflict for {error_context}",
+            ) from exc
+
+    @staticmethod
     async def _validate_operation_sites(uow: UnitOfWork, operation_data: OperationCreate) -> None:
         site = await uow.sites.get_by_id(operation_data.site_id)
         if not site:
@@ -93,6 +171,11 @@ class OperationsService:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="MOVE source and destination must be different",
+                )
+            if operation_data.site_id != operation_data.source_site_id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="MOVE operation site_id must match source_site_id",
                 )
 
             source = await uow.sites.get_by_id(operation_data.source_site_id)
@@ -117,6 +200,54 @@ class OperationsService:
                 )
 
     @staticmethod
+    async def _resolve_recipient(
+        uow: UnitOfWork,
+        *,
+        operation_type: OperationType,
+        recipient_id: int | None,
+        recipient_name_snapshot: str | None,
+        issued_to_name: str | None,
+    ) -> tuple[int | None, str | None]:
+        if operation_type not in ISSUE_OPERATION_TYPES:
+            return recipient_id, recipient_name_snapshot
+
+        if recipient_id is not None:
+            recipient = await uow.recipients.get_by_id(recipient_id)
+            if recipient is None or recipient.merged_into_id is not None or not recipient.is_active:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="recipient not found")
+            return recipient.id, recipient.display_name
+
+        candidate_name = recipient_name_snapshot or issued_to_name
+        if candidate_name is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="ISSUE and ISSUE_RETURN require recipient_id or recipient_name",
+            )
+        normalized = normalize_recipient_name(candidate_name)
+        if not normalized:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="recipient_name is empty after normalization",
+            )
+
+        recipient = await uow.recipients.get_or_create_by_name(
+            display_name=candidate_name,
+            recipient_type="person",
+        )
+        return recipient.id, recipient.display_name
+
+    @staticmethod
+    def _destination_site_for_acceptance(operation) -> int:
+        if operation.operation_type == "MOVE":
+            if operation.destination_site_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="MOVE operation requires destination_site_id",
+                )
+            return operation.destination_site_id
+        return operation.site_id
+
+    @staticmethod
     async def create_operation(
         uow: UnitOfWork,
         operation_data: OperationCreate,
@@ -126,6 +257,10 @@ class OperationsService:
         await OperationsService._validate_operation_sites(uow, operation_data)
         OperationsService._validate_line_quantities(operation_data.operation_type, operation_data.lines)
 
+        # Подготовим словари для кэширования unit и category
+        unit_cache = {}
+        category_cache = {}
+
         for line in operation_data.lines:
             item = await uow.catalog.get_item_by_id(line.item_id)
             if not item:
@@ -134,6 +269,15 @@ class OperationsService:
                     detail=f"item with id {line.item_id} not found",
                 )
 
+        recipient_id, recipient_name_snapshot = await OperationsService._resolve_recipient(
+            uow,
+            operation_type=operation_data.operation_type,
+            recipient_id=operation_data.recipient_id,
+            recipient_name_snapshot=operation_data.recipient_name_snapshot,
+            issued_to_name=operation_data.issued_to_name,
+        )
+
+        acceptance_required = operation_data.operation_type in ACCEPTANCE_REQUIRED_TYPES
         operation = await uow.operations.create_operation(
             site_id=operation_data.site_id,
             operation_type=operation_data.operation_type,
@@ -141,12 +285,54 @@ class OperationsService:
             source_site_id=operation_data.source_site_id,
             destination_site_id=operation_data.destination_site_id,
             issued_to_user_id=operation_data.issued_to_user_id,
-            issued_to_name=operation_data.issued_to_name,
+            issued_to_name=recipient_name_snapshot or operation_data.issued_to_name,
+            recipient_id=recipient_id,
+            recipient_name_snapshot=recipient_name_snapshot,
+            acceptance_required=acceptance_required,
             created_by_user_id=user_id,
             notes=operation_data.notes,
         )
 
+        # Кэшируем данные item, unit, category для избежания повторных запросов
+        item_cache = {}
+        unit_cache = {}
+        category_cache = {}
+
         for line_data in operation_data.lines:
+            # Получаем item (уже проверен ранее)
+            item = item_cache.get(line_data.item_id)
+            if item is None:
+                item = await uow.catalog.get_item_by_id(line_data.item_id)
+                if not item:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"item with id {line_data.item_id} not found",
+                    )
+                item_cache[line_data.item_id] = item
+
+            # Получаем unit
+            unit = unit_cache.get(item.unit_id)
+            if unit is None:
+                unit = await uow.catalog.get_unit_by_id(item.unit_id)
+                if not unit:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"unit with id {item.unit_id} not found",
+                    )
+                unit_cache[item.unit_id] = unit
+
+            # Получаем category
+            category = category_cache.get(item.category_id)
+            if category is None:
+                category = await uow.catalog.get_category_by_id(item.category_id)
+                if not category:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"category with id {item.category_id} not found",
+                    )
+                category_cache[item.category_id] = category
+
+            # Создаём строку операции со снапшотами
             await uow.operations.create_operation_line(
                 operation_id=operation.id,
                 line_number=line_data.line_number,
@@ -154,6 +340,11 @@ class OperationsService:
                 qty=line_data.qty,
                 batch=line_data.batch,
                 comment=line_data.comment,
+                item_name_snapshot=item.name,
+                item_sku_snapshot=item.sku,
+                unit_name_snapshot=unit.name,
+                unit_symbol_snapshot=unit.symbol,
+                category_name_snapshot=category.name,
             )
 
         created_operation = await uow.operations.get_operation_by_id(operation.id)
@@ -215,8 +406,35 @@ class OperationsService:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="MOVE source and destination must be different",
                 )
+            if operation.site_id != source_site_id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="MOVE operation site_id must match source_site_id",
+                )
         if update_data.lines is not None:
             OperationsService._validate_line_quantities(operation.operation_type, update_data.lines)
+
+        recipient_id = operation.recipient_id
+        recipient_name_snapshot = operation.recipient_name_snapshot
+        if operation.operation_type in ISSUE_OPERATION_TYPES:
+            desired_recipient_id = update_data.recipient_id if "recipient_id" in update_data.model_fields_set else operation.recipient_id
+            desired_snapshot = (
+                update_data.recipient_name_snapshot
+                if "recipient_name_snapshot" in update_data.model_fields_set
+                else operation.recipient_name_snapshot
+            )
+            desired_issued_to_name = (
+                update_data.issued_to_name
+                if "issued_to_name" in update_data.model_fields_set
+                else operation.issued_to_name
+            )
+            recipient_id, recipient_name_snapshot = await OperationsService._resolve_recipient(
+                uow,
+                operation_type=operation.operation_type,
+                recipient_id=desired_recipient_id,
+                recipient_name_snapshot=desired_snapshot,
+                issued_to_name=desired_issued_to_name,
+            )
 
         updated = await uow.operations.update_operation(
             operation_id=operation_id,
@@ -225,7 +443,9 @@ class OperationsService:
             source_site_id=source_site_id,
             destination_site_id=destination_site_id,
             issued_to_user_id=update_data.issued_to_user_id,
-            issued_to_name=update_data.issued_to_name,
+            issued_to_name=recipient_name_snapshot or update_data.issued_to_name,
+            recipient_id=recipient_id,
+            recipient_name_snapshot=recipient_name_snapshot,
             fields_set=update_data.model_fields_set,
         )
 
@@ -263,20 +483,27 @@ class OperationsService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"operation is already {operation.status}",
             )
-        if operation.operation_type in ISSUE_STUB_OPERATION_TYPES:
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail=f"{operation.operation_type} submit is not implemented yet",
-            )
 
         for line in operation.lines:
             quantity = Decimal(line.qty)
             if operation.operation_type == "RECEIVE":
-                await uow.balances.update_balance_quantity(
-                    site_id=operation.site_id,
-                    item_id=line.item_id,
-                    quantity_delta=quantity,
-                )
+                if operation.acceptance_required:
+                    await OperationsService._upsert_pending(
+                        uow,
+                        operation_id=operation.id,
+                        operation_line_id=line.id,
+                        destination_site_id=operation.site_id,
+                        source_site_id=None,
+                        item_id=line.item_id,
+                        qty_delta=quantity,
+                        error_context="RECEIVE submit",
+                    )
+                else:
+                    await uow.balances.update_balance_quantity(
+                        site_id=operation.site_id,
+                        item_id=line.item_id,
+                        quantity_delta=quantity,
+                    )
             elif operation.operation_type in DECREMENT_OPERATION_TYPES:
                 await OperationsService._ensure_sufficient_balance(
                     uow,
@@ -332,8 +559,66 @@ class OperationsService:
                     item_id=line.item_id,
                     quantity_delta=-quantity,
                 )
+                if operation.acceptance_required:
+                    await OperationsService._upsert_pending(
+                        uow,
+                        operation_id=operation.id,
+                        operation_line_id=line.id,
+                        destination_site_id=operation.destination_site_id,
+                        source_site_id=operation.source_site_id,
+                        item_id=line.item_id,
+                        qty_delta=quantity,
+                        error_context="MOVE submit",
+                    )
+                else:
+                    await uow.balances.update_balance_quantity(
+                        site_id=operation.destination_site_id,
+                        item_id=line.item_id,
+                        quantity_delta=quantity,
+                    )
+            elif operation.operation_type == "ISSUE":
+                if operation.recipient_id is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="ISSUE requires recipient_id",
+                    )
+                await OperationsService._ensure_sufficient_balance(
+                    uow,
+                    site_id=operation.site_id,
+                    item_id=line.item_id,
+                    required_qty=quantity,
+                    error_message=(
+                        f"insufficient stock for ISSUE: item={line.item_id}, "
+                        f"site={operation.site_id}, required={line.qty}"
+                    ),
+                )
                 await uow.balances.update_balance_quantity(
-                    site_id=operation.destination_site_id,
+                    site_id=operation.site_id,
+                    item_id=line.item_id,
+                    quantity_delta=-quantity,
+                )
+                await OperationsService._upsert_issued(
+                    uow,
+                    recipient_id=operation.recipient_id,
+                    item_id=line.item_id,
+                    qty_delta=quantity,
+                    error_context="ISSUE submit",
+                )
+            elif operation.operation_type == "ISSUE_RETURN":
+                if operation.recipient_id is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="ISSUE_RETURN requires recipient_id",
+                    )
+                await OperationsService._upsert_issued(
+                    uow,
+                    recipient_id=operation.recipient_id,
+                    item_id=line.item_id,
+                    qty_delta=-quantity,
+                    error_context="ISSUE_RETURN submit",
+                )
+                await uow.balances.update_balance_quantity(
+                    site_id=operation.site_id,
                     item_id=line.item_id,
                     quantity_delta=quantity,
                 )
@@ -343,6 +628,207 @@ class OperationsService:
             submitted_by_user_id=user_id,
         )
         return {"operation": submitted_operation}
+
+    @staticmethod
+    async def accept_operation_lines(
+        uow: UnitOfWork,
+        *,
+        operation_id,
+        user_id: UUID,
+        line_updates: list[OperationAcceptLinePayload],
+    ) -> dict[str, object]:
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        if not operation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
+        if operation.status != "submitted":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="only submitted operations can be accepted")
+        if not operation.acceptance_required:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="operation does not require acceptance",
+            )
+        if operation.acceptance_state == "resolved":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="operation is already fully accepted")
+
+        destination_site_id = OperationsService._destination_site_for_acceptance(operation)
+        source_site_id = operation.source_site_id if operation.operation_type == "MOVE" else None
+        lines_by_id = {int(line.id): line for line in operation.lines}
+
+        for update in line_updates:
+            accepted_delta = Decimal(update.accepted_qty)
+            lost_delta = Decimal(update.lost_qty)
+            if accepted_delta == 0 and lost_delta == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="accepted_qty and lost_qty cannot both be zero",
+                )
+
+            line = lines_by_id.get(update.line_id)
+            if line is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"operation line {update.line_id} not found",
+                )
+
+            remaining = Decimal(line.qty) - Decimal(line.accepted_qty) - Decimal(line.lost_qty)
+            if accepted_delta + lost_delta > remaining:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"acceptance quantity exceeds remaining for line {line.id}: "
+                        f"remaining={remaining}, requested={accepted_delta + lost_delta}"
+                    ),
+                )
+
+            if accepted_delta > 0:
+                await OperationsService._upsert_pending(
+                    uow,
+                    operation_id=operation.id,
+                    operation_line_id=line.id,
+                    destination_site_id=destination_site_id,
+                    source_site_id=source_site_id,
+                    item_id=line.item_id,
+                    qty_delta=-accepted_delta,
+                    error_context="accept line",
+                )
+                await uow.balances.update_balance_quantity(
+                    site_id=destination_site_id,
+                    item_id=line.item_id,
+                    quantity_delta=accepted_delta,
+                )
+                await uow.operations.update_operation_line_progress(
+                    operation_line_id=line.id,
+                    accepted_delta=accepted_delta,
+                    lost_delta=Decimal("0"),
+                )
+                await uow.asset_registers.create_acceptance_action(
+                    operation_id=operation.id,
+                    operation_line_id=line.id,
+                    action_type="accept",
+                    qty=accepted_delta,
+                    performed_by_user_id=user_id,
+                    notes=update.note,
+                )
+
+            if lost_delta > 0:
+                await OperationsService._upsert_pending(
+                    uow,
+                    operation_id=operation.id,
+                    operation_line_id=line.id,
+                    destination_site_id=destination_site_id,
+                    source_site_id=source_site_id,
+                    item_id=line.item_id,
+                    qty_delta=-lost_delta,
+                    error_context="mark lost",
+                )
+                await OperationsService._upsert_lost(
+                    uow,
+                    operation_id=operation.id,
+                    operation_line_id=line.id,
+                    site_id=destination_site_id,
+                    source_site_id=source_site_id,
+                    item_id=line.item_id,
+                    qty_delta=lost_delta,
+                    error_context="mark lost",
+                )
+                await uow.operations.update_operation_line_progress(
+                    operation_line_id=line.id,
+                    accepted_delta=Decimal("0"),
+                    lost_delta=lost_delta,
+                )
+                await uow.asset_registers.create_acceptance_action(
+                    operation_id=operation.id,
+                    operation_line_id=line.id,
+                    action_type="mark_lost",
+                    qty=lost_delta,
+                    performed_by_user_id=user_id,
+                    notes=update.note,
+                )
+
+        refreshed = await uow.operations.get_operation_by_id(operation_id)
+        assert refreshed is not None
+        unresolved = [
+            line
+            for line in refreshed.lines
+            if Decimal(line.qty) - Decimal(line.accepted_qty) - Decimal(line.lost_qty) > 0
+        ]
+        next_state = "resolved" if not unresolved else "in_progress"
+        await uow.operations.set_operation_acceptance_state(
+            operation_id=operation_id,
+            acceptance_state=next_state,
+            resolved_by_user_id=user_id if next_state == "resolved" else None,
+        )
+        return {"operation": await uow.operations.get_operation_by_id(operation_id)}
+
+    @staticmethod
+    async def resolve_lost_asset(
+        uow: UnitOfWork,
+        *,
+        operation_line_id: int,
+        action: str,
+        qty: Decimal,
+        user_id: UUID,
+        note: str | None,
+        responsible_recipient_id: int | None,
+    ) -> dict[str, object]:
+        lost_row = await uow.asset_registers.get_lost_row_for_update(operation_line_id)
+        if lost_row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="lost asset row not found")
+        if Decimal(lost_row.qty) < qty:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"insufficient lost quantity: available={lost_row.qty}, requested={qty}",
+            )
+
+        operation = await uow.operations.get_operation_by_id(lost_row.operation_id)
+        if operation is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
+
+        if action == "found_to_destination":
+            destination_site_id = OperationsService._destination_site_for_acceptance(operation)
+            await uow.balances.update_balance_quantity(
+                site_id=destination_site_id,
+                item_id=lost_row.item_id,
+                quantity_delta=qty,
+            )
+        elif action == "return_to_source":
+            if lost_row.source_site_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="source_site_id is required for return_to_source",
+                )
+            await uow.balances.update_balance_quantity(
+                site_id=lost_row.source_site_id,
+                item_id=lost_row.item_id,
+                quantity_delta=qty,
+            )
+        elif action == "write_off":
+            # Inventory is removed from temporary lost register.
+            # Responsibility is linked via responsible_recipient_id in action log.
+            pass
+        else:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="unsupported action")
+
+        await OperationsService._upsert_lost(
+            uow,
+            operation_id=lost_row.operation_id,
+            operation_line_id=lost_row.operation_line_id,
+            site_id=lost_row.site_id,
+            source_site_id=lost_row.source_site_id,
+            item_id=lost_row.item_id,
+            qty_delta=-qty,
+            error_context=action,
+        )
+        await uow.asset_registers.create_acceptance_action(
+            operation_id=lost_row.operation_id,
+            operation_line_id=lost_row.operation_line_id,
+            action_type=action,
+            qty=qty,
+            performed_by_user_id=user_id,
+            recipient_id=responsible_recipient_id,
+            notes=note,
+        )
+        return {"status": "ok"}
 
     @staticmethod
     async def cancel_operation(
@@ -358,21 +844,52 @@ class OperationsService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="operation is already cancelled")
 
         if operation.status == "submitted":
-            if operation.operation_type in ISSUE_STUB_OPERATION_TYPES:
-                raise HTTPException(
-                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                    detail=f"{operation.operation_type} cancel rollback is not implemented yet",
-                )
             for line in operation.lines:
                 quantity = Decimal(line.qty)
+                accepted_qty = Decimal(line.accepted_qty)
+                lost_qty = Decimal(line.lost_qty)
+                pending_qty = quantity - accepted_qty - lost_qty
+
                 if operation.operation_type == "RECEIVE":
-                    await OperationsService._apply_balance_delta(
-                        uow,
-                        site_id=operation.site_id,
-                        item_id=line.item_id,
-                        quantity_delta=-quantity,
-                        error_context="RECEIVE rollback",
-                    )
+                    if operation.acceptance_required:
+                        if pending_qty > 0:
+                            await OperationsService._upsert_pending(
+                                uow,
+                                operation_id=operation.id,
+                                operation_line_id=line.id,
+                                destination_site_id=operation.site_id,
+                                source_site_id=None,
+                                item_id=line.item_id,
+                                qty_delta=-pending_qty,
+                                error_context="RECEIVE rollback pending",
+                            )
+                        if accepted_qty > 0:
+                            await OperationsService._apply_balance_delta(
+                                uow,
+                                site_id=operation.site_id,
+                                item_id=line.item_id,
+                                quantity_delta=-accepted_qty,
+                                error_context="RECEIVE rollback accepted",
+                            )
+                        if lost_qty > 0:
+                            await OperationsService._upsert_lost(
+                                uow,
+                                operation_id=operation.id,
+                                operation_line_id=line.id,
+                                site_id=operation.site_id,
+                                source_site_id=None,
+                                item_id=line.item_id,
+                                qty_delta=-lost_qty,
+                                error_context="RECEIVE rollback lost",
+                            )
+                    else:
+                        await OperationsService._apply_balance_delta(
+                            uow,
+                            site_id=operation.site_id,
+                            item_id=line.item_id,
+                            quantity_delta=-quantity,
+                            error_context="RECEIVE rollback",
+                        )
                 elif operation.operation_type in DECREMENT_OPERATION_TYPES:
                     await OperationsService._apply_balance_delta(
                         uow,
@@ -390,7 +907,50 @@ class OperationsService:
                         error_context="ADJUSTMENT rollback",
                     )
                 elif operation.operation_type == "MOVE":
-                    if operation.source_site_id and operation.destination_site_id:
+                    if operation.source_site_id is None or operation.destination_site_id is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="MOVE operation requires source_site_id and destination_site_id",
+                        )
+                    if operation.acceptance_required:
+                        if pending_qty > 0:
+                            await OperationsService._upsert_pending(
+                                uow,
+                                operation_id=operation.id,
+                                operation_line_id=line.id,
+                                destination_site_id=operation.destination_site_id,
+                                source_site_id=operation.source_site_id,
+                                item_id=line.item_id,
+                                qty_delta=-pending_qty,
+                                error_context="MOVE rollback pending",
+                            )
+                        if accepted_qty > 0:
+                            await OperationsService._apply_balance_delta(
+                                uow,
+                                site_id=operation.destination_site_id,
+                                item_id=line.item_id,
+                                quantity_delta=-accepted_qty,
+                                error_context="MOVE rollback accepted from destination",
+                            )
+                        if lost_qty > 0:
+                            await OperationsService._upsert_lost(
+                                uow,
+                                operation_id=operation.id,
+                                operation_line_id=line.id,
+                                site_id=operation.destination_site_id,
+                                source_site_id=operation.source_site_id,
+                                item_id=line.item_id,
+                                qty_delta=-lost_qty,
+                                error_context="MOVE rollback lost",
+                            )
+                        await OperationsService._apply_balance_delta(
+                            uow,
+                            site_id=operation.source_site_id,
+                            item_id=line.item_id,
+                            quantity_delta=quantity,
+                            error_context="MOVE rollback to source",
+                        )
+                    else:
                         await OperationsService._ensure_sufficient_balance(
                             uow,
                             site_id=operation.destination_site_id,
@@ -415,11 +975,44 @@ class OperationsService:
                             quantity_delta=-quantity,
                             error_context="MOVE rollback from destination",
                         )
+                elif operation.operation_type == "ISSUE":
+                    if operation.recipient_id is None:
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="ISSUE requires recipient_id")
+                    await OperationsService._upsert_issued(
+                        uow,
+                        recipient_id=operation.recipient_id,
+                        item_id=line.item_id,
+                        qty_delta=-quantity,
+                        error_context="ISSUE rollback from recipient",
+                    )
+                    await OperationsService._apply_balance_delta(
+                        uow,
+                        site_id=operation.site_id,
+                        item_id=line.item_id,
+                        quantity_delta=quantity,
+                        error_context="ISSUE rollback to stock",
+                    )
+                elif operation.operation_type == "ISSUE_RETURN":
+                    if operation.recipient_id is None:
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="ISSUE_RETURN requires recipient_id")
+                    await OperationsService._apply_balance_delta(
+                        uow,
+                        site_id=operation.site_id,
+                        item_id=line.item_id,
+                        quantity_delta=-quantity,
+                        error_context="ISSUE_RETURN rollback from stock",
+                    )
+                    await OperationsService._upsert_issued(
+                        uow,
+                        recipient_id=operation.recipient_id,
+                        item_id=line.item_id,
+                        qty_delta=quantity,
+                        error_context="ISSUE_RETURN rollback to recipient",
+                    )
 
         cancelled_operation = await uow.operations.cancel_operation(
             operation_id=operation_id,
             cancelled_by_user_id=user_id,
         )
-
         logger.info("cancelled operation=%s by user=%s reason=%s", operation_id, user_id, reason)
         return {"operation": cancelled_operation}

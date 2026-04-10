@@ -26,13 +26,17 @@ class ReportsRepo:
         page_size: int,
     ) -> tuple[list[dict], int]:
         operation_at = func.coalesce(Operation.effective_at, Operation.created_at)
+        accepted_or_full_qty = case(
+            (Operation.acceptance_required.is_(True), OperationLine.accepted_qty),
+            else_=OperationLine.qty,
+        )
 
         receive_rows = (
             select(
                 Operation.site_id.label("site_id"),
                 OperationLine.item_id.label("item_id"),
                 operation_at.label("operation_at"),
-                OperationLine.qty.label("delta_qty"),
+                accepted_or_full_qty.label("delta_qty"),
             )
             .select_from(Operation)
             .join(OperationLine, OperationLine.operation_id == Operation.id)
@@ -85,7 +89,7 @@ class ReportsRepo:
                 Operation.destination_site_id.label("site_id"),
                 OperationLine.item_id.label("item_id"),
                 operation_at.label("operation_at"),
-                OperationLine.qty.label("delta_qty"),
+                accepted_or_full_qty.label("delta_qty"),
             )
             .select_from(Operation)
             .join(OperationLine, OperationLine.operation_id == Operation.id)

@@ -9,12 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import SyncServerException
 from app.api.routes_admin import router as admin_router
+from app.api.routes_assets import router as assets_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_balances import router as balances_router
 from app.api.routes_catalog import router as catalog_router
 from app.api.routes_catalog_admin import router as catalog_admin_router
 from app.api.routes_health import router as health_router
 from app.api.routes_operations import router as operations_router
+from app.api.routes_recipients import router as recipients_router
 from app.api.routes_reports import router as reports_router
 from app.api.routes_sync import router as sync_router
 from app.core.config import get_settings
@@ -111,6 +113,12 @@ def create_app(
 
     # Operations API (user token auth)
     app.include_router(operations_router, prefix=api_v1_prefix)
+
+    # Recipients API (user token auth)
+    app.include_router(recipients_router, prefix=api_v1_prefix)
+
+    # Asset registers API (user token auth)
+    app.include_router(assets_router, prefix=api_v1_prefix)
 
     # Balances API (user token auth)
     app.include_router(balances_router, prefix=api_v1_prefix)

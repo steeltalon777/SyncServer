@@ -10,7 +10,7 @@ from app.services.operations_service import OperationsService
 
 
 def _line(*, item_id: int, qty: int) -> SimpleNamespace:
-    return SimpleNamespace(item_id=item_id, qty=qty)
+    return SimpleNamespace(id=1, item_id=item_id, qty=qty, accepted_qty=0, lost_qty=0)
 
 
 def _operation(
@@ -27,6 +27,8 @@ def _operation(
         site_id=site_id,
         source_site_id=source_site_id,
         destination_site_id=destination_site_id,
+        acceptance_required=False,
+        recipient_id=None,
         lines=[_line(item_id=10, qty=5)],
     )
 

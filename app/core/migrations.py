@@ -30,9 +30,15 @@ APP_TABLES = {
     "categories",
     "devices",
     "events",
+    "issued_asset_balances",
     "items",
+    "lost_asset_balances",
     "operation_lines",
+    "operation_acceptance_actions",
     "operations",
+    "pending_acceptance_balances",
+    "recipient_aliases",
+    "recipients",
     "sites",
     "units",
     "user_access_scopes",
@@ -43,6 +49,8 @@ HEAD_TABLE_MARKERS = {
     "machine_batches",
     "machine_reports",
     "machine_snapshots",
+    "recipients",
+    "pending_acceptance_balances",
 }
 
 HEAD_COLUMN_MARKERS = {
@@ -54,7 +62,13 @@ HEAD_COLUMN_MARKERS = {
         "import_batch_id",
         "machine_last_batch_id",
     },
-    "operations": {"version", "machine_last_batch_id"},
+    "operations": {
+        "version",
+        "machine_last_batch_id",
+        "acceptance_required",
+        "acceptance_state",
+        "recipient_id",
+    },
     "units": {"code", "machine_last_batch_id"},
 }
 

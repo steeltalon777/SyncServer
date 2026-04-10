@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.api.deps import get_request_id, get_uow, require_user_token_auth
 from app.core.identity import Identity
+from app.schemas.asset_register import OperationAcceptLinesRequest
 from app.schemas.admin import SiteFilter
 from app.schemas.operation import (
     OperationCancel,
@@ -56,6 +57,9 @@ def _validate_move_access(identity: Identity, source_site_id: int | None, destin
             detail="MOVE operation requires source_site_id and destination_site_id",
         )
     _require_operate_site(identity, source_site_id)
+
+
+def _require_acceptance_site(identity: Identity, destination_site_id: int) -> None:
     _require_operate_site(identity, destination_site_id)
 
 
@@ -336,4 +340,42 @@ async def cancel_operation(
         )
 
     logger.info("request_id=%s cancel_operation id=%s user=%s", get_request_id(request), operation_id, identity.user_id)
+    return OperationResponse.model_validate(result["operation"])
+
+
+@router.post("/{operation_id}/accept-lines", response_model=OperationResponse)
+async def accept_operation_lines(
+    operation_id: UUID,
+    payload: OperationAcceptLinesRequest,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_token_auth),
+) -> OperationResponse:
+    async with uow:
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        if not operation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
+
+        destination_site_id = operation.destination_site_id if operation.operation_type == "MOVE" else operation.site_id
+        if destination_site_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="operation has no destination site for acceptance",
+            )
+        _require_acceptance_site(identity, destination_site_id)
+
+        result = await OperationsService.accept_operation_lines(
+            uow=uow,
+            operation_id=operation_id,
+            user_id=identity.user_id,
+            line_updates=payload.lines,
+        )
+
+    logger.info(
+        "request_id=%s accept_operation_lines id=%s user=%s lines=%s",
+        get_request_id(request),
+        operation_id,
+        identity.user_id,
+        len(payload.lines),
+    )
     return OperationResponse.model_validate(result["operation"])

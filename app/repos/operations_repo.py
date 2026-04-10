@@ -30,6 +30,9 @@ class OperationsRepo:
         destination_site_id: int | None = None,
         issued_to_user_id: UUID | None = None,
         issued_to_name: str | None = None,
+        recipient_id: int | None = None,
+        recipient_name_snapshot: str | None = None,
+        acceptance_required: bool = False,
     ) -> Operation:
         operation = Operation(
             site_id=site_id,
@@ -41,6 +44,10 @@ class OperationsRepo:
             destination_site_id=destination_site_id,
             issued_to_user_id=issued_to_user_id,
             issued_to_name=issued_to_name,
+            recipient_id=recipient_id,
+            recipient_name_snapshot=recipient_name_snapshot,
+            acceptance_required=acceptance_required,
+            acceptance_state="pending" if acceptance_required else "not_required",
             created_by_user_id=created_by_user_id,
             notes=notes,
         )
@@ -57,6 +64,14 @@ class OperationsRepo:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_operation_line_by_id_for_update(self, operation_line_id: int) -> OperationLine | None:
+        stmt = (
+            select(OperationLine)
+            .where(OperationLine.id == operation_line_id)
+            .with_for_update()
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def update_operation(
         self,
         operation_id: UUID,
@@ -67,6 +82,8 @@ class OperationsRepo:
         destination_site_id: int | None = None,
         issued_to_user_id: UUID | None = None,
         issued_to_name: str | None = None,
+        recipient_id: int | None = None,
+        recipient_name_snapshot: str | None = None,
         fields_set: set[str] | None = None,
     ) -> Operation | None:
         operation = await self.get_operation_by_id(operation_id)
@@ -85,6 +102,10 @@ class OperationsRepo:
             operation.issued_to_user_id = issued_to_user_id
         if fields_set is not None and "issued_to_name" in fields_set:
             operation.issued_to_name = issued_to_name
+        if fields_set is not None and "recipient_id" in fields_set:
+            operation.recipient_id = recipient_id
+        if fields_set is not None and "recipient_name_snapshot" in fields_set:
+            operation.recipient_name_snapshot = recipient_name_snapshot
 
         operation.version = int(operation.version) + 1
         await self.session.flush()
@@ -104,7 +125,6 @@ class OperationsRepo:
             operation.version = int(operation.version) + 1
             await self.session.flush()
         return await self.get_operation_by_id(operation_id)
-        return operation
 
     async def cancel_operation(
         self,
@@ -120,6 +140,28 @@ class OperationsRepo:
             operation.version = int(operation.version) + 1
             await self.session.flush()
         return await self.get_operation_by_id(operation_id)
+
+    async def set_operation_acceptance_state(
+        self,
+        *,
+        operation_id: UUID,
+        acceptance_state: Literal["not_required", "pending", "in_progress", "resolved"],
+        resolved_by_user_id: UUID | None = None,
+    ) -> Operation | None:
+        operation = await self.get_operation_by_id(operation_id)
+        if operation is None:
+            return None
+
+        operation.acceptance_state = acceptance_state
+        if acceptance_state == "resolved":
+            operation.acceptance_resolved_at = datetime.now(UTC)
+            operation.acceptance_resolved_by_user_id = resolved_by_user_id
+        else:
+            operation.acceptance_resolved_at = None
+            operation.acceptance_resolved_by_user_id = None
+
+        operation.version = int(operation.version) + 1
+        await self.session.flush()
         return operation
 
     async def list_operations(
@@ -186,16 +228,50 @@ class OperationsRepo:
         qty: Decimal | int,
         batch: str | None = None,
         comment: str | None = None,
+        item_name_snapshot: str | None = None,
+        item_sku_snapshot: str | None = None,
+        unit_name_snapshot: str | None = None,
+        unit_symbol_snapshot: str | None = None,
+        category_name_snapshot: str | None = None,
     ) -> OperationLine:
         line = OperationLine(
             operation_id=operation_id,
             line_number=line_number,
             item_id=item_id,
             qty=qty,
+            accepted_qty=Decimal("0"),
+            lost_qty=Decimal("0"),
             batch=batch,
             comment=comment,
+            item_name_snapshot=item_name_snapshot,
+            item_sku_snapshot=item_sku_snapshot,
+            unit_name_snapshot=unit_name_snapshot,
+            unit_symbol_snapshot=unit_symbol_snapshot,
+            category_name_snapshot=category_name_snapshot,
         )
         self.session.add(line)
+        await self.session.flush()
+        return line
+
+    async def update_operation_line_progress(
+        self,
+        *,
+        operation_line_id: int,
+        accepted_delta: Decimal,
+        lost_delta: Decimal,
+    ) -> OperationLine:
+        line = await self.get_operation_line_by_id_for_update(operation_line_id)
+        if line is None:
+            raise ValueError("operation line not found")
+
+        next_accepted = Decimal(line.accepted_qty) + accepted_delta
+        next_lost = Decimal(line.lost_qty) + lost_delta
+        remaining = Decimal(line.qty) - next_accepted - next_lost
+        if next_accepted < 0 or next_lost < 0 or remaining < 0:
+            raise ValueError("invalid acceptance progress update")
+
+        line.accepted_qty = next_accepted
+        line.lost_qty = next_lost
         await self.session.flush()
         return line
 
