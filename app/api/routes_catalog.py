@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from app.api.deps import (
     get_request_id,
     get_uow,
-    require_user_token_auth,
+    require_user_identity,
 )
 from app.core.identity import Identity
 from app.schemas.admin import SiteFilter
@@ -94,7 +94,7 @@ async def list_items(
     updated_after: datetime | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     site_id: int | None = Query(default=None),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogItemsResponse:
     async with uow:
@@ -113,7 +113,7 @@ async def list_categories(
     updated_after: datetime | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     site_id: int | None = Query(default=None),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogCategoriesResponse:
     async with uow:
@@ -136,7 +136,7 @@ async def list_units(
     updated_after: datetime | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     site_id: int | None = Query(default=None),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogUnitsResponse:
     async with uow:
@@ -153,7 +153,7 @@ async def list_units(
 async def list_sites(
     request: Request,
     is_active: bool | None = Query(default=True),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogSitesResponse:
     async with uow:
@@ -224,7 +224,7 @@ async def list_sites(
 async def get_categories_tree(
     request: Request,
     site_id: int | None = Query(default=None),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> list[CategoryTreeNode]:
     async with uow:
@@ -302,7 +302,7 @@ async def browse_items(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     site_id: int | None = Query(default=None),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogBrowseItemsResponse:
     async with uow:
@@ -339,7 +339,7 @@ async def browse_categories(
     include: str | None = Query(default=None),
     items_preview_limit: int = Query(default=5, ge=1, le=20),
     site_id: int | None = Query(default=None),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogBrowseCategoriesResponse:
     include_values = _parse_category_read_includes(include)
@@ -379,7 +379,7 @@ async def browse_category_items(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     site_id: int | None = Query(default=None),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogBrowseItemsResponse:
     async with uow:
@@ -420,7 +420,7 @@ async def browse_category_children(
     include: str | None = Query(default=None),
     items_preview_limit: int = Query(default=5, ge=1, le=20),
     site_id: int | None = Query(default=None),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogBrowseCategoriesResponse:
     include_values = _parse_category_read_includes(include)
@@ -462,7 +462,7 @@ async def browse_category_parent_chain(
     category_id: int,
     request: Request,
     site_id: int | None = Query(default=None),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CategoryParentChainResponse:
     async with uow:

@@ -70,6 +70,11 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    documents: Mapped[list["Document"]] = relationship(
+        "Document",
+        back_populates="created_by_user",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ux_users_username", "username", unique=True),

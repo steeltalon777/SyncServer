@@ -2,3 +2,7 @@ from __future__ import annotations
 
 UNCATEGORIZED_CATEGORY_NAME = "Без категории"
 UNCATEGORIZED_CATEGORY_CODE = "__UNCATEGORIZED__"
+
+DEFAULT_UNIT_CODE = "шт"
+DEFAULT_UNIT_NAME = "Штука"
+DEFAULT_UNIT_SYMBOL = "шт"

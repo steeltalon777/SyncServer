@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.deps import get_uow, require_user_token_auth
+from app.api.deps import get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.admin import SiteFilter
 from app.schemas.asset_register import (
@@ -58,7 +58,7 @@ async def _resolve_visible_site_ids(uow: UnitOfWork, identity: Identity) -> list
 @router.get("/pending-acceptance", response_model=PendingAcceptanceListResponse)
 async def list_pending_acceptance(
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     site_id: int | None = Query(None),
     operation_id: UUID | None = Query(None),
     item_id: int | None = Query(None),
@@ -94,7 +94,7 @@ async def list_pending_acceptance(
 @router.get("/lost-assets", response_model=LostAssetListResponse)
 async def list_lost_assets(
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     site_id: int | None = Query(None),
     source_site_id: int | None = Query(None),
     operation_id: UUID | None = Query(None),
@@ -134,7 +134,7 @@ async def resolve_lost_asset(
     operation_line_id: int,
     payload: LostAssetResolveRequest,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> dict[str, object]:
     _require_lost_resolve_access(identity)
 
@@ -154,7 +154,7 @@ async def resolve_lost_asset(
 @router.get("/issued-assets", response_model=IssuedAssetListResponse)
 async def list_issued_assets(
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     recipient_id: int | None = Query(None),
     item_id: int | None = Query(None),
     search: str | None = Query(None),

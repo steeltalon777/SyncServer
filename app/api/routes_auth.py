@@ -2,66 +2,16 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.api.deps import get_uow, require_user_identity
+from app.core.identity import Identity
 from app.schemas.admin import SiteFilter, UserCreate
 from app.services.access_service import AccessService
 from app.services.uow import UnitOfWork
-from app.api.deps import get_uow
 from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-async def _resolve_current_user(
-    uow: UnitOfWork,
-    x_user_token: UUID | None,
-) -> User:
-    if not x_user_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing X-User-Token",
-        )
-
-    user = await uow.users.get_by_user_token(x_user_token)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid X-User-Token",
-        )
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="user is inactive",
-        )
-    return user
-
-
-async def _resolve_current_device(
-    uow: UnitOfWork,
-    x_device_token: UUID | None,
-    x_device_id: str | None = None,
-):
-    if not x_device_token:
-        return None
-
-    device = await uow.devices.get_by_device_token(x_device_token)
-    if not device:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid X-Device-Token",
-        )
-    if not device.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="device is inactive",
-        )
-    if x_device_id is not None and str(device.id) != str(x_device_id):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-Device-Token does not match X-Device-Id",
-        )
-    return device
 
 
 def _user_payload(user: User) -> dict:
@@ -103,19 +53,14 @@ async def _validate_default_site(uow: UnitOfWork, default_site_id: int | None) -
 async def sync_user(
     payload: UserCreate,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
-    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
-    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+    identity: Identity = Depends(require_user_identity),
 ):
     """
     Sync user registry record (Django-compatible), authenticated by user token.
     Root-only operation.
     """
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        current_device = await _resolve_current_device(uow, x_device_token, x_device_id)
-
-        if not current_user.is_root:
+        if not identity.is_root:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="root permissions required for sync-user",
@@ -179,9 +124,9 @@ async def sync_user(
         "status": status_value,
         "user": _user_sync_payload(target_user),
         "synced_by": {
-            "id": str(current_user.id),
-            "username": current_user.username,
-            "device_id": current_device.id if current_device else None,
+            "id": str(identity.user_id),
+            "username": identity.username,
+            "device_id": identity.device_id,
         },
     }
 
@@ -189,13 +134,10 @@ async def sync_user(
 @router.get("/me")
 async def get_me(
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
-    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
-    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+    identity: Identity = Depends(require_user_identity),
 ):
-    async with uow:
-        user = await _resolve_current_user(uow, x_user_token)
-        device = await _resolve_current_device(uow, x_device_token, x_device_id)
+    user = identity.user
+    device = identity.device
 
     return {
         "user": _user_payload(user),
@@ -216,14 +158,11 @@ async def get_me(
 @router.get("/sites")
 async def get_user_sites(
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
-    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
-    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+    identity: Identity = Depends(require_user_identity),
 ):
-    async with uow:
-        user = await _resolve_current_user(uow, x_user_token)
-        await _resolve_current_device(uow, x_device_token, x_device_id)
+    user = identity.user
 
+    async with uow:
         if _has_global_business_access(user):
             sites, _ = await uow.sites.list_sites(
                 filter=SiteFilter(is_active=True),
@@ -285,13 +224,12 @@ async def get_user_sites(
 @router.get("/context")
 async def get_auth_context(
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
-    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
-    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+    identity: Identity = Depends(require_user_identity),
 ):
+    user = identity.user
+    device = identity.device
+
     async with uow:
-        user = await _resolve_current_user(uow, x_user_token)
-        device = await _resolve_current_device(uow, x_device_token, x_device_id)
         access_service = AccessService(uow)
 
         if _has_global_business_access(user):

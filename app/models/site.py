@@ -57,6 +57,11 @@ class Site(Base):
         back_populates="site",
         cascade="all, delete-orphan",
     )
+    documents: Mapped[list["Document"]] = relationship(
+        "Document",
+        back_populates="site",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ux_sites_code", "code", unique=True),

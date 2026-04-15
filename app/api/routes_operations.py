@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from app.api.deps import get_request_id, get_uow, require_user_token_auth
+from app.api.deps import get_request_id, get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.asset_register import OperationAcceptLinesRequest
 from app.schemas.admin import SiteFilter
@@ -120,7 +120,7 @@ async def _resolve_readable_site_ids(uow: UnitOfWork, identity: Identity) -> lis
 async def list_operations(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     site_id: int | None = Query(None),
     operation_type: OperationType | None = Query(None, alias="type"),
     status_filter: OperationStatus | None = Query(None, alias="status"),
@@ -175,7 +175,7 @@ async def get_operation(
     operation_id: UUID,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
     async with uow:
         operation = await uow.operations.get_operation_by_id(operation_id)
@@ -192,7 +192,7 @@ async def create_operation(
     operation_data: OperationCreate,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
     _require_operate_site(identity, operation_data.site_id)
     if operation_data.operation_type == "MOVE":
@@ -216,7 +216,7 @@ async def update_operation(
     update_data: OperationUpdate,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
     if "effective_at" in update_data.model_fields_set:
         raise HTTPException(
@@ -256,7 +256,7 @@ async def update_operation_effective_at(
     payload: OperationEffectiveAtUpdate,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
     async with uow:
         operation = await uow.operations.get_operation_by_id(operation_id)
@@ -287,7 +287,7 @@ async def submit_operation(
     submit_data: OperationSubmit,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
     if not submit_data.submit:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="submit must be true")
@@ -317,7 +317,7 @@ async def cancel_operation(
     cancel_data: OperationCancel,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
     if not cancel_data.cancel:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="cancel must be true")
@@ -349,7 +349,7 @@ async def accept_operation_lines(
     payload: OperationAcceptLinesRequest,
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
     async with uow:
         operation = await uow.operations.get_operation_by_id(operation_id)

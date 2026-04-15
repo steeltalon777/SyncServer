@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="{{ payload.localization.language|default('ru') }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ payload.document_title }} №{{ document.document_number }}</title>
+    <style>
+        body {
+            font-family: 'DejaVu Sans', 'Arial', sans-serif;
+            font-size: 12px;
+            line-height: 1.4;
+            margin: 20px;
+            color: #000;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #000;
+            padding-bottom: 10px;
+        }
+        .document-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .document-number {
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        .info-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        .info-table td {
+            padding: 5px 10px;
+            border: 1px solid #ccc;
+            vertical-align: top;
+        }
+        .info-table .label {
+            font-weight: bold;
+            background-color: #f5f5f5;
+            width: 30%;
+        }
+        .lines-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+        }
+        .lines-table th, .lines-table td {
+            border: 1px solid #000;
+            padding: 8px;
+            text-align: center;
+        }
+        .lines-table th {
+            background-color: #f0f0f0;
+            font-weight: bold;
+        }
+        .signatures {
+            margin-top: 40px;
+        }
+        .signature-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .signature-block {
+            width: 45%;
+            border-top: 1px solid #000;
+            padding-top: 40px;
+            text-align: center;
+        }
+        .footer {
+            margin-top: 50px;
+            font-size: 10px;
+            color: #666;
+            text-align: center;
+        }
+        .page-break {
+            page-break-after: always;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="document-title">{{ payload.document_title }}</div>
+        <div class="document-number">№ {{ document.document_number }}</div>
+        <div>Дата: {{ payload.generated_at|datetime_format(payload.localization.date_format) }}</div>
+    </div>
+
+    <table class="info-table">
+        <tr>
+            <td class="label">Отправитель:</td>
+            <td>
+                {% if payload.sender %}
+                {{ payload.sender.site_name }} ({{ payload.sender.site_code }})<br>
+                {{ payload.sender.organization.legal_name|default('') }}<br>
+                {{ payload.sender.organization.address|default('') }}
+                {% endif %}
+            </td>
+        </tr>
+        {% if payload.receiver %}
+        <tr>
+            <td class="label">Получатель:</td>
+            <td>
+                {{ payload.receiver.site_name }} ({{ payload.receiver.site_code }})<br>
+                {{ payload.receiver.organization.legal_name|default('') }}<br>
+                {{ payload.receiver.organization.address|default('') }}
+            </td>
+        </tr>
+        {% endif %}
+        {% if payload.recipient %}
+        <tr>
+            <td class="label">Получатель (физическое лицо):</td>
+            <td>{{ payload.recipient.recipient_name }}</td>
+        </tr>
+        {% endif %}
+        {% if payload.basis and (payload.basis.type or payload.basis.number or payload.basis.date) %}
+        <tr>
+            <td class="label">Основание документа:</td>
+            <td>
+                {{ payload.basis.type|default('') }}
+                {% if payload.basis.number %}№ {{ payload.basis.number }}{% endif %}
+                {% if payload.basis.date %} от {{ payload.basis.date|datetime_format(payload.localization.date_format) }}{% endif %}
+            </td>
+        </tr>
+        {% endif %}
+        <tr>
+            <td class="label">Основание:</td>
+            <td>
+                Операция № {{ payload.operation_id }}<br>
+                Тип: {{ payload.operation_type }}<br>
+                Дата операции: {{ payload.operation_effective_at|datetime_format(payload.localization.date_format) }}
+            </td>
+        </tr>
+        <tr>
+            <td class="label">Статус операции:</td>
+            <td>{{ payload.operation_status }}</td>
+        </tr>
+        {% if payload.operation_notes %}
+        <tr>
+            <td class="label">Примечания:</td>
+            <td>{{ payload.operation_notes }}</td>
+        </tr>
+        {% endif %}
+    </table>
+
+    <table class="lines-table">
+        <thead>
+            <tr>
+                <th>№</th>
+                <th>Наименование товара</th>
+                <th>Артикул</th>
+                <th>Количество</th>
+                <th>Ед. изм.</th>
+                <th>Категория</th>
+                <th>Партия</th>
+                <th>Примечание</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for line in payload.lines %}
+            <tr>
+                <td>{{ line.line_number }}</td>
+                <td>{{ line.item_name }}</td>
+                <td>{{ line.item_sku }}</td>
+                <td>{{ line.quantity|number_format(2) }}</td>
+                <td>{{ line.unit_name }} ({{ line.unit_symbol }})</td>
+                <td>{{ line.category_name }}</td>
+                <td>{{ line.batch|default('') }}</td>
+                <td>{{ line.comment|default('') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr>
+                <td colspan="3" style="text-align: right; font-weight: bold;">Итого позиций:</td>
+                <td colspan="5">{{ payload.total_lines }}</td>
+            </tr>
+        </tfoot>
+    </table>
+
+    <div class="signatures">
+        <div class="signature-row">
+            <div class="signature-block">
+                <strong>Сдал:</strong><br>
+                {{ payload.signatures.roles.handed_over|default('________________') }}<br>
+                <small>(должность, подпись, расшифровка)</small>
+            </div>
+            <div class="signature-block">
+                <strong>Принял:</strong><br>
+                {{ payload.signatures.roles.accepted_by|default('________________') }}<br>
+                <small>(должность, подпись, расшифровка)</small>
+            </div>
+        </div>
+        <div class="signature-row">
+            <div class="signature-block">
+                <strong>Главный бухгалтер:</strong><br>
+                {{ payload.signatures.roles.chief_accountant|default('________________') }}<br>
+                <small>(подпись, расшифровка)</small>
+            </div>
+            <div class="signature-block">
+                <strong>Дата составления:</strong><br>
+                {{ payload.generated_at|datetime_format(payload.localization.date_format) }}
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Документ сгенерирован системой SyncServer.<br>
+        ID документа: {{ document.id }}<br>
+        Шаблон: {{ document.template_name }} версия {{ document.template_version }}<br>
+        Схема payload: {{ document.payload_schema_version }}
+    </div>
+</body>
+</html>

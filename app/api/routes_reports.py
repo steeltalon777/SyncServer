@@ -5,7 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from app.api.deps import get_request_id, get_uow, require_user_token_auth
+from app.api.deps import get_request_id, get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.admin import SiteFilter
 from app.schemas.report import (
@@ -52,7 +52,7 @@ async def _resolve_visible_site_ids(uow: UnitOfWork, identity: Identity) -> list
 async def list_item_movement_report(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     site_id: int | None = Query(None, description="Filter by site ID"),
     item_id: int | None = Query(None, description="Filter by item ID"),
     category_id: int | None = Query(None, description="Filter by category ID"),
@@ -113,7 +113,7 @@ async def list_item_movement_report(
 async def list_stock_summary_report(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     site_id: int | None = Query(None, description="Filter by site ID"),
     category_id: int | None = Query(None, description="Filter by category ID"),
     search: str | None = Query(None, description="Search in item, category, or site labels"),

@@ -4,7 +4,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from app.api.deps import get_request_id, get_uow, require_user_token_auth
+from app.api.deps import get_request_id, get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.admin import SiteFilter
 from app.schemas.balance import (
@@ -49,7 +49,7 @@ async def _resolve_visible_site_ids(uow: UnitOfWork, identity: Identity) -> list
 async def list_balances(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     site_id: int | None = Query(None, description="Filter by site ID"),
     item_id: int | None = Query(None, description="Filter by item ID"),
     category_id: int | None = Query(None, description="Filter by category ID"),
@@ -106,7 +106,7 @@ async def list_balances_by_site(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(100, ge=1, le=200, description="Page size"),
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> BalanceListResponse:
     return await list_balances(
         request=request,
@@ -126,7 +126,7 @@ async def list_balances_by_site(
 async def get_balances_summary(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> BalanceSummaryResponse:
     _require_read_access(identity)
 

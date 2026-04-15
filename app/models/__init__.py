@@ -11,6 +11,7 @@ from app.models.device import Device
 from app.models.event import Event
 from app.models.item import Item
 from app.models.machine import MachineBatch, MachineReport, MachineSnapshot
+from app.models.document import Document, DocumentOperation, DocumentSource
 from app.models.operation import Operation, OperationLine
 from app.models.recipient import Recipient, RecipientAlias
 from app.models.site import Site
@@ -41,4 +42,7 @@ __all__ = [
     "OperationLine",
     "User",
     "UserAccessScope",
+    "Document",
+    "DocumentOperation",
+    "DocumentSource",
 ]

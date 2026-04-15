@@ -6,10 +6,10 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
-from app.api.deps import get_uow
+from app.api.deps import get_uow, require_user_identity
+from app.core.identity import Identity
 from app.models.device import Device
 from app.models.site import Site
-from app.models.user import User
 from app.schemas.admin import (
     DeviceCreate,
     DeviceFilter,
@@ -47,38 +47,10 @@ CANONICAL_ROLES = [
 ]
 
 
-async def _resolve_current_user(uow: UnitOfWork, x_user_token: UUID | None) -> User:
-    if not x_user_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing X-User-Token",
-        )
-    user = await uow.users.get_by_user_token(x_user_token)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid X-User-Token",
-        )
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="user is inactive",
-        )
-    return user
-
-
-def _require_root(user: User) -> None:
-    if not user.is_root:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="root permissions required",
-        )
-
-
-def _require_admin_basic(user: User) -> None:
-    if user.is_root:
+def _require_admin_basic(identity: Identity) -> None:
+    if identity.is_root:
         return
-    if user.role != "chief_storekeeper":
+    if identity.role != "chief_storekeeper":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="admin access denied",
@@ -101,8 +73,8 @@ async def _validate_default_site(uow: UnitOfWork, default_site_id: int | None) -
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="default site not found")
 
 
-def _require_non_root_target(user: User, *, detail: str) -> None:
-    if user.is_root:
+def _require_non_root_target(identity: Identity, *, detail: str) -> None:
+    if identity.is_root:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=detail,
@@ -128,11 +100,10 @@ def _user_with_token_payload(user: User) -> UserWithTokenResponse:
 @router.get("/roles", response_model=list[str])
 async def list_roles(
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> list[str]:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_admin_basic(current_user)
+        _require_admin_basic(identity)
     return CANONICAL_ROLES
 
 
@@ -142,15 +113,14 @@ async def list_roles(
 @router.get("/sites", response_model=SiteListResponse)
 async def list_sites_admin(
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
     is_active: bool | None = Query(default=None),
     search: str | None = Query(default=None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ) -> SiteListResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_admin_basic(current_user)
+        _require_admin_basic(identity)
 
         sites, total_count = await uow.sites.list_sites(
             filter=SiteFilter(is_active=is_active, search=search),
@@ -170,11 +140,10 @@ async def list_sites_admin(
 async def create_site(
     payload: SiteCreate,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> SiteResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_admin_basic(current_user)
+        _require_admin_basic(identity)
 
         existing = await uow.sites.get_by_code(payload.code)
         if existing:
@@ -197,11 +166,10 @@ async def update_site(
     site_id: int,
     payload: SiteUpdate,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> SiteResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_admin_basic(current_user)
+        _require_admin_basic(identity)
 
         site = await uow.sites.get_by_id(site_id)
         if not site:
@@ -231,7 +199,7 @@ async def update_site(
 @router.get("/users", response_model=UserListResponse)
 async def list_users(
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
     is_active: bool | None = Query(default=None),
     is_root: bool | None = Query(default=None),
     role: str | None = Query(default=None),
@@ -240,8 +208,11 @@ async def list_users(
     page_size: int = Query(50, ge=1, le=200),
 ) -> UserListResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         users = list(
             await uow.users.list_users(
@@ -277,11 +248,14 @@ async def list_users(
 async def get_user(
     user_id: UUID,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> UserResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         user = await uow.users.get_by_id(user_id)
         if not user:
@@ -293,11 +267,14 @@ async def get_user(
 async def create_user(
     payload: UserCreate,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> UserResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         if payload.is_root:
             raise HTTPException(
@@ -337,17 +314,20 @@ async def update_user(
     user_id: UUID,
     payload: UserUpdate,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> UserResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         user = await uow.users.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
 
-        _require_non_root_target(user, detail="admin api cannot update root users")
+        _require_non_root_target(identity, detail="admin api cannot update root users")
 
         if payload.username is not None and payload.username != user.username:
             exists_by_username = await uow.users.get_by_username(payload.username)
@@ -387,17 +367,20 @@ async def update_user(
 async def delete_user(
     user_id: UUID,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> UserResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         user = await uow.users.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
 
-        if user.is_root and user.id == current_user.id:
+        if user.is_root and user.id == identity.user_id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="cannot deactivate current root user",
@@ -413,11 +396,14 @@ async def delete_user(
 async def get_user_sync_state(
     user_id: UUID,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> UserSyncStateResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         user = await uow.users.get_by_id(user_id)
         if not user:
@@ -436,16 +422,19 @@ async def replace_user_scopes(
     user_id: UUID,
     payload: UserAccessScopeReplaceRequest,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> list[UserAccessScopeResponse]:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         user = await uow.users.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
-        _require_non_root_target(user, detail="cannot replace scopes for root users")
+        _require_non_root_target(identity, detail="cannot replace scopes for root users")
 
         seen_site_ids: set[int] = set()
         scopes_payload = []
@@ -479,16 +468,19 @@ async def replace_user_scopes(
 async def rotate_user_token(
     user_id: UUID,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> UserTokenResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         user = await uow.users.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
-        _require_non_root_target(user, detail="root token rotation is not allowed via API")
+        _require_non_root_target(identity, detail="root token rotation is not allowed via API")
 
         user.user_token = uuid4()
         await uow.session.flush()
@@ -508,7 +500,7 @@ async def rotate_user_token(
 @router.get("/access/scopes", response_model=list[UserAccessScopeResponse])
 async def list_access_scopes(
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
     user_id: UUID | None = Query(default=None),
     site_id: int | None = Query(default=None),
     is_active: bool | None = Query(default=None),
@@ -516,8 +508,11 @@ async def list_access_scopes(
     offset: int = Query(default=0, ge=0),
 ) -> list[UserAccessScopeResponse]:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         scopes = await uow.user_access_scopes.list_all_scopes(
             user_id=user_id,
@@ -533,11 +528,14 @@ async def list_access_scopes(
 async def create_access_scope(
     payload: UserAccessScopeCreate,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> UserAccessScopeResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         user = await uow.users.get_by_id(payload.user_id)
         if not user:
@@ -573,11 +571,14 @@ async def update_access_scope(
     scope_id: int,
     payload: UserAccessScopeUpdate,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> UserAccessScopeResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_root(current_user)
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="root permissions required",
+            )
 
         scope = await uow.user_access_scopes.update_scope(
             scope_id=scope_id,
@@ -597,7 +598,7 @@ async def update_access_scope(
 @router.get("/devices", response_model=DeviceListResponse)
 async def list_devices(
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
     site_id: int | None = Query(default=None),
     is_active: bool | None = Query(default=None),
     search: str | None = Query(default=None),
@@ -605,8 +606,7 @@ async def list_devices(
     page_size: int = Query(50, ge=1, le=200),
 ) -> DeviceListResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_admin_basic(current_user)
+        _require_admin_basic(identity)
 
         stmt = select(Device)
         if site_id is not None:
@@ -640,11 +640,10 @@ async def list_devices(
 async def create_device(
     payload: DeviceCreate,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> DeviceWithTokenResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_admin_basic(current_user)
+        _require_admin_basic(identity)
 
         if payload.site_id is not None:
             site = await uow.sites.get_by_id(payload.site_id)
@@ -669,11 +668,10 @@ async def update_device(
     device_id: int,
     payload: DeviceUpdate,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> DeviceResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_admin_basic(current_user)
+        _require_admin_basic(identity)
 
         device = await uow.devices.get_by_id(device_id)
         if not device:
@@ -702,11 +700,10 @@ async def update_device(
 async def rotate_device_token(
     device_id: int,
     uow: UnitOfWork = Depends(get_uow),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> DeviceTokenResponse:
     async with uow:
-        current_user = await _resolve_current_user(uow, x_user_token)
-        _require_admin_basic(current_user)
+        _require_admin_basic(identity)
 
         device = await uow.devices.get_by_id(device_id)
         if not device:
@@ -718,6 +715,7 @@ async def rotate_device_token(
 
         return DeviceTokenResponse(
             device_id=device.id,
+            device_code=device.device_code,
             device_token=device.device_token,
             generated_at=datetime.now(UTC),
         )

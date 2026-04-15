@@ -165,6 +165,16 @@ class Operation(Base):
         back_populates="destination_operations",
         foreign_keys=[destination_site_id],
     )
+    documents: Mapped[list["Document"]] = relationship(
+        "Document",
+        secondary="document_operations",
+        back_populates="operations",
+    )
+    document_operations_assoc: Mapped[list["DocumentOperation"]] = relationship(
+        "DocumentOperation",
+        back_populates="operation",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         CheckConstraint(

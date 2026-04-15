@@ -91,6 +91,29 @@ async def test_ping_auth_ok(client: AsyncClient, session_factory: async_sessionm
 
 
 @pytest.mark.asyncio
+async def test_ping_auth_ok_with_placeholder_device_id(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    site, device = await _seed_site_and_device(session_factory)
+
+    response = await client.post(
+        "/api/v1/ping",
+        json={
+            "site_id": site.id,
+            "device_id": 0,
+            "last_server_seq": 0,
+            "outbox_count": 1,
+            "client_time": datetime.now(UTC).isoformat(),
+        },
+        headers={"X-Device-Token": str(device.device_token)},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["backoff_seconds"] == 0
+
+
+@pytest.mark.asyncio
 async def test_push_accept_duplicate_collision(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
@@ -251,7 +274,30 @@ async def test_auth_fail_bad_token(client: AsyncClient, session_factory: async_s
         headers={"X-Device-Token": str(uuid4())},
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid X-Device-Token"
+
+
+@pytest.mark.asyncio
+async def test_auth_fail_invalid_token_format(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    site, device = await _seed_site_and_device(session_factory)
+
+    response = await client.post(
+        "/api/v1/ping",
+        json={
+            "site_id": site.id,
+            "device_id": -1,
+            "last_server_seq": 0,
+            "outbox_count": 0,
+        },
+        headers={"X-Device-Token": "not-a-uuid"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid X-Device-Token"
 
 
 @pytest.mark.asyncio

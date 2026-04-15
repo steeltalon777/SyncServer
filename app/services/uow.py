@@ -6,6 +6,7 @@ from app.repos.asset_registers_repo import AssetRegistersRepo
 from app.repos.balances_repo import BalancesRepo
 from app.repos.catalog_repo import CatalogRepo
 from app.repos.devices_repo import DevicesRepo
+from app.repos.documents_repo import DocumentsRepo
 from app.repos.events_repo import EventsRepo
 from app.repos.machine_repo import MachineRepo
 from app.repos.operations_repo import OperationsRepo
@@ -34,6 +35,7 @@ class UnitOfWork:
         self.reports = ReportsRepo(session)
         self.machine = MachineRepo(session)
         self.users = UsersRepo(session)
+        self.documents = DocumentsRepo(session)
 
     async def __aenter__(self) -> "UnitOfWork":
         return self

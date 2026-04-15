@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 from app.repos.recipients_repo import normalize_recipient_name
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
+from app.services.document_service import DocumentService
 from app.services.uow import UnitOfWork
 
 logger = logging.getLogger(__name__)
@@ -627,7 +628,52 @@ class OperationsService:
             operation_id=operation_id,
             submitted_by_user_id=user_id,
         )
-        return {"operation": submitted_operation}
+        
+        # Автоматически создаём документ для операции (если включено в конфиге)
+        # Пока создаём только для определённых типов операций
+        document_created = None
+        try:
+            # Определяем тип документа на основе типа операции
+            document_type_map = {
+                "RECEIVE": "acceptance_certificate",
+                "MOVE": "waybill",
+                "ISSUE": "waybill",
+                "ISSUE_RETURN": "waybill",
+                "EXPENSE": "act",
+                "WRITE_OFF": "act",
+                "ADJUSTMENT": "act",
+            }
+            
+            document_type = document_type_map.get(submitted_operation.operation_type)
+            if document_type:
+                # Генерируем документ с автоматической финализацией
+                result = await DocumentService.generate_from_operation(
+                    uow=uow,
+                    operation_id=operation_id,
+                    document_type=document_type,
+                    auto_finalize=True,
+                    created_by_user_id=user_id,
+                )
+                document_created = result["document"]
+                logger.info(
+                    "Auto-generated document id=%s for operation id=%s type=%s",
+                    document_created.id,
+                    operation_id,
+                    submitted_operation.operation_type,
+                )
+        except Exception as e:
+            # Логируем ошибку, но не прерываем выполнение
+            logger.warning(
+                "Failed to auto-generate document for operation id=%s: %s",
+                operation_id,
+                str(e),
+            )
+        
+        response = {"operation": submitted_operation}
+        if document_created:
+            response["document"] = document_created
+        
+        return response
 
     @staticmethod
     async def accept_operation_lines(

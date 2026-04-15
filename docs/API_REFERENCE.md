@@ -134,6 +134,50 @@ Rules:
 - `storekeeper` may not change `effective_at`
 - `chief_storekeeper` is a global business supervisor and may work with operations across all sites
 
+## Documents API
+
+Endpoints:
+- `POST /documents/generate`
+- `GET /documents/{document_id}`
+- `GET /documents/{document_id}/render?format=html`
+- `GET /documents/{document_id}/render?format=pdf`
+- `GET /documents`
+- `PATCH /documents/{document_id}/status`
+- `GET /documents/operations/{operation_id}/documents`
+- `POST /documents/operations/{operation_id}/documents`
+
+Lifecycle:
+- `draft`: generated but not finalized
+- `finalized`: immutable print snapshot, ready for official print/export
+- `void`: cancelled document
+- `superseded`: replaced by newer revision
+
+Generation request example:
+`POST /api/v1/documents/generate`
+
+Body:
+```json
+{
+  "operation_id": "6f3f6d8a-2a6e-4cf2-9a2a-a0a2a2f89f4b",
+  "document_type": "waybill",
+  "template_name": "waybill_v1",
+  "auto_finalize": true,
+  "language": "ru",
+  "basis_type": "contract",
+  "basis_number": "42/2026",
+  "basis_date": "2026-04-15T00:00:00Z"
+}
+```
+
+Render notes:
+- `format=html` returns `text/html`
+- `format=pdf` returns `application/pdf`
+- rendered output is cached for a short period (in-memory)
+
+Payload notes:
+- payload is immutable after finalization
+- payload includes site/organization snapshots, operation snapshot fields, line snapshots, signatures, localization, and document basis data
+
 ## Balances API (read-only)
 - `GET /balances`
 - `GET /balances/by-site`

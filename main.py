@@ -14,6 +14,7 @@ from app.api.routes_auth import router as auth_router
 from app.api.routes_balances import router as balances_router
 from app.api.routes_catalog import router as catalog_router
 from app.api.routes_catalog_admin import router as catalog_admin_router
+from app.api.routes_documents import router as documents_router
 from app.api.routes_health import router as health_router
 from app.api.routes_operations import router as operations_router
 from app.api.routes_recipients import router as recipients_router
@@ -113,6 +114,9 @@ def create_app(
 
     # Operations API (user token auth)
     app.include_router(operations_router, prefix=api_v1_prefix)
+
+    # Documents API (user token auth)
+    app.include_router(documents_router, prefix=api_v1_prefix)
 
     # Recipients API (user token auth)
     app.include_router(recipients_router, prefix=api_v1_prefix)

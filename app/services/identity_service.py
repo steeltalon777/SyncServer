@@ -9,157 +9,116 @@ from app.services.uow import UnitOfWork
 
 
 class IdentityService:
-    """Service for resolving and validating identities from tokens."""
-    
+    """Service for resolvinging and validating identities from tokens."""
+
     def __init__(self, uow: UnitOfWork):
         self.uow = uow
-    
-    async def resolve_user_by_token(self, user_token: UUID) -> Identity:
-        """
-        Resolve user identity by user token.
-        
-        Args:
-            user_token: UUID user token from X-User-Token header
-            
-        Returns:
-            Identity object with user information
-            
-        Raises:
-            HTTPException: if user not found or inactive
-        """
-        user = await self.uow.users.get_by_user_token(user_token)
-        if not user:
+
+    @staticmethod
+    def _parse_uuid_token(value: UUID | str | None, header_name: str) -> UUID | None:
+        if value is None:
+            return None
+        if isinstance(value, UUID):
+            return value
+        try:
+            return UUID(str(value))
+        except (TypeError, ValueError):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid user token",
-            )
-        
-        if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User account is inactive",
-            )
-        
-        # Load user's access scopes
-        scopes = list(await self.uow.user_access_scopes.list_user_scopes(user.id))
-        
-        return Identity.from_user_and_device(
-            user=user,
-            device=None,
-            scopes=scopes,
-        )
-    
-    async def resolve_device_by_token(
+                detail=f"Invalid {header_name}",
+            ) from None
+
+    async def resolve_identity(
         self,
-        device_id: int | str | UUID | None,
-        device_token: UUID,
         *,
-        update_last_seen: bool = True,
+        user_token: UUID | str | None = None,
+        device_token: UUID | str | None = None,
+        require_user: bool = False,
+        require_device: bool = False,
         client_ip: str | None = None,
         client_version: str | None = None,
     ) -> Identity:
         """
-        Resolve device identity by device token.
-        
+        Resolve identity from available tokens.
+
         Args:
-            device_id: UUID device ID from X-Device-Id header
-            device_token: UUID device token from X-Device-Token header
-            update_last_seen: Whether to update device's last seen timestamp
-            client_ip: Client IP address for last seen update
-            client_version: Client version for last seen update
-            
+            user_token: Optional X-User-Token value
+            device_token: Optional X-Device-Token value
+            require_user: If True, X-User-Token must be present and valid
+            require_device: If True, X-Device-Token must be present and valid
+            client_ip: Client IP for device last_seen update
+            client_version: Client version for device last_seen update
+
         Returns:
-            Identity object with device and associated user information
-            
+            Unified Identity object
+
         Raises:
-            HTTPException: if device not found, token invalid, or device inactive
+            HTTPException: 401 if tokens missing/invalid, 403 if inactive
         """
-        device = await self.uow.devices.get_by_device_token(device_token)
-        if not device:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid device token",
-            )
+        user = None
+        device = None
+        scopes: list = []
+        parsed_user_token = self._parse_uuid_token(user_token, "X-User-Token")
+        parsed_device_token = self._parse_uuid_token(device_token, "X-Device-Token")
 
-        if not device.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Device is inactive",
-            )
+        # --- User token resolution ---
+        if parsed_user_token is not None:
+            user = await self.uow.users.get_by_user_token(parsed_user_token)
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid X-User-Token",
+                )
+            if not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User account is inactive",
+                )
+            scopes = list(await self.uow.user_access_scopes.list_user_scopes(user.id))
 
-        if device_id is not None and str(device.id) != str(device_id):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Device token does not match device id",
-            )
-
-        if update_last_seen:
+        # --- Device token resolution ---
+        if parsed_device_token is not None:
+            device = await self.uow.devices.get_by_device_token(parsed_device_token)
+            if not device:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid X-Device-Token",
+                )
+            if not device.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Device is inactive",
+                )
             await self.uow.devices.update_last_seen(
                 device_id=device.id,
                 ip=client_ip,
                 client_version=client_version,
             )
 
-        # Device-token auth yields a device principal for sync flows.
-        from app.models.user import User
-        from uuid import uuid4
-
-        device_user = User(
-            id=uuid4(),
-            username=f"device:{device.id}",
-            email=None,
-            full_name="Device Principal",
-            user_token=uuid4(),
-            is_active=True,
-            is_root=False,
-            role="observer",
-            default_site_id=device.site_id,
-        )
-
-        return Identity.from_user_and_device(
-            user=device_user,
-            device=device,
-            scopes=[],
-        )
-    
-    async def resolve_current_identity(
-        self,
-        *,
-        user_token: UUID | None = None,
-        device_id: int | str | UUID | None = None,
-        device_token: UUID | None = None,
-        client_ip: str | None = None,
-        client_version: str | None = None,
-    ) -> Identity:
-        """
-        Resolve current identity based on available tokens.
-        Prioritizes user token over device token.
-        Args:
-            user_token: Optional user token
-            device_id: Optional device ID
-            device_token: Optional device token
-            client_ip: Optional client IP
-            client_version: Optional client version
-        Returns:
-            Identity object
-
-        Raises:
-            HTTPException: if no valid tokens provided or authentication fails
-        """
-        if user_token:
-            return await self.resolve_user_by_token(user_token)
-
-        if device_token:
-            return await self.resolve_device_by_token(
-                device_id=device_id,
-                device_token=device_token,
-                client_ip=client_ip,
-                client_version=client_version,
+        # --- Requirement checks ---
+        if require_user and user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="X-User-Token is required",
             )
 
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No authentication tokens provided",
+        if require_device and device is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="X-Device-Token is required",
+            )
+
+        # --- At least one token must be provided ---
+        if user is None and device is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No authentication tokens provided",
+            )
+
+        return Identity(
+            user=user,
+            device=device,
+            scopes=scopes,
         )
 
     async def validate_identity_for_site(
@@ -188,7 +147,7 @@ class IdentityService:
 
         if not identity.has_site_access(site_id):
             return False
-        
+
         if require_can_operate and not identity.can_operate_at_site(site_id):
             return False
 

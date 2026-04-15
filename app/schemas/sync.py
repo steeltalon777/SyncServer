@@ -97,3 +97,27 @@ class PullResponse(ORMBaseModel):
     server_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
     server_seq_upto: int = 0
     next_since_seq: int = 0
+
+
+class BootstrapSyncRequest(BaseModel):
+    site_id: int = 0
+    device_id: int = 0
+
+
+class BootstrapData(BaseModel):
+    """Данные начальной загрузки: доступные сайты, каталоги, настройки синхронизации."""
+    available_sites: list[dict] = Field(default_factory=list)
+    protocol_version: str = "1.0"
+    settings: dict = Field(default_factory=dict)
+
+
+class BootstrapSyncResponse(ORMBaseModel):
+    server_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    protocol_version: str = "1.0"
+    is_root: bool = False
+    root_user: dict | None = None
+    root_role: str | None = None
+    device_id: int | None = None
+    device_registered: bool = False
+    message: str = ""
+    bootstrap_data: BootstrapData | None = None

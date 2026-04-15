@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-
-from app.api.deps import get_uow, require_user_token_auth
+from app.api.deps import get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.recipient import (
     RecipientCreate,
@@ -42,34 +40,11 @@ def _require_merge(identity: Identity) -> None:
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="only chief_storekeeper or root may merge recipients")
 
 
-async def _resolve_current_user_uuid(uow: UnitOfWork, x_user_token: UUID | None) -> UUID:
-    if not x_user_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing X-User-Token",
-        )
-
-    user = await uow.users.get_by_user_token(x_user_token)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid X-User-Token",
-        )
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="user is inactive",
-        )
-    return user.id
-
-
-
-
 @router.post("", response_model=RecipientResponse)
 async def create_recipient(
     payload: RecipientCreate,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> RecipientResponse:
     _require_write(identity)
 
@@ -87,7 +62,7 @@ async def create_recipient(
 async def merge_recipients(
     payload: RecipientMerge,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
 ) -> RecipientResponse:
     _require_merge(identity)
 
@@ -107,13 +82,11 @@ async def merge_recipients(
 async def get_recipient(
     recipient_id: int,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> RecipientResponse:
     _require_read(identity)
     service = RecipientsService()
     async with uow:
-        user_id = await _resolve_current_user_uuid(uow, x_user_token)
         recipient = await service.get_recipient(uow, recipient_id)
     return RecipientResponse.model_validate(recipient)
 
@@ -123,13 +96,11 @@ async def update_recipient(
     recipient_id: int,
     payload: RecipientUpdate,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> RecipientResponse:
     _require_write(identity)
     service = RecipientsService()
     async with uow:
-        user_id = await _resolve_current_user_uuid(uow, x_user_token)
         recipient = await service.update_recipient(uow, recipient_id, payload)
     return RecipientResponse.model_validate(recipient)
 
@@ -138,20 +109,18 @@ async def update_recipient(
 async def delete_recipient(
     recipient_id: int,
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
+    identity: Identity = Depends(require_user_identity),
 ) -> None:
     _require_write(identity)
     service = RecipientsService()
     async with uow:
-        user_id = await _resolve_current_user_uuid(uow, x_user_token)
-        await service.delete_recipient(uow, recipient_id, user_id)
+        await service.delete_recipient(uow, recipient_id, identity.user_id)
 
 
 @router.get("", response_model=RecipientListResponse)
 async def list_recipients(
     uow: UnitOfWork = Depends(get_uow),
-    identity: Identity = Depends(require_user_token_auth),
+    identity: Identity = Depends(require_user_identity),
     search: str | None = Query(None),
     recipient_type: str | None = Query(None),
     include_inactive: bool = False,

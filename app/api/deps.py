@@ -4,7 +4,6 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from time import monotonic
-from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -12,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.core.identity import Identity
-from app.models.device import Device
 from app.services.identity_service import IdentityService
 from app.services.uow import UnitOfWork
 
@@ -60,98 +58,6 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-async def require_user_token_auth(
-    request: Request,
-    identity_service: IdentityService = Depends(get_identity_service),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
-) -> Identity:
-    if not x_user_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing X-User-Token",
-        )
-    return await identity_service.resolve_user_by_token(x_user_token)
-
-
-async def require_device_token_auth(
-    request: Request,
-    identity_service: IdentityService = Depends(get_identity_service),
-    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
-    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
-) -> Identity:
-    if not x_device_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing X-Device-Token",
-        )
-    return await identity_service.resolve_current_identity(
-        device_id=x_device_id,
-        device_token=x_device_token,
-        client_ip=get_client_ip(request),
-        client_version=x_client_version,
-    )
-
-
-async def require_token_auth(
-    request: Request,
-    identity_service: IdentityService = Depends(get_identity_service),
-    x_user_token: UUID | None = Header(default=None, alias="X-User-Token"),
-    x_device_token: UUID | None = Header(default=None, alias="X-Device-Token"),
-    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
-) -> Identity:
-    return await identity_service.resolve_current_identity(
-        user_token=x_user_token,
-        device_id=x_device_id,
-        device_token=x_device_token,
-        client_ip=get_client_ip(request),
-        client_version=x_client_version,
-    )
-
-
-async def require_device_auth(
-    *,
-    request: Request,
-    uow: UnitOfWork,
-    site_id: UUID | int | str,
-    device_id: UUID | int | str,
-    device_token: str | None,
-    client_version: str | None,
-) -> Device:
-    if not device_token:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="forbidden",
-        )
-
-    device = await uow.devices.get_by_id(device_id)
-    if device is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="forbidden",
-        )
-
-    token_value = getattr(device, "device_token", None) or getattr(device, "registration_token", None)
-    is_valid = (
-        str(device.site_id) == str(site_id)
-        and device.is_active
-        and str(token_value) == str(device_token)
-    )
-    if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="forbidden",
-        )
-
-    await uow.devices.update_last_seen(
-        device_id=device.id,
-        ip=get_client_ip(request),
-        client_version=client_version,
-    )
-    return device
-
-
 async def enforce_rate_limit(request: Request, device_id: int | str, route_name: str) -> None:
     ip = get_client_ip(request)
 
@@ -165,7 +71,72 @@ async def enforce_rate_limit(request: Request, device_id: int | str, route_name:
         await rate_limiter.check(key=key, min_interval_seconds=1.0)
         return
 
+    if route_name == "bootstrap":
+        key = f"{route_name}:{ip}:{device_id}"
+        await rate_limiter.check(key=key, min_interval_seconds=10.0)
+        return
+
     logger.debug("No rate limit configured for route=%s", route_name)
+
+
+# ---------------------------------------------------------------------------
+# Unified auth dependencies
+# ---------------------------------------------------------------------------
+
+async def require_identity(
+    identity_service: IdentityService = Depends(get_identity_service),
+    x_user_token: str | None = Header(default=None, alias="X-User-Token"),
+    x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
+    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
+    request: Request = None,  # injected by FastAPI automatically
+) -> Identity:
+    """
+    Require at least one valid token (user or device).
+    """
+    return await identity_service.resolve_identity(
+        user_token=x_user_token,
+        device_token=x_device_token,
+        client_ip=get_client_ip(request) if request else None,
+        client_version=x_client_version,
+    )
+
+
+async def require_user_identity(
+    identity_service: IdentityService = Depends(get_identity_service),
+    x_user_token: str | None = Header(default=None, alias="X-User-Token"),
+    x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
+    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
+    request: Request = None,
+) -> Identity:
+    """
+    Require valid X-User-Token. X-Device-Token is optional for audit context.
+    """
+    return await identity_service.resolve_identity(
+        user_token=x_user_token,
+        device_token=x_device_token,
+        require_user=True,
+        client_ip=get_client_ip(request) if request else None,
+        client_version=x_client_version,
+    )
+
+
+async def require_device_identity(
+    identity_service: IdentityService = Depends(get_identity_service),
+    x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
+    x_user_token: str | None = Header(default=None, alias="X-User-Token"),
+    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
+    request: Request = None,
+) -> Identity:
+    """
+    Require valid X-Device-Token. X-User-Token is optional.
+    """
+    return await identity_service.resolve_identity(
+        user_token=x_user_token,
+        device_token=x_device_token,
+        require_device=True,
+        client_ip=get_client_ip(request) if request else None,
+        client_version=x_client_version,
+    )
 
 
 def error_response(

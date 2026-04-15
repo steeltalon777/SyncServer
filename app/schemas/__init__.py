@@ -67,6 +67,17 @@ from app.schemas.catalog import (
     CategoryTreeNode,
 )
 from app.schemas.common import ORMBaseModel
+from app.schemas.document import (
+    DocumentCreate,
+    DocumentFilter,
+    DocumentGenerateRequest,
+    DocumentLinkOperation,
+    DocumentListResponse,
+    DocumentResponse,
+    DocumentUpdate,
+    DocumentType,
+    DocumentStatus,
+)
 from app.schemas.operation import (
     OperationCancel,
     OperationCreate,
@@ -198,4 +209,13 @@ __all__ = [
     "UserSiteAccessResponse",
     "UserSiteAccessListResponse",
     "UserSiteAccessFilter",
+    "DocumentCreate",
+    "DocumentFilter",
+    "DocumentGenerateRequest",
+    "DocumentLinkOperation",
+    "DocumentListResponse",
+    "DocumentResponse",
+    "DocumentUpdate",
+    "DocumentType",
+    "DocumentStatus",
 ]
