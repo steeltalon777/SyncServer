@@ -68,8 +68,10 @@ Access scopes (root only):
 
 Devices:
 - `GET /admin/devices`
+- `GET /admin/devices/{device_id}` - get device by ID
 - `POST /admin/devices` - creates device and returns its token
 - `PATCH /admin/devices/{device_id}`
+- `DELETE /admin/devices/{device_id}` - delete device
 - `POST /admin/devices/{device_id}/rotate-token`
 
 Roles list:
@@ -91,12 +93,23 @@ Read model (browse/UI, user token):
 - `GET /catalog/read/categories/{category_id}/parent-chain`
 
 Admin:
-- `POST /catalog/admin/units`
-- `PATCH /catalog/admin/units/{unit_id}`
-- `POST /catalog/admin/categories`
-- `PATCH /catalog/admin/categories/{category_id}`
-- `POST /catalog/admin/items`
-- `PATCH /catalog/admin/items/{item_id}`
+- `GET /catalog/admin/units` - list units
+- `GET /catalog/admin/units/{unit_id}` - get unit by ID
+- `POST /catalog/admin/units` - create unit
+- `PATCH /catalog/admin/units/{unit_id}` - update unit
+- `DELETE /catalog/admin/units/{unit_id}` - delete unit
+- `GET /catalog/admin/categories` - list categories
+- `GET /catalog/admin/categories/{category_id}` - get category by ID
+- `POST /catalog/admin/categories` - create category
+- `PATCH /catalog/admin/categories/{category_id}` - update category
+- `DELETE /catalog/admin/categories/{category_id}` - delete category
+- `GET /catalog/admin/items` - list items
+- `GET /catalog/admin/items/{item_id}` - get item by ID
+- `POST /catalog/admin/items` - create item
+- `PATCH /catalog/admin/items/{item_id}` - update item
+- `DELETE /catalog/admin/items/{item_id}` - delete item
+- `POST /catalog/admin/items` fallback: missing/null/unknown/inactive category resolves to `__UNCATEGORIZED__`
+- `PATCH /catalog/admin/items/{item_id}` category semantics: omitted keeps current category, `null` moves to `__UNCATEGORIZED__`
 
 ## Operations API
 Supported operation types:
@@ -116,6 +129,7 @@ Endpoints:
 - `PATCH /operations/{operation_id}/effective-at`
 - `POST /operations/{operation_id}/submit`
 - `POST /operations/{operation_id}/cancel`
+- `POST /operations/{operation_id}/accept-lines` - accept operation lines (destination site access)
 
 Rules:
 - submit updates balances
@@ -137,14 +151,14 @@ Rules:
 ## Documents API
 
 Endpoints:
-- `POST /documents/generate`
-- `GET /documents/{document_id}`
-- `GET /documents/{document_id}/render?format=html`
-- `GET /documents/{document_id}/render?format=pdf`
-- `GET /documents`
-- `PATCH /documents/{document_id}/status`
-- `GET /documents/operations/{operation_id}/documents`
-- `POST /documents/operations/{operation_id}/documents`
+- `POST /documents/generate` - generate document from operation
+- `GET /documents/{document_id}` - get document metadata
+- `GET /documents/{document_id}/render?format=html` - render document as HTML
+- `GET /documents/{document_id}/render?format=pdf` - render document as PDF
+- `GET /documents` - list documents with filtering
+- `PATCH /documents/{document_id}/status` - update document status
+- `GET /documents/operations/{operation_id}/documents` - list documents for an operation
+- `POST /documents/operations/{operation_id}/documents` - generate document for operation (shortcut)
 
 Lifecycle:
 - `draft`: generated but not finalized
@@ -195,6 +209,109 @@ Access:
 - `category_id`, `category_name`
 - `qty`, `updated_at`
 
+## Asset Register API (read-only)
+
+Endpoints:
+- `GET /pending-acceptance` – список ожидающих приёмки активов
+- `GET /lost-assets` – список непринятых активов (lost assets)
+- `GET /lost-assets/{operation_line_id}` – детали одного непринятого актива
+- `POST /lost-assets/{operation_line_id}/resolve` – разрешение непринятого актива (возврат, списание, перемещение)
+- `GET /issued-assets` – список выданных активов
+
+Access:
+- root: все сайты
+- chief_storekeeper: все сайты как глобальный бизнес-супервизор
+- storekeeper/observer: только активные `UserAccessScope` с `can_view=true`
+
+### GET /lost-assets
+
+Возвращает список непринятых активов с пагинацией и фильтрацией.
+
+Параметры запроса (query parameters):
+- `site_id` (optional) – фильтр по сайту
+- `source_site_id` (optional) – фильтр по исходному сайту (для операций перемещения)
+- `operation_id` (optional) – фильтр по операции
+- `item_id` (optional) – фильтр по товару
+- `search` (optional) – поиск по названию товара, SKU или названию сайта
+- `updated_after` (optional, ISO 8601 datetime) – фильтр по дате обновления (>=)
+- `updated_before` (optional, ISO 8601 datetime) – фильтр по дате обновления (<=)
+- `qty_from` (optional, decimal) – минимальное количество
+- `qty_to` (optional, decimal) – максимальное количество
+- `page` (default: 1) – номер страницы
+- `page_size` (default: 50) – размер страницы
+
+Ответ:
+```json
+{
+  "items": [
+    {
+      "operation_id": "uuid",
+      "operation_line_id": 123,
+      "site_id": 1,
+      "site_name": "Склад А",
+      "source_site_id": null,
+      "source_site_name": null,
+      "item_id": 456,
+      "item_name": "Товар",
+      "sku": "SKU123",
+      "qty": "5.00",
+      "updated_at": "2026-04-16T05:30:00Z"
+    }
+  ],
+  "total_count": 42,
+  "page": 1,
+  "page_size": 50
+}
+```
+
+### GET /lost-assets/{operation_line_id}
+
+Возвращает детальную информацию о конкретном непринятом активе.
+
+Параметры пути:
+- `operation_line_id` – ID строки операции (целое число)
+
+Ответ:
+```json
+{
+  "operation_id": "uuid",
+  "operation_line_id": 123,
+  "site_id": 1,
+  "site_name": "Склад А",
+  "source_site_id": null,
+  "source_site_name": null,
+  "item_id": 456,
+  "item_name": "Товар",
+  "sku": "SKU123",
+  "qty": "5.00",
+  "updated_at": "2026-04-16T05:30:00Z"
+}
+```
+
+Ошибки:
+- 404 – если запись не найдена или у пользователя нет доступа к сайту
+- 403 – если пользователь не имеет прав на просмотр сайта
+
+### POST /lost-assets/{operation_line_id}/resolve
+
+Разрешение непринятого актива: возврат на исходный склад, списание или перемещение на другой склад.
+
+Тело запроса:
+```json
+{
+  "action": "found_to_destination" | "return_to_source" | "write_off",
+  "qty": "5.00",
+  "note": "Потерянный товар найден",
+  "responsible_recipient_id": null
+}
+```
+
+Ответ: 200 OK с деталями выполненного действия.
+
+### GET /pending-acceptance и GET /issued-assets
+
+Аналогично поддерживают фильтрацию по сайту, товару, поиск и пагинацию.
+
 ## Reports API (read-only)
 - `GET /reports/item-movement`
 - `GET /reports/stock-summary`
@@ -228,10 +345,14 @@ Rules:
 - `POST /ping`
 - `POST /push`
 - `POST /pull`
+- `POST /bootstrap/sync` - initial bootstrap for Django client (root only)
 
 ## Health
-- `GET /health`
-- `GET /ready`
+- `GET /health` - liveness
+- `GET /ready` - readiness + DB check
+- `GET /health/detailed` - detailed health with all dependencies
+- `GET /health/readiness` - readiness check for critical dependencies
+- `GET /health/liveness` - liveness check for basic application health
 
 ## Postman Examples
 
@@ -456,3 +577,26 @@ Response:
 - `GET /api/v1/catalog/read/categories/{category_id}/items?search=&page=&page_size=&site_id=`
 - `GET /api/v1/catalog/read/categories/{category_id}/children?page=&page_size=&include=&items_preview_limit=&site_id=`
 - `GET /api/v1/catalog/read/categories/{category_id}/parent-chain?site_id=`
+## Temporary items Phase 1
+
+### Create operation with inline temporary item
+
+- Endpoint: [`POST /api/v1/operations`](app/api/routes_operations.py:103)
+- Inline schema: [`TemporaryItemInlineCreate`](app/schemas/temporary_item.py:10)
+- Ограничения:
+  - только `RECEIVE`;
+  - обязателен [`client_request_id`](app/schemas/operation.py:72);
+  - `category_id` должен быть передан, хотя поле остаётся nullable в контракте ради совместимости с целевой спецификацией.
+
+### Review temporary items
+
+- [`GET /api/v1/temporary-items`](app/api/routes_temporary_items.py:16)
+- [`GET /api/v1/temporary-items/{temporary_item_id}`](app/api/routes_temporary_items.py:48)
+- [`POST /api/v1/temporary-items/{temporary_item_id}/approve-as-item`](app/api/routes_temporary_items.py:64)
+- [`POST /api/v1/temporary-items/{temporary_item_id}/merge`](app/api/routes_temporary_items.py:94)
+
+### Operation line response extensions
+
+- [`OperationLineResponse.temporary_item_id`](app/schemas/operation.py:143)
+- [`OperationLineResponse.temporary_item_status`](app/schemas/operation.py:144)
+- [`OperationLineResponse.resolved_item_id`](app/schemas/operation.py:145)

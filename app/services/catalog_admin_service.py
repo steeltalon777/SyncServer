@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import logging
 from datetime import datetime
 from uuid import UUID
 
@@ -21,6 +23,9 @@ from app.schemas.catalog import (
     UnitUpdateRequest,
 )
 from app.services.uow import UnitOfWork
+
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_text(value: str | None) -> str | None:
@@ -136,6 +141,18 @@ class CatalogAdminService:
         category = await self._resolve_item_category(uow, payload.category_id)
         await self._validate_unit_exists(uow, payload.unit_id)
         await self._ensure_item_sku_unique(uow, payload.sku)
+
+        logger.info(
+            "catalog_admin_create_item repo_method=%s repo_signature=%s payload_name=%s payload_sku=%s category_id=%s unit_id=%s hashtags_len=%s is_active=%s",
+            getattr(uow.catalog.create_item, "__qualname__", repr(uow.catalog.create_item)),
+            inspect.signature(uow.catalog.create_item),
+            payload.name,
+            payload.sku,
+            category.id,
+            payload.unit_id,
+            len(payload.hashtags or []),
+            payload.is_active,
+        )
 
         item = Item(
             sku=payload.sku,

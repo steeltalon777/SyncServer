@@ -20,27 +20,17 @@ from app.api.routes_operations import router as operations_router
 from app.api.routes_recipients import router as recipients_router
 from app.api.routes_reports import router as reports_router
 from app.api.routes_sync import router as sync_router
+from app.api.routes_temporary_items import router as temporary_items_router
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.core.migrations import ensure_database_ready
 
 settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
 
-def create_app(
-    *,
-    enable_startup_migrations: bool | None = None,
-) -> FastAPI:
-    if enable_startup_migrations is None:
-        enable_startup_migrations = settings.AUTO_MIGRATE_ON_STARTUP
-
+def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        if enable_startup_migrations:
-            logger.info("startup migration check started")
-            await ensure_database_ready()
-            logger.info("startup migration check finished")
         yield
 
     app = FastAPI(
@@ -115,6 +105,9 @@ def create_app(
     # Operations API (user token auth)
     app.include_router(operations_router, prefix=api_v1_prefix)
 
+    # Temporary items API (user token auth)
+    app.include_router(temporary_items_router, prefix=api_v1_prefix)
+
     # Documents API (user token auth)
     app.include_router(documents_router, prefix=api_v1_prefix)
 
@@ -142,8 +135,19 @@ def create_app(
     # Auth endpoints
     app.include_router(auth_router, prefix=api_v1_prefix)
 
+    temporary_item_paths = sorted(
+        route.path
+        for route in app.routes
+        if getattr(route, "path", "").startswith(f"{api_v1_prefix}/temporary-items")
+    )
+    logger.info(
+        "app_route_registration temporary_items_registered=%s temporary_item_paths=%s total_routes=%s",
+        bool(temporary_item_paths),
+        temporary_item_paths,
+        len(app.routes),
+    )
+
     return app
 
 
 app = create_app()
-

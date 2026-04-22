@@ -56,6 +56,10 @@ class LostAssetFilter(BaseModel):
     operation_id: UUID | None = None
     item_id: int | None = None
     search: str | None = None
+    updated_after: datetime | None = None
+    updated_before: datetime | None = None
+    qty_from: Decimal | None = Field(None, ge=0)
+    qty_to: Decimal | None = Field(None, ge=0)
 
     model_config = ConfigDict(extra="forbid")
 

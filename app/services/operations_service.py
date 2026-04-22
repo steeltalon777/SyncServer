@@ -7,11 +7,13 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
+from app.models.item import Item
 from app.repos.recipients_repo import normalize_recipient_name
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
 from app.services.document_service import DocumentService
 from app.services.uow import UnitOfWork
+from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,35 @@ ISSUE_OPERATION_TYPES: set[OperationType] = {"ISSUE", "ISSUE_RETURN"}
 
 class OperationsService:
     """Operation domain service with strict server-side validation."""
+
+    @staticmethod
+    def _normalize_name(value: str) -> str:
+        return " ".join(value.strip().lower().split())
+
+    @staticmethod
+    async def _ensure_item_usable(uow: UnitOfWork, item_id: int):
+        item = await uow.catalog.get_item_by_id(item_id)
+        if item is None or item.deleted_at is not None or not item.is_active:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"item with id {item_id} not found")
+        temporary_item = await uow.temporary_items.get_by_item_id(item_id)
+        if temporary_item is not None and temporary_item.status != "approved_as_item":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="temporary backing item cannot be used directly via item_id",
+            )
+        return item
+
+    @staticmethod
+    def _ensure_temporary_payload_consistent(batch: dict[str, object], client_key: str, payload) -> None:
+        existing = batch.get(client_key)
+        if existing is None:
+            batch[client_key] = payload
+            return
+        if existing.model_dump() != payload.model_dump():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"temporary_item client_key '{client_key}' is reused with different payload",
+            )
 
     @staticmethod
     async def _ensure_sufficient_balance(
@@ -258,17 +289,31 @@ class OperationsService:
         await OperationsService._validate_operation_sites(uow, operation_data)
         OperationsService._validate_line_quantities(operation_data.operation_type, operation_data.lines)
 
-        # Подготовим словари для кэширования unit и category
-        unit_cache = {}
-        category_cache = {}
-
+        temporary_batch = {}
+        has_temporary_items = False
         for line in operation_data.lines:
-            item = await uow.catalog.get_item_by_id(line.item_id)
-            if not item:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"item with id {line.item_id} not found",
+            if line.temporary_item is not None:
+                has_temporary_items = True
+                OperationsService._ensure_temporary_payload_consistent(
+                    temporary_batch,
+                    line.temporary_item.client_key,
+                    line.temporary_item,
                 )
+            elif line.item_id is not None:
+                await OperationsService._ensure_item_usable(uow, line.item_id)
+
+        if has_temporary_items:
+            if operation_data.operation_type != "RECEIVE":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Phase 1 supports inline temporary_item creation only for RECEIVE operations",
+                )
+            existing_operation = await uow.operations.get_by_client_request_id(
+                created_by_user_id=user_id,
+                client_request_id=operation_data.client_request_id or "",
+            )
+            if existing_operation is not None:
+                return {"operation": existing_operation}
 
         recipient_id, recipient_name_snapshot = await OperationsService._resolve_recipient(
             uow,
@@ -292,26 +337,79 @@ class OperationsService:
             acceptance_required=acceptance_required,
             created_by_user_id=user_id,
             notes=operation_data.notes,
+            client_request_id=operation_data.client_request_id,
         )
 
-        # Кэшируем данные item, unit, category для избежания повторных запросов
         item_cache = {}
         unit_cache = {}
         category_cache = {}
+        temporary_created_by_key = {}
+
+        for client_key, payload in temporary_batch.items():
+            if payload.category_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"temporary_item '{client_key}' requires category_id in Phase 1 because current item model is category-bound"
+                    ),
+                )
+            unit = await uow.catalog.get_unit_by_id(payload.unit_id)
+            if unit is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"unit with id {payload.unit_id} not found")
+            category = await uow.catalog.get_category_by_id(payload.category_id)
+            if category is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"category with id {payload.category_id} not found",
+                )
+
+            backing_item = Item(
+                sku=payload.sku,
+                name=payload.name.strip(),
+                normalized_name=OperationsService._normalize_name(payload.name),
+                category_id=payload.category_id,
+                unit_id=payload.unit_id,
+                description=payload.description,
+                hashtags=payload.hashtags,
+                is_active=False,
+                source_system="temporary_item",
+                source_ref=payload.client_key,
+            )
+            backing_item = await uow.catalog.create_item(backing_item)
+            temporary_item = await uow.temporary_items.create(
+                item_id=backing_item.id,
+                name=payload.name.strip(),
+                normalized_name=OperationsService._normalize_name(payload.name),
+                sku=payload.sku,
+                unit_id=payload.unit_id,
+                category_id=payload.category_id,
+                description=payload.description,
+                hashtags=payload.hashtags,
+                created_by_user_id=user_id,
+            )
+            item_cache[backing_item.id] = backing_item
+            unit_cache[payload.unit_id] = unit
+            category_cache[payload.category_id] = category
+            temporary_created_by_key[client_key] = temporary_item
 
         for line_data in operation_data.lines:
-            # Получаем item (уже проверен ранее)
-            item = item_cache.get(line_data.item_id)
+            line_item_id = line_data.item_id
+            if line_data.temporary_item is not None:
+                line_item_id = temporary_created_by_key[line_data.temporary_item.client_key].item_id
+
+            if line_item_id is None:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="line item resolution failed")
+
+            item = item_cache.get(line_item_id)
             if item is None:
-                item = await uow.catalog.get_item_by_id(line_data.item_id)
+                item = await uow.catalog.get_item_by_id(line_item_id)
                 if not item:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"item with id {line_data.item_id} not found",
+                        detail=f"item with id {line_item_id} not found",
                     )
-                item_cache[line_data.item_id] = item
+                item_cache[line_item_id] = item
 
-            # Получаем unit
             unit = unit_cache.get(item.unit_id)
             if unit is None:
                 unit = await uow.catalog.get_unit_by_id(item.unit_id)
@@ -333,11 +431,10 @@ class OperationsService:
                     )
                 category_cache[item.category_id] = category
 
-            # Создаём строку операции со снапшотами
             await uow.operations.create_operation_line(
                 operation_id=operation.id,
                 line_number=line_data.line_number,
-                item_id=line_data.item_id,
+                item_id=line_item_id,
                 qty=line_data.qty,
                 batch=line_data.batch,
                 comment=line_data.comment,
@@ -359,13 +456,8 @@ class OperationsService:
         effective_at: datetime,
     ):
         operation = await uow.operations.get_operation_by_id(operation_id)
-        if not operation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
-        if operation.status == "cancelled":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="cannot change effective_at for cancelled operation",
-            )
+        OperationsWorkflowPolicy.require_exists(operation)
+        OperationsWorkflowPolicy.require_not_cancelled_for_effective_at_change(operation)
 
         updated = await uow.operations.update_operation(
             operation_id=operation_id,
@@ -381,13 +473,8 @@ class OperationsService:
         update_data: OperationUpdate,
     ):
         operation = await uow.operations.get_operation_by_id(operation_id)
-        if not operation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
-        if operation.status != "draft":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"cannot update operation with status {operation.status}",
-            )
+        OperationsWorkflowPolicy.require_exists(operation)
+        OperationsWorkflowPolicy.require_draft_for_update(operation)
 
         source_site_id = operation.source_site_id
         destination_site_id = operation.destination_site_id
@@ -453,12 +540,14 @@ class OperationsService:
         if update_data.lines is not None:
             await uow.operations.delete_operation_lines(operation_id)
             for line in update_data.lines:
-                item = await uow.catalog.get_item_by_id(line.item_id)
-                if not item:
+                if line.temporary_item is not None:
                     raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"item with id {line.item_id} not found",
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="temporary_item lines are not supported in PATCH /operations in Phase 1",
                     )
+                if line.item_id is None:
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="item_id is required")
+                await OperationsService._ensure_item_usable(uow, line.item_id)
                 await uow.operations.create_operation_line(
                     operation_id=operation_id,
                     line_number=line.line_number,
@@ -477,13 +566,8 @@ class OperationsService:
         user_id: UUID,
     ) -> dict[str, object]:
         operation = await uow.operations.get_operation_by_id(operation_id)
-        if not operation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
-        if operation.status != "draft":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"operation is already {operation.status}",
-            )
+        OperationsWorkflowPolicy.require_exists(operation)
+        OperationsWorkflowPolicy.require_draft_for_submit(operation)
 
         for line in operation.lines:
             quantity = Decimal(line.qty)
@@ -684,17 +768,10 @@ class OperationsService:
         line_updates: list[OperationAcceptLinePayload],
     ) -> dict[str, object]:
         operation = await uow.operations.get_operation_by_id(operation_id)
-        if not operation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
-        if operation.status != "submitted":
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="only submitted operations can be accepted")
-        if not operation.acceptance_required:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="operation does not require acceptance",
-            )
-        if operation.acceptance_state == "resolved":
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="operation is already fully accepted")
+        OperationsWorkflowPolicy.require_exists(operation)
+        OperationsWorkflowPolicy.require_submitted_for_acceptance(operation)
+        OperationsWorkflowPolicy.require_acceptance_required(operation)
+        OperationsWorkflowPolicy.require_acceptance_not_resolved(operation)
 
         destination_site_id = OperationsService._destination_site_for_acceptance(operation)
         source_site_id = operation.source_site_id if operation.operation_type == "MOVE" else None
@@ -884,10 +961,8 @@ class OperationsService:
         reason: str | None = None,
     ) -> dict[str, object]:
         operation = await uow.operations.get_operation_by_id(operation_id)
-        if not operation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
-        if operation.status == "cancelled":
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="operation is already cancelled")
+        OperationsWorkflowPolicy.require_exists(operation)
+        OperationsWorkflowPolicy.require_not_cancelled_for_cancel(operation)
 
         if operation.status == "submitted":
             for line in operation.lines:

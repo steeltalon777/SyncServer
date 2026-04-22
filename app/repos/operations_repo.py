@@ -9,6 +9,7 @@ from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.item import Item
 from app.models.operation import Operation, OperationLine
 from app.schemas.operation import OperationFilter
 
@@ -33,6 +34,7 @@ class OperationsRepo:
         recipient_id: int | None = None,
         recipient_name_snapshot: str | None = None,
         acceptance_required: bool = False,
+        client_request_id: str | None = None,
     ) -> Operation:
         operation = Operation(
             site_id=site_id,
@@ -50,6 +52,7 @@ class OperationsRepo:
             acceptance_state="pending" if acceptance_required else "not_required",
             created_by_user_id=created_by_user_id,
             notes=notes,
+            machine_last_batch_id=client_request_id,
         )
         self.session.add(operation)
         await self.session.flush()
@@ -59,10 +62,19 @@ class OperationsRepo:
         stmt = (
             select(Operation)
             .where(Operation.id == operation_id)
-            .options(selectinload(Operation.lines))
+            .options(selectinload(Operation.lines).selectinload(OperationLine.item).selectinload(Item.temporary_item))
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_by_client_request_id(self, *, created_by_user_id: UUID, client_request_id: str) -> Operation | None:
+        stmt = (
+            select(Operation)
+            .where(Operation.created_by_user_id == created_by_user_id)
+            .where(Operation.machine_last_batch_id == client_request_id)
+            .options(selectinload(Operation.lines).selectinload(OperationLine.item).selectinload(Item.temporary_item))
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def get_operation_line_by_id_for_update(self, operation_line_id: int) -> OperationLine | None:
         stmt = (

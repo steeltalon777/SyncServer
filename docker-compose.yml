@@ -8,6 +8,16 @@ services:
     networks:
       - backend
 
+  migrate:
+    build: .
+    profiles:
+      - tools
+    env_file:
+      - .env
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    networks:
+      - backend
+
 networks:
   backend:
     external: true

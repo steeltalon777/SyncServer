@@ -1,0 +1,92 @@
+{
+  "path_count": 69,
+  "has_operations": true,
+  "has_temporary_items": false,
+  "temporary_paths": [],
+  "operations_post_schema": {
+    "summary": "Create Operation",
+    "operationId": "create_operation_api_v1_operations_post",
+    "parameters": [
+      {
+        "name": "X-User-Token",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "X-User-Token"
+        }
+      },
+      {
+        "name": "X-Device-Token",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "X-Device-Token"
+        }
+      },
+      {
+        "name": "X-Client-Version",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "X-Client-Version"
+        }
+      }
+    ],
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "#/components/schemas/OperationCreate"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Successful Response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationResponse"
+            }
+          }
+        }
+      },
+      "422": {
+        "description": "Validation Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/HTTPValidationError"
+            }
+          }
+        }
+      }
+    }
+  }
+}

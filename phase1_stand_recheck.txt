@@ -1,0 +1,19 @@
+Traceback (most recent call last):
+  File "D:\PROG\SyncServer\scripts\phase1_stand_check.py", line 346, in <module>
+    main()
+    ~~~~^^
+  File "D:\PROG\SyncServer\scripts\phase1_stand_check.py", line 152, in main
+    status, payload, _ = req(
+                         ~~~^
+        "POST",
+        ^^^^^^^
+    ...<11 lines>...
+        expected=200,
+        ^^^^^^^^^^^^^
+    )
+    ^
+  File "D:\PROG\SyncServer\scripts\phase1_stand_check.py", line 30, in req
+    raise AssertionError(
+        f"{method} {path} -> {resp.status_code}, expected {expected}, body={body_text[:1000]}"
+    )
+AssertionError: POST /api/v1/catalog/admin/items -> 500, expected 200, body={"detail":"internal server error"}

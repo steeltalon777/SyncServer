@@ -228,6 +228,10 @@ class AssetRegistersRepo:
         operation_id: UUID | None,
         item_id: int | None,
         search: str | None,
+        updated_after: datetime | None = None,
+        updated_before: datetime | None = None,
+        qty_from: Decimal | None = None,
+        qty_to: Decimal | None = None,
         page: int,
         page_size: int,
     ) -> tuple[list[dict], int]:
@@ -273,6 +277,14 @@ class AssetRegistersRepo:
                     source.c.name.ilike(term),
                 )
             )
+        if updated_after is not None:
+            stmt = stmt.where(LostAssetBalance.updated_at >= updated_after)
+        if updated_before is not None:
+            stmt = stmt.where(LostAssetBalance.updated_at <= updated_before)
+        if qty_from is not None:
+            stmt = stmt.where(LostAssetBalance.qty >= qty_from)
+        if qty_to is not None:
+            stmt = stmt.where(LostAssetBalance.qty <= qty_to)
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
@@ -337,6 +349,35 @@ class AssetRegistersRepo:
 
     async def get_lost_row_for_update(self, operation_line_id: int) -> LostAssetBalance | None:
         return await self._get_lost_for_update(operation_line_id)
+
+    async def get_lost_row(self, operation_line_id: int) -> dict | None:
+        """Retrieve a single lost asset row with joined site and item info."""
+        destination = Site
+        source = Site.__table__.alias("source_site")
+        stmt = (
+            select(
+                LostAssetBalance.operation_id.label("operation_id"),
+                LostAssetBalance.operation_line_id.label("operation_line_id"),
+                LostAssetBalance.site_id.label("site_id"),
+                destination.name.label("site_name"),
+                LostAssetBalance.source_site_id.label("source_site_id"),
+                source.c.name.label("source_site_name"),
+                LostAssetBalance.item_id.label("item_id"),
+                Item.name.label("item_name"),
+                Item.sku.label("sku"),
+                LostAssetBalance.qty.label("qty"),
+                LostAssetBalance.updated_at.label("updated_at"),
+            )
+            .select_from(LostAssetBalance)
+            .join(destination, destination.id == LostAssetBalance.site_id)
+            .join(Item, Item.id == LostAssetBalance.item_id)
+            .outerjoin(source, source.c.id == LostAssetBalance.source_site_id)
+            .where(LostAssetBalance.operation_line_id == operation_line_id)
+        )
+        result = (await self.session.execute(stmt)).first()
+        if result is None:
+            return None
+        return dict(result._mapping)
 
     async def create_acceptance_action(
         self,

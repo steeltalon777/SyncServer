@@ -17,10 +17,15 @@ class Balance(Base):
         ForeignKey("sites.id"),
         primary_key=True,
     )
-    item_id: Mapped[int] = mapped_column(
+    inventory_subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_subjects.id"),
+        primary_key=True,
+    )
+    item_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("items.id"),
-        primary_key=True,
+        nullable=True,
     )
     qty: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(

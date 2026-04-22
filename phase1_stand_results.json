@@ -1,0 +1,359 @@
+{
+  "run": "phase1_1776827356",
+  "steps": [
+    {
+      "name": "health",
+      "ok": true,
+      "status_code": 200,
+      "payload": {
+        "status": "ok"
+      }
+    },
+    {
+      "name": "ready",
+      "ok": true,
+      "status_code": 200,
+      "payload": {
+        "status": "ready",
+        "db": 1
+      }
+    },
+    {
+      "name": "root_auth",
+      "ok": true,
+      "status_code": 200,
+      "payload": {
+        "user": {
+          "id": "b1355640-76dd-4dfe-a810-d7436956cbdb",
+          "username": "root",
+          "email": "root@local",
+          "full_name": "System Root",
+          "is_active": true,
+          "is_root": true,
+          "role": "root",
+          "default_site_id": null
+        },
+        "device": null
+      }
+    },
+    {
+      "name": "create_site",
+      "ok": true,
+      "status_code": 200,
+      "site_id": 12
+    },
+    {
+      "name": "create_user_chief_storekeeper",
+      "ok": true,
+      "user_id": "79efdad6-e484-4e11-b23a-e151d3bd2311"
+    },
+    {
+      "name": "create_user_storekeeper",
+      "ok": true,
+      "user_id": "5c19bc9e-ec7b-4b55-bb80-653f4019ee87"
+    },
+    {
+      "name": "create_user_observer",
+      "ok": true,
+      "user_id": "7cf750f8-e3ba-4580-aa8c-4eeca2c89a4b"
+    },
+    {
+      "name": "set_scope_chief_storekeeper",
+      "ok": true,
+      "payload": [
+        {
+          "id": 22,
+          "user_id": "79efdad6-e484-4e11-b23a-e151d3bd2311",
+          "site_id": 12,
+          "can_view": true,
+          "can_operate": true,
+          "can_manage_catalog": true,
+          "is_active": true,
+          "created_at": "2026-04-22T03:09:16.282468Z",
+          "updated_at": "2026-04-22T03:09:16.282468Z"
+        }
+      ]
+    },
+    {
+      "name": "set_scope_storekeeper",
+      "ok": true,
+      "payload": [
+        {
+          "id": 23,
+          "user_id": "5c19bc9e-ec7b-4b55-bb80-653f4019ee87",
+          "site_id": 12,
+          "can_view": true,
+          "can_operate": true,
+          "can_manage_catalog": false,
+          "is_active": true,
+          "created_at": "2026-04-22T03:09:16.453514Z",
+          "updated_at": "2026-04-22T03:09:16.453514Z"
+        }
+      ]
+    },
+    {
+      "name": "set_scope_observer",
+      "ok": true,
+      "payload": [
+        {
+          "id": 24,
+          "user_id": "7cf750f8-e3ba-4580-aa8c-4eeca2c89a4b",
+          "site_id": 12,
+          "can_view": true,
+          "can_operate": false,
+          "can_manage_catalog": false,
+          "is_active": true,
+          "created_at": "2026-04-22T03:09:16.632101Z",
+          "updated_at": "2026-04-22T03:09:16.632101Z"
+        }
+      ]
+    },
+    {
+      "name": "create_unit",
+      "ok": true,
+      "unit_id": 20
+    },
+    {
+      "name": "create_category",
+      "ok": true,
+      "category_id": 72
+    },
+    {
+      "name": "create_catalog_item",
+      "ok": true,
+      "item_id": 195
+    },
+    {
+      "name": "create_receive_with_mixed_lines",
+      "ok": true,
+      "operation_id": "a65a35e2-e6cc-42bd-b6ed-742ccd6f4b34",
+      "temporary_item_id": 7,
+      "payload": {
+        "id": "a65a35e2-e6cc-42bd-b6ed-742ccd6f4b34",
+        "site_id": 12,
+        "operation_type": "RECEIVE",
+        "status": "draft",
+        "effective_at": "2026-04-22T03:09:19.169701Z",
+        "source_site_id": null,
+        "destination_site_id": null,
+        "issued_to_user_id": null,
+        "issued_to_name": null,
+        "recipient_id": null,
+        "recipient_name_snapshot": null,
+        "acceptance_required": true,
+        "acceptance_state": "pending",
+        "acceptance_resolved_at": null,
+        "acceptance_resolved_by_user_id": null,
+        "created_by_user_id": "5c19bc9e-ec7b-4b55-bb80-653f4019ee87",
+        "created_at": "2026-04-22T03:09:17.341183Z",
+        "updated_at": "2026-04-22T03:09:17.341183Z",
+        "submitted_at": null,
+        "submitted_by_user_id": null,
+        "cancelled_at": null,
+        "cancelled_by_user_id": null,
+        "notes": "phase1 stand check",
+        "lines": [
+          {
+            "id": 13,
+            "line_number": 1,
+            "item_id": 196,
+            "temporary_item_id": 7,
+            "temporary_item_status": "active",
+            "resolved_item_id": null,
+            "qty": 2,
+            "accepted_qty": "0.000",
+            "lost_qty": "0.000",
+            "batch": null,
+            "comment": null
+          },
+          {
+            "id": 14,
+            "line_number": 2,
+            "item_id": 195,
+            "temporary_item_id": null,
+            "temporary_item_status": null,
+            "resolved_item_id": null,
+            "qty": 1,
+            "accepted_qty": "0.000",
+            "lost_qty": "0.000",
+            "batch": null,
+            "comment": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "idempotent_replay",
+      "ok": true,
+      "payload": {
+        "id": "a65a35e2-e6cc-42bd-b6ed-742ccd6f4b34",
+        "site_id": 12,
+        "operation_type": "RECEIVE",
+        "status": "draft",
+        "effective_at": "2026-04-22T03:09:19.169701Z",
+        "source_site_id": null,
+        "destination_site_id": null,
+        "issued_to_user_id": null,
+        "issued_to_name": null,
+        "recipient_id": null,
+        "recipient_name_snapshot": null,
+        "acceptance_required": true,
+        "acceptance_state": "pending",
+        "acceptance_resolved_at": null,
+        "acceptance_resolved_by_user_id": null,
+        "created_by_user_id": "5c19bc9e-ec7b-4b55-bb80-653f4019ee87",
+        "created_at": "2026-04-22T03:09:17.341183Z",
+        "updated_at": "2026-04-22T03:09:17.341183Z",
+        "submitted_at": null,
+        "submitted_by_user_id": null,
+        "cancelled_at": null,
+        "cancelled_by_user_id": null,
+        "notes": "phase1 stand check",
+        "lines": [
+          {
+            "id": 13,
+            "line_number": 1,
+            "item_id": 196,
+            "temporary_item_id": 7,
+            "temporary_item_status": "active",
+            "resolved_item_id": null,
+            "qty": 2,
+            "accepted_qty": "0.000",
+            "lost_qty": "0.000",
+            "batch": null,
+            "comment": null
+          },
+          {
+            "id": 14,
+            "line_number": 2,
+            "item_id": 195,
+            "temporary_item_id": null,
+            "temporary_item_status": null,
+            "resolved_item_id": null,
+            "qty": 1,
+            "accepted_qty": "0.000",
+            "lost_qty": "0.000",
+            "batch": null,
+            "comment": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "temporary_requires_client_request_id",
+      "ok": true,
+      "status_code": 422,
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, client_request_id is required when temporary_item lines are used\",\"input\":{\"operation_type\":\"RECEIVE\",\"site_id\":12,\"lines\":[{\"line_number\":1,\"qty\":1,\"temporary_item\":{\"client_key\":\"tmp-missing-client-request\",\"name\":\"Missing request id\",\"unit_id\":20,\"category_id\":72}}]},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "observer_cannot_create_temporary_item",
+      "ok": true,
+      "status_code": 403,
+      "body": "{\"detail\":\"operate permission required\"}"
+    },
+    {
+      "name": "list_temporary_items_as_chief",
+      "ok": true,
+      "total_count": 7
+    },
+    {
+      "name": "get_temporary_item_as_chief",
+      "ok": true,
+      "payload": {
+        "id": 7,
+        "item_id": 196,
+        "name": "Temporary Cable phase1_1776827356",
+        "normalized_name": "temporary cable phase1_1776827356",
+        "sku": null,
+        "unit_id": 20,
+        "unit_name": "Unit phase1_1776827356",
+        "unit_symbol": "u7356",
+        "category_id": 72,
+        "category_name": "Category phase1_1776827356",
+        "description": "inline temporary item",
+        "hashtags": [
+          "temporary",
+          "phase1_1776827356"
+        ],
+        "status": "active",
+        "resolution_note": null,
+        "resolved_item_id": null,
+        "resolution_type": null,
+        "created_by_user_id": "5c19bc9e-ec7b-4b55-bb80-653f4019ee87",
+        "resolved_by_user_id": null,
+        "created_at": "2026-04-22T03:09:17.341183Z",
+        "resolved_at": null,
+        "updated_at": "2026-04-22T03:09:17.341183Z",
+        "backing_item_is_active": false
+      }
+    },
+    {
+      "name": "observer_cannot_list_temporary_items",
+      "ok": true,
+      "status_code": 403,
+      "body": "{\"detail\":\"temporary item moderation requires chief_storekeeper or root\"}"
+    },
+    {
+      "name": "approve_temporary_item",
+      "ok": true,
+      "payload": {
+        "id": 7,
+        "item_id": 196,
+        "name": "Temporary Cable phase1_1776827356",
+        "normalized_name": "temporary cable phase1_1776827356",
+        "sku": null,
+        "unit_id": 20,
+        "unit_name": "Unit phase1_1776827356",
+        "unit_symbol": "u7356",
+        "category_id": 72,
+        "category_name": "Category phase1_1776827356",
+        "description": "inline temporary item",
+        "hashtags": [
+          "temporary",
+          "phase1_1776827356"
+        ],
+        "status": "approved_as_item",
+        "resolution_note": "Phase 1 approve: backing catalog item activated",
+        "resolved_item_id": 196,
+        "resolution_type": "approve_as_item",
+        "created_by_user_id": "5c19bc9e-ec7b-4b55-bb80-653f4019ee87",
+        "resolved_by_user_id": "79efdad6-e484-4e11-b23a-e151d3bd2311",
+        "created_at": "2026-04-22T03:09:17.341183Z",
+        "resolved_at": "2026-04-22T03:09:20.487187Z",
+        "updated_at": "2026-04-22T03:09:18.641880Z",
+        "backing_item_is_active": true
+      }
+    },
+    {
+      "name": "merge_temporary_item",
+      "ok": true,
+      "payload": {
+        "id": 8,
+        "item_id": 197,
+        "name": "Temporary Merge phase1_1776827356",
+        "normalized_name": "temporary merge phase1_1776827356",
+        "sku": null,
+        "unit_id": 20,
+        "unit_name": "Unit phase1_1776827356",
+        "unit_symbol": "u7356",
+        "category_id": 72,
+        "category_name": "Category phase1_1776827356",
+        "description": "merge temporary item",
+        "hashtags": [
+          "merge",
+          "phase1_1776827356"
+        ],
+        "status": "merged_to_item",
+        "resolution_note": "merge check",
+        "resolved_item_id": 195,
+        "resolution_type": "merge",
+        "created_by_user_id": "5c19bc9e-ec7b-4b55-bb80-653f4019ee87",
+        "resolved_by_user_id": "79efdad6-e484-4e11-b23a-e151d3bd2311",
+        "created_at": "2026-04-22T03:09:18.883857Z",
+        "resolved_at": "2026-04-22T03:09:20.952340Z",
+        "updated_at": "2026-04-22T03:09:19.111388Z",
+        "backing_item_is_active": false
+      }
+    }
+  ]
+}

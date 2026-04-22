@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.db import get_db
 from app.models.device import Device
 from app.models.user import User
+from app.api.deps import rate_limiter
 from main import create_app
 
 app = create_app(enable_startup_migrations=False)
@@ -23,6 +24,8 @@ app = create_app(enable_startup_migrations=False)
 
 @pytest.fixture
 async def client(session_factory: async_sessionmaker[AsyncSession]):
+    await rate_limiter.reset()
+
     async def override_get_db():
         async with session_factory() as session:
             try:
@@ -33,6 +36,7 @@ async def client(session_factory: async_sessionmaker[AsyncSession]):
     app.dependency_overrides[get_db] = override_get_db
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as test_client:
         yield test_client
+    await rate_limiter.reset()
     app.dependency_overrides.clear()
 
 

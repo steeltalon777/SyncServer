@@ -14,7 +14,7 @@ from app.models.unit import Unit
 from app.models.user import User
 from main import create_app
 
-app = create_app(enable_startup_migrations=False)
+app = create_app()
 
 
 async def _seed_site_and_device(

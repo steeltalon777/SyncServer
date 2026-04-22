@@ -1,0 +1,8 @@
+has_temp_routes=False
+has_operations=True
+operation_request_ref=#/components/schemas/OperationCreate
+has_OperationLineCreate=True
+has_TemporaryItemInlineCreate=False
+line_required=['line_number', 'item_id', 'qty']
+line_props=['batch', 'comment', 'item_id', 'line_number', 'qty']
+tmp_props=[]

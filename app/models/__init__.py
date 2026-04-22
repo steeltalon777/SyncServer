@@ -9,12 +9,14 @@ from app.models.base import Base
 from app.models.category import Category
 from app.models.device import Device
 from app.models.event import Event
+from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
 from app.models.machine import MachineBatch, MachineReport, MachineSnapshot
 from app.models.document import Document, DocumentOperation, DocumentSource
 from app.models.operation import Operation, OperationLine
 from app.models.recipient import Recipient, RecipientAlias
 from app.models.site import Site
+from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
 from app.models.user import User
 from app.models.user_access_scope import UserAccessScope
@@ -23,11 +25,13 @@ from app.models.user_access_scope import UserAccessScope
 __all__ = [
     "Base",
     "Site",
+    "TemporaryItem",
     "Device",
     "Recipient",
     "RecipientAlias",
     "Category",
     "Item",
+    "InventorySubject",
     "MachineSnapshot",
     "MachineReport",
     "MachineBatch",

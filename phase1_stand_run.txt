@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "D:\PROG\SyncServer\scripts\phase1_stand_check.py", line 346, in <module>
+    main()
+    ~~~~^^
+  File "D:\PROG\SyncServer\scripts\phase1_stand_check.py", line 196, in main
+    _, payload, _ = req("POST", "/api/v1/operations", headers=store_headers, json_body=operation_payload, expected=200)
+                    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\PROG\SyncServer\scripts\phase1_stand_check.py", line 30, in req
+    raise AssertionError(
+        f"{method} {path} -> {resp.status_code}, expected {expected}, body={body_text[:1000]}"
+    )
+AssertionError: POST /api/v1/operations -> 422, expected 200, body={"detail":[{"type":"missing","loc":["body","lines",0,"item_id"],"msg":"Field required","input":{"line_number":1,"qty":2,"temporary_item":{"client_key":"tmp-1","name":"Temporary Cable phase1_1776821370","sku":null,"unit_id":13,"category_id":65,"description":"inline temporary item","hashtags":["temporary","phase1_1776821370"]}}}]}

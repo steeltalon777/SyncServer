@@ -59,6 +59,7 @@ class Item(Base):
 
     category = relationship("Category")
     unit = relationship("Unit")
+    temporary_item = relationship("TemporaryItem", back_populates="item", uselist=False, foreign_keys="TemporaryItem.item_id")
 
     __table_args__ = (
         Index("ix_items_category_id", "category_id"),

@@ -33,6 +33,10 @@ class InMemoryRateLimiter:
                 )
             self._last_hit[key] = now
 
+    async def reset(self) -> None:
+        async with self._lock:
+            self._last_hit.clear()
+
 
 rate_limiter = InMemoryRateLimiter()
 

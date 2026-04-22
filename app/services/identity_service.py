@@ -67,7 +67,7 @@ class IdentityService:
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid X-User-Token",
+                    detail="invalid X-User-Token",
                 )
             if not user.is_active:
                 raise HTTPException(
@@ -82,7 +82,7 @@ class IdentityService:
             if not device:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid X-Device-Token",
+                    detail="invalid X-Device-Token",
                 )
             if not device.is_active:
                 raise HTTPException(

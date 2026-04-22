@@ -83,11 +83,13 @@ class Document(Base):
         "Operation",
         secondary="document_operations",
         back_populates="documents",
+        overlaps="document_operations_assoc,document,operation",
     )
     document_operations_assoc: Mapped[list["DocumentOperation"]] = relationship(
         "DocumentOperation",
         back_populates="document",
         cascade="all, delete-orphan",
+        overlaps="operations",
     )
     sources: Mapped[list["DocumentSource"]] = relationship(
         "DocumentSource",
@@ -118,8 +120,16 @@ class DocumentOperation(Base):
     )
 
     # Relationships
-    document: Mapped["Document"] = relationship("Document", back_populates="document_operations_assoc")
-    operation: Mapped["Operation"] = relationship("Operation", back_populates="document_operations_assoc")
+    document: Mapped["Document"] = relationship(
+        "Document",
+        back_populates="document_operations_assoc",
+        overlaps="operations",
+    )
+    operation: Mapped["Operation"] = relationship(
+        "Operation",
+        back_populates="document_operations_assoc",
+        overlaps="documents,operations",
+    )
 
 
 class DocumentSource(Base):

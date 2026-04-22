@@ -24,6 +24,21 @@ class Identity:
     device: Device | None
     scopes: list[UserAccessScope] = field(default_factory=list)
 
+    @classmethod
+    def from_user_and_device(
+        cls,
+        *,
+        user: User | None,
+        device: Device | None,
+        scopes: list[UserAccessScope] | None = None,
+    ) -> "Identity":
+        """Compatibility constructor used by unit tests and internal helpers."""
+        return cls(
+            user=user,
+            device=device,
+            scopes=scopes or [],
+        )
+
     @property
     def principal_kind(self) -> str:
         if self.user is not None and self.device is not None:
@@ -104,6 +119,23 @@ class Identity:
                 return True
 
         return False
+
+    def can_accept_at_site(self, site_id: int) -> bool:
+        """
+        Check if identity can accept incoming stock at the target site.
+
+        Acceptance is allowed for:
+        - root
+        - chief_storekeeper
+        - storekeeper with operate access to the target site
+        """
+        if self.has_global_business_access:
+            return True
+
+        if self.role != "storekeeper":
+            return False
+
+        return self.can_operate_at_site(site_id)
 
     def get_accessible_site_ids(self) -> list[int]:
         """Get list of site IDs accessible by this identity."""

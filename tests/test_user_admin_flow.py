@@ -227,3 +227,77 @@ async def test_create_device_returns_device_token(
     assert body["site_id"] == site_1.id
     assert body["is_active"] is True
     assert body["device_token"]
+
+
+@pytest.mark.asyncio
+async def test_device_full_crud_flow(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    root_user, site_1, site_2 = await _seed_root_and_sites(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/admin/devices",
+        headers={"X-User-Token": str(root_user.user_token)},
+        json={
+            "device_code": "warehouse-tablet-1",
+            "device_name": "Warehouse Tablet",
+            "site_id": site_1.id,
+            "is_active": True,
+        },
+    )
+    assert create_response.status_code == 200
+    device_id = create_response.json()["device_id"]
+
+    get_response = await client.get(
+        f"/api/v1/admin/devices/{device_id}",
+        headers={"X-User-Token": str(root_user.user_token)},
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()["device_code"] == "warehouse-tablet-1"
+
+    update_response = await client.patch(
+        f"/api/v1/admin/devices/{device_id}",
+        headers={"X-User-Token": str(root_user.user_token)},
+        json={
+            "device_code": "warehouse-tablet-2",
+            "device_name": "Warehouse Tablet Updated",
+            "site_id": site_2.id,
+            "is_active": True,
+        },
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["device_code"] == "warehouse-tablet-2"
+    assert update_response.json()["site_id"] == site_2.id
+
+    delete_response = await client.delete(
+        f"/api/v1/admin/devices/{device_id}",
+        headers={"X-User-Token": str(root_user.user_token)},
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["is_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_user_rejects_role_root_when_is_root_false(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    root_user, site_1, _ = await _seed_root_and_sites(session_factory)
+
+    response = await client.post(
+        "/api/v1/admin/users",
+        headers={"X-User-Token": str(root_user.user_token)},
+        json={
+            "username": "invalid-role-root",
+            "email": "invalid@example.com",
+            "full_name": "Invalid User",
+            "is_active": True,
+            "is_root": False,
+            "role": "root",
+            "default_site_id": site_1.id,
+        },
+    )
+
+    assert response.status_code == 403
+    assert "role 'root'" in response.json()["detail"]

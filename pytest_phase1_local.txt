@@ -1,0 +1,8 @@
+....                                                                     [100%]
+============================== warnings summary ===============================
+tests/test_temporary_items_phase1.py::test_failed_inline_temporary_item_creation_rolls_back_created_entities
+  D:\PROG\SyncServer\app\api\routes_operations.py:117: DeprecationWarning: 'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead.
+    result = await OperationsService.create_operation(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+4 passed, 1 warning in 14.75s

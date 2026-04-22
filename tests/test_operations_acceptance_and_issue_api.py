@@ -69,7 +69,25 @@ async def _seed_fixture(session_factory: async_sessionmaker[AsyncSession]) -> di
             role="storekeeper",
             default_site_id=destination_site.id,
         )
-        session.add_all([chief, sender, receiver])
+        root = User(
+            username=f"root-{suffix}",
+            email=f"root-{suffix}@example.com",
+            full_name="Root",
+            is_active=True,
+            is_root=True,
+            role="storekeeper",
+            default_site_id=None,
+        )
+        observer = User(
+            username=f"observer-{suffix}",
+            email=f"observer-{suffix}@example.com",
+            full_name="Observer",
+            is_active=True,
+            is_root=False,
+            role="observer",
+            default_site_id=destination_site.id,
+        )
+        session.add_all([chief, sender, receiver, root, observer])
         await session.flush()
 
         session.add_all(
@@ -87,6 +105,14 @@ async def _seed_fixture(session_factory: async_sessionmaker[AsyncSession]) -> di
                     site_id=destination_site.id,
                     can_view=True,
                     can_operate=True,
+                    can_manage_catalog=False,
+                    is_active=True,
+                ),
+                UserAccessScope(
+                    user_id=observer.id,
+                    site_id=destination_site.id,
+                    can_view=True,
+                    can_operate=False,
                     can_manage_catalog=False,
                     is_active=True,
                 ),
@@ -124,6 +150,8 @@ async def _seed_fixture(session_factory: async_sessionmaker[AsyncSession]) -> di
             "chief_token": str(chief.user_token),
             "sender_token": str(sender.user_token),
             "receiver_token": str(receiver.user_token),
+            "root_token": str(root.user_token),
+            "observer_token": str(observer.user_token),
         }
 
 
@@ -253,6 +281,93 @@ async def test_move_submit_creates_pending_and_accept_resolves_to_destination_ba
     assert balances_after_resolve.status_code == 200
     assert balances_after_resolve.json()["total_count"] == 1
     assert Decimal(balances_after_resolve.json()["items"][0]["qty"]) == Decimal("4")
+
+
+@pytest.mark.asyncio
+async def test_move_acceptance_allows_only_target_storekeeper_chief_or_root(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_fixture(session_factory)
+
+    receive_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["source_site_id"],
+            "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 8}],
+        },
+    )
+    assert receive_response.status_code == 200
+
+    submit_receive = await client.post(
+        f"/api/v1/operations/{receive_response.json()['id']}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_receive.status_code == 200
+
+    accept_receive = await client.post(
+        f"/api/v1/operations/{receive_response.json()['id']}/accept-lines",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={"lines": [{"line_id": receive_response.json()["lines"][0]["id"], "accepted_qty": 8, "lost_qty": 0}]},
+    )
+    assert accept_receive.status_code == 200
+
+    move_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={
+            "operation_type": "MOVE",
+            "site_id": seed["source_site_id"],
+            "source_site_id": seed["source_site_id"],
+            "destination_site_id": seed["destination_site_id"],
+            "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 5}],
+        },
+    )
+    assert move_response.status_code == 200
+    move_id = move_response.json()["id"]
+    line_id = move_response.json()["lines"][0]["id"]
+
+    submit_move = await client.post(
+        f"/api/v1/operations/{move_id}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_move.status_code == 200
+
+    sender_accept = await client.post(
+        f"/api/v1/operations/{move_id}/accept-lines",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={"lines": [{"line_id": line_id, "accepted_qty": 1, "lost_qty": 0}]},
+    )
+    assert sender_accept.status_code == 403
+    assert sender_accept.json()["detail"] == "acceptance permission required for destination site"
+
+    observer_accept = await client.post(
+        f"/api/v1/operations/{move_id}/accept-lines",
+        headers={"X-User-Token": seed["observer_token"]},
+        json={"lines": [{"line_id": line_id, "accepted_qty": 1, "lost_qty": 0}]},
+    )
+    assert observer_accept.status_code == 403
+    assert observer_accept.json()["detail"] == "acceptance permission required for destination site"
+
+    chief_accept = await client.post(
+        f"/api/v1/operations/{move_id}/accept-lines",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"lines": [{"line_id": line_id, "accepted_qty": 2, "lost_qty": 0}]},
+    )
+    assert chief_accept.status_code == 200
+    assert chief_accept.json()["acceptance_state"] == "in_progress"
+
+    root_accept = await client.post(
+        f"/api/v1/operations/{move_id}/accept-lines",
+        headers={"X-User-Token": seed["root_token"]},
+        json={"lines": [{"line_id": line_id, "accepted_qty": 3, "lost_qty": 0}]},
+    )
+    assert root_accept.status_code == 200
+    assert root_accept.json()["acceptance_state"] == "resolved"
 
 
 @pytest.mark.asyncio

@@ -56,3 +56,59 @@ def test_operation_create_accepts_optional_effective_at() -> None:
     model = OperationCreate.model_validate(payload)
 
     assert model.effective_at == effective_at
+
+
+def test_operation_line_requires_item_or_temporary_item_but_not_both() -> None:
+    with pytest.raises(ValidationError):
+        OperationCreate.model_validate(
+            {
+                "operation_type": "RECEIVE",
+                "site_id": 1,
+                "client_request_id": "tmp-1",
+                "lines": [{"line_number": 1, "qty": 1}],
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        OperationCreate.model_validate(
+            {
+                "operation_type": "RECEIVE",
+                "site_id": 1,
+                "client_request_id": "tmp-1",
+                "lines": [
+                    {
+                        "line_number": 1,
+                        "item_id": 10,
+                        "qty": 1,
+                        "temporary_item": {
+                            "client_key": "tmp-1",
+                            "name": "Temp",
+                            "unit_id": 1,
+                            "category_id": 1,
+                        },
+                    }
+                ],
+            }
+        )
+
+
+def test_operation_create_requires_client_request_id_for_temporary_item_lines() -> None:
+    with pytest.raises(ValidationError):
+        OperationCreate.model_validate(
+            {
+                "operation_type": "RECEIVE",
+                "site_id": 1,
+                "lines": [
+                    {
+                        "line_number": 1,
+                        "qty": 1,
+                        "temporary_item": {
+                            "client_key": "tmp-1",
+                            "name": "Temp",
+                            "unit_id": 1,
+                            "category_id": 1,
+                        },
+                    }
+                ],
+            }
+        )

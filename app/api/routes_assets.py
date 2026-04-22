@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -7,7 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import get_uow, require_user_identity
 from app.core.identity import Identity
-from app.schemas.admin import SiteFilter
 from app.schemas.asset_register import (
     IssuedAssetListResponse,
     IssuedAssetRow,
@@ -17,42 +17,11 @@ from app.schemas.asset_register import (
     PendingAcceptanceListResponse,
     PendingAcceptanceRow,
 )
+from app.services.operations_policy import OperationsPolicy
 from app.services.operations_service import OperationsService
 from app.services.uow import UnitOfWork
 
 router = APIRouter()
-
-READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
-
-
-def _require_read_access(identity: Identity) -> None:
-    if identity.has_global_business_access:
-        return
-    if identity.role not in READ_ROLES:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read assets permission required")
-
-
-def _require_lost_resolve_access(identity: Identity) -> None:
-    if identity.has_global_business_access:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="only chief_storekeeper or root may resolve lost assets",
-    )
-
-
-async def _resolve_visible_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if identity.has_global_business_access:
-        sites, _ = await uow.sites.list_sites(
-            filter=SiteFilter(is_active=None),
-            user_site_ids=None,
-            page=1,
-            page_size=1000,
-        )
-        return [site.id for site in sites]
-
-    scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
-    return [scope.site_id for scope in scopes if scope.is_active and scope.can_view]
 
 
 @router.get("/pending-acceptance", response_model=PendingAcceptanceListResponse)
@@ -66,10 +35,10 @@ async def list_pending_acceptance(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ) -> PendingAcceptanceListResponse:
-    _require_read_access(identity)
+    OperationsPolicy.require_assets_read_access(identity)
 
     async with uow:
-        visible_site_ids = await _resolve_visible_site_ids(uow, identity)
+        visible_site_ids = await OperationsPolicy.resolve_visible_site_ids(uow, identity)
         if site_id is not None and site_id not in visible_site_ids:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="no access to requested site")
 
@@ -100,13 +69,17 @@ async def list_lost_assets(
     operation_id: UUID | None = Query(None),
     item_id: int | None = Query(None),
     search: str | None = Query(None),
+    updated_after: datetime | None = Query(None),
+    updated_before: datetime | None = Query(None),
+    qty_from: Decimal | None = Query(None, ge=0),
+    qty_to: Decimal | None = Query(None, ge=0),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ) -> LostAssetListResponse:
-    _require_read_access(identity)
+    OperationsPolicy.require_assets_read_access(identity)
 
     async with uow:
-        visible_site_ids = await _resolve_visible_site_ids(uow, identity)
+        visible_site_ids = await OperationsPolicy.resolve_visible_site_ids(uow, identity)
         if site_id is not None and site_id not in visible_site_ids:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="no access to requested site")
 
@@ -117,6 +90,10 @@ async def list_lost_assets(
             operation_id=operation_id,
             item_id=item_id,
             search=search,
+            updated_after=updated_after,
+            updated_before=updated_before,
+            qty_from=qty_from,
+            qty_to=qty_to,
             page=page,
             page_size=page_size,
         )
@@ -129,6 +106,25 @@ async def list_lost_assets(
     )
 
 
+@router.get("/lost-assets/{operation_line_id}", response_model=LostAssetRow)
+async def get_lost_asset(
+    operation_line_id: int,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> LostAssetRow:
+    OperationsPolicy.require_assets_read_access(identity)
+
+    async with uow:
+        row = await uow.asset_registers.get_lost_row(operation_line_id)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lost asset not found")
+        # Проверить доступ к site_id
+        visible_site_ids = await OperationsPolicy.resolve_visible_site_ids(uow, identity)
+        if row["site_id"] not in visible_site_ids:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this lost asset")
+        return LostAssetRow.model_validate(row)
+
+
 @router.post("/lost-assets/{operation_line_id}/resolve")
 async def resolve_lost_asset(
     operation_line_id: int,
@@ -136,7 +132,7 @@ async def resolve_lost_asset(
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
 ) -> dict[str, object]:
-    _require_lost_resolve_access(identity)
+    OperationsPolicy.require_lost_resolve_access(identity)
 
     async with uow:
         result = await OperationsService.resolve_lost_asset(
@@ -161,7 +157,7 @@ async def list_issued_assets(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ) -> IssuedAssetListResponse:
-    _require_read_access(identity)
+    OperationsPolicy.require_assets_read_access(identity)
 
     async with uow:
         rows, total_count = await uow.asset_registers.list_issued(

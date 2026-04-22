@@ -30,7 +30,11 @@ SyncServer is an async backend for warehouse data, inventory operations, site ac
 - Catalog
 - Catalog Admin
 - Operations
+- **Acceptance System** – приёмка операций RECEIVE/MOVE, репозиторий непринятых активов
 - Balances
+- Asset Registers – pending acceptance, lost assets, issued assets
+- Documents
+- Reports
 - Sync
 - Health
 
@@ -38,6 +42,8 @@ SyncServer is an async backend for warehouse data, inventory operations, site ac
 - `main.py`
 - `app/api/routes_*.py`
 - `app/services/uow.py`
+- `app/api/routes_assets.py` – API для работы с регистрами активов
+- `app/services/operations_service.py` – логика приёмки и разрешения lost assets
 
 ## Important Models
 - `User`
@@ -47,7 +53,17 @@ SyncServer is an async backend for warehouse data, inventory operations, site ac
 - `Category`
 - `Item`
 - `Unit`
-- `Operation`
+- `Operation`, `OperationLine`
+- `PendingAcceptanceBalance`, `LostAssetBalance`, `IssuedAssetBalance` – регистры активов
+- `OperationAcceptanceAction` – аудит приёмки
+
+## Документация
+- [API Reference](docs/API_REFERENCE.md) – полная спецификация API
+- [Endpoint Inventory](docs/ENDPOINT_INVENTORY.md) – список всех endpoint'ов
+- [Acceptance System Guide](docs/ACCEPTANCE_SYSTEM_GUIDE.md) – руководство по системе приёмки
+- [Lost Assets Client Guide](docs/LOST_ASSETS_CLIENT_GUIDE.md) – руководство для клиентов по работе с репозиторием непринятого
+- [Domain Model](DOMAIN_MODEL.md) – описание сущностей
+- [Architecture](ARCHITECTURE.md) – архитектурные решения
 - `Balance`
 - `Event`
 

@@ -1,0 +1,54 @@
+ Том в устройстве D не имеет метки.
+ Серийный номер тома: B83A-EC27
+
+ Содержимое папки D:\PROG\SyncServer
+
+22.04.2026  09:48    <DIR>          .
+22.04.2026  09:48    <DIR>          ..
+02.04.2026  15:30    <DIR>          .continue
+21.04.2026  12:45               391 .env
+21.04.2026  13:58             1 491 .env.example
+17.03.2026  10:35               451 .gitignore
+21.04.2026  17:37    <DIR>          .idea
+07.04.2026  14:41    <DIR>          .pytest_cache
+15.04.2026  13:55    <DIR>          .qwen
+21.04.2026  09:39    <DIR>          .venv
+23.03.2026  13:11             1 787 AI_CONTEXT.md
+23.03.2026  13:11             1 393 AI_ENTRY_POINTS.md
+02.04.2026  16:34    <DIR>          alembic
+02.04.2026  17:32             5 000 alembic.ini
+22.04.2026  09:31             1 716 API_CONTRACT.md
+21.04.2026  10:08                 0 api_crud_test.log
+11.03.2026  11:25    <DIR>          app
+22.04.2026  09:31             4 859 ARCHITECTURE.md
+22.04.2026  09:48               102 cmd_out.txt
+02.04.2026  15:32             6 911 continue.yaml
+11.03.2026  11:25    <DIR>          db
+22.04.2026  09:48                 0 dir_out.txt
+21.04.2026  13:58               387 docker-compose.yml
+11.03.2026  11:25               273 Dockerfile
+22.04.2026  09:31    <DIR>          docs
+22.04.2026  09:31             5 277 DOMAIN_MODEL.md
+26.03.2026  12:39             8 840 import_dry_run.txt
+26.03.2026  12:41             8 838 import_live.txt
+26.03.2026  12:41             8 840 import_verify.txt
+17.04.2026  09:41             3 114 INDEX.md
+22.04.2026  09:29             4 844 main.py
+22.04.2026  09:03    <DIR>          plans
+12.03.2026  10:43             1 528 PROJECT_BRAIN.md
+21.04.2026  12:10             1 418 pytest.ini
+21.04.2026  13:58             4 219 README.md
+15.04.2026  14:47               446 requirements.txt
+21.04.2026  10:32    <DIR>          scripts
+02.04.2026  15:45            14 930 SyncServer_analysis.md
+09.04.2026  14:28               502 syncserver_stderr.log
+09.04.2026  14:28                 0 syncserver_stdout.log
+12.03.2026  10:50             1 283 SYSTEM_MAP.md
+15.04.2026  14:31    <DIR>          templates
+22.04.2026  09:31    <DIR>          tests
+11.03.2026  11:25               166 test_main.http
+20.04.2026  14:03    <DIR>          tools
+09.04.2026  15:34             3 347 verify_migration.py
+22.04.2026  09:31    <DIR>          __pycache__
+              30 файлов         92 353 байт
+              17 папок  40 911 802 368 байт свободно

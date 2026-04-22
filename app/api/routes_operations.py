@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from app.api.deps import get_request_id, get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.asset_register import OperationAcceptLinesRequest
-from app.schemas.admin import SiteFilter
 from app.schemas.operation import (
     OperationCancel,
     OperationCreate,
@@ -22,98 +21,12 @@ from app.schemas.operation import (
     OperationType,
     OperationUpdate,
 )
+from app.services.operations_policy import OperationsPolicy
 from app.services.operations_service import OperationsService
 from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/operations")
 logger = logging.getLogger(__name__)
-
-READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
-WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
-
-
-def _require_read_site(identity: Identity, site_id: int) -> None:
-    if identity.has_global_business_access:
-        return
-    if identity.role not in READ_ROLES:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read operations permission required")
-    if not identity.has_site_access(site_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user has no view access to site")
-
-
-def _require_operate_site(identity: Identity, site_id: int) -> None:
-    if identity.has_global_business_access:
-        return
-    if identity.role not in WRITE_ROLES:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="operate permission required")
-    if not identity.can_operate_at_site(site_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user has no operate access to site")
-
-
-def _validate_move_access(identity: Identity, source_site_id: int | None, destination_site_id: int | None) -> None:
-    if source_site_id is None or destination_site_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="MOVE operation requires source_site_id and destination_site_id",
-        )
-    _require_operate_site(identity, source_site_id)
-
-
-def _require_acceptance_site(identity: Identity, destination_site_id: int) -> None:
-    _require_operate_site(identity, destination_site_id)
-
-
-def _require_operation_owner_or_supervisor(identity: Identity, operation) -> None:
-    if identity.has_global_business_access:
-        return
-    if operation.created_by_user_id != identity.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="only the operation creator, chief_storekeeper, or root may modify this draft",
-        )
-
-
-def _require_operation_submit_permission(identity: Identity) -> None:
-    if identity.has_global_business_access:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="only chief_storekeeper or root may submit operations",
-    )
-
-
-def _require_operation_cancel_permission(identity: Identity, operation) -> None:
-    if identity.has_global_business_access:
-        return
-    if operation.status == "draft" and operation.created_by_user_id == identity.user_id:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="only chief_storekeeper or root may cancel submitted or other users operations",
-    )
-
-
-def _require_operation_effective_at_permission(identity: Identity) -> None:
-    if identity.has_global_business_access:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="only chief_storekeeper or root may change operation effective_at",
-    )
-
-
-async def _resolve_readable_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if identity.has_global_business_access:
-        sites, _ = await uow.sites.list_sites(
-            filter=SiteFilter(is_active=None),
-            user_site_ids=None,
-            page=1,
-            page_size=1000,
-        )
-        return [site.id for site in sites]
-    if identity.role not in READ_ROLES:
-        return []
-    return identity.get_accessible_site_ids()
 
 
 @router.get("", response_model=OperationListResponse)
@@ -136,11 +49,11 @@ async def list_operations(
     page_size: int = Query(50, ge=1, le=100),
 ) -> OperationListResponse:
     async with uow:
-        readable_site_ids = await _resolve_readable_site_ids(uow, identity)
+        readable_site_ids = await OperationsPolicy.resolve_readable_site_ids(uow, identity)
         if not readable_site_ids:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read operations permission required")
         if site_id is not None:
-            _require_read_site(identity, site_id)
+            OperationsPolicy.require_read_site(identity, site_id)
 
         filter_data = OperationFilter(
             site_id=site_id,
@@ -181,7 +94,7 @@ async def get_operation(
         operation = await uow.operations.get_operation_by_id(operation_id)
         if not operation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
-        _require_read_site(identity, operation.site_id)
+        OperationsPolicy.require_read_site(identity, operation.site_id)
 
     logger.info("request_id=%s get_operation id=%s user=%s", get_request_id(request), operation_id, identity.user_id)
     return OperationResponse.model_validate(operation)
@@ -194,9 +107,11 @@ async def create_operation(
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
-    _require_operate_site(identity, operation_data.site_id)
+    OperationsPolicy.require_operate_site(identity, operation_data.site_id)
     if operation_data.operation_type == "MOVE":
-        _validate_move_access(identity, operation_data.source_site_id, operation_data.destination_site_id)
+        OperationsPolicy.require_move_access(identity, operation_data.source_site_id, operation_data.destination_site_id)
+    if any(line.temporary_item is not None for line in operation_data.lines):
+        OperationsPolicy.require_temporary_item_create(identity)
 
     async with uow:
         result = await OperationsService.create_operation(
@@ -229,8 +144,8 @@ async def update_operation(
         if not operation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
-        _require_operate_site(identity, operation.site_id)
-        _require_operation_owner_or_supervisor(identity, operation)
+        OperationsPolicy.require_operate_site(identity, operation.site_id)
+        OperationsPolicy.require_operation_owner_or_supervisor(identity, operation)
         if operation.operation_type == "MOVE":
             source_site_id = update_data.source_site_id if "source_site_id" in update_data.model_fields_set else operation.source_site_id
             destination_site_id = (
@@ -238,7 +153,7 @@ async def update_operation(
                 if "destination_site_id" in update_data.model_fields_set
                 else operation.destination_site_id
             )
-            _validate_move_access(identity, source_site_id, destination_site_id)
+            OperationsPolicy.require_move_access(identity, source_site_id, destination_site_id)
 
         updated_operation = await OperationsService.update_operation(
             uow=uow,
@@ -263,8 +178,8 @@ async def update_operation_effective_at(
         if not operation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
-        _require_read_site(identity, operation.site_id)
-        _require_operation_effective_at_permission(identity)
+        OperationsPolicy.require_read_site(identity, operation.site_id)
+        OperationsPolicy.require_operation_effective_at_permission(identity)
 
         updated_operation = await OperationsService.update_operation_effective_at(
             uow=uow,
@@ -297,10 +212,10 @@ async def submit_operation(
         if not operation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
-        _require_operate_site(identity, operation.site_id)
-        _require_operation_submit_permission(identity)
+        OperationsPolicy.require_operate_site(identity, operation.site_id)
+        OperationsPolicy.require_operation_submit_permission(identity)
         if operation.operation_type == "MOVE":
-            _validate_move_access(identity, operation.source_site_id, operation.destination_site_id)
+            OperationsPolicy.require_move_access(identity, operation.source_site_id, operation.destination_site_id)
 
         result = await OperationsService.submit_operation(
             uow=uow,
@@ -327,10 +242,10 @@ async def cancel_operation(
         if not operation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
-        _require_operate_site(identity, operation.site_id)
-        _require_operation_cancel_permission(identity, operation)
+        OperationsPolicy.require_operate_site(identity, operation.site_id)
+        OperationsPolicy.require_operation_cancel_permission(identity, operation)
         if operation.operation_type == "MOVE":
-            _validate_move_access(identity, operation.source_site_id, operation.destination_site_id)
+            OperationsPolicy.require_move_access(identity, operation.source_site_id, operation.destination_site_id)
 
         result = await OperationsService.cancel_operation(
             uow=uow,
@@ -362,7 +277,7 @@ async def accept_operation_lines(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="operation has no destination site for acceptance",
             )
-        _require_acceptance_site(identity, destination_site_id)
+        OperationsPolicy.require_acceptance_site(identity, destination_site_id)
 
         result = await OperationsService.accept_operation_lines(
             uow=uow,

@@ -5,9 +5,10 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from app.schemas.common import ORMBaseModel
+from app.schemas.temporary_item import TemporaryItemInlineCreate
 
 
 OperationType = Literal[
@@ -27,7 +28,8 @@ class OperationLineCreate(BaseModel):
     """Operation line input aligned to current model."""
 
     line_number: int = Field(ge=1)
-    item_id: int
+    item_id: int | None = None
+    temporary_item: TemporaryItemInlineCreate | None = None
     qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
     batch: str | None = None
     comment: str | None = None
@@ -46,6 +48,14 @@ class OperationLineCreate(BaseModel):
         if value == 0:
             raise ValueError("qty must not be zero")
         return value
+
+    @model_validator(mode="after")
+    def validate_item_xor_temporary(self) -> "OperationLineCreate":
+        if self.item_id is None and self.temporary_item is None:
+            raise ValueError("either item_id or temporary_item must be provided")
+        if self.item_id is not None and self.temporary_item is not None:
+            raise ValueError("item_id and temporary_item cannot be provided together")
+        return self
 
 
 class OperationCreate(BaseModel):
@@ -66,6 +76,7 @@ class OperationCreate(BaseModel):
     )
     lines: list[OperationLineCreate] = Field(min_length=1)
     notes: str | None = Field(default=None, max_length=1000)
+    client_request_id: str | None = Field(default=None, max_length=100)
 
     @property
     def type(self) -> OperationType:
@@ -73,7 +84,7 @@ class OperationCreate(BaseModel):
 
     @field_validator("lines")
     @classmethod
-    def validate_lines_for_type(cls, lines: list[OperationLineCreate], info):
+    def validate_lines_for_type(cls, lines: list[OperationLineCreate], info: ValidationInfo):
         operation_type = info.data.get("operation_type")
         if operation_type == "MOVE":
             src = info.data.get("source_site_id")
@@ -93,6 +104,13 @@ class OperationCreate(BaseModel):
             if line.qty <= 0:
                 raise ValueError(f"{operation_type} operations require positive qty values")
         return lines
+
+    @model_validator(mode="after")
+    def validate_client_request_id_for_temporary_items(self) -> "OperationCreate":
+        has_temporary_items = any(line.temporary_item is not None for line in self.lines)
+        if has_temporary_items and not self.client_request_id:
+            raise ValueError("client_request_id is required when temporary_item lines are used")
+        return self
 
     @field_validator("recipient_name_snapshot")
     @classmethod
@@ -137,6 +155,9 @@ class OperationLineResponse(ORMBaseModel):
     id: int
     line_number: int
     item_id: int
+    temporary_item_id: int | None = None
+    temporary_item_status: str | None = None
+    resolved_item_id: int | None = None
     qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
     accepted_qty: Decimal = Decimal("0")
     lost_qty: Decimal = Decimal("0")

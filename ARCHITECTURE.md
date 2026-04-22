@@ -65,11 +65,18 @@ Core entities:
 - `Balance` - derived inventory state
 - `Event` - synced device events
 
+**Asset Registers (Acceptance System):**
+- `PendingAcceptanceBalance` - items awaiting acceptance after operation submission
+- `LostAssetBalance` - unaccepted items (lost assets) waiting for resolution
+- `IssuedAssetBalance` - items issued to recipients
+- `OperationAcceptanceAction` - audit log of acceptance and resolution actions
+
 Key model choices:
 - Sites are integer IDs
 - Users use UUID IDs and token-based auth
 - Catalog entities are global, not site-owned
 - Balances are derived from operations, not edited directly
+- Asset registers track intermediate states between operation submission and final acceptance
 
 ## Data Flow
 Typical request flow:
@@ -101,3 +108,9 @@ Example:
 - Expand test coverage for end-to-end admin integration flows
 - Keep public client contracts explicit and stable
 - Continue documenting stable architectural decisions in ADRs
+## Temporary items Phase 1
+
+- Реализован безопасный промежуточный этап без полного перевода на `inventory_subjects`.
+- Временная ТМЦ хранится в [`TemporaryItem`](app/models/temporary_item.py:14), но для совместимости текущих write/read моделей ей создаётся скрытый backing [`Item`](app/models/item.py:14) с `is_active=false` и `source_system='temporary_item'` через [`CatalogRepo.create_item()`](app/repos/catalog_repo.py:359).
+- Операции и остатки продолжают использовать [`operation_lines.item_id`](app/models/operation.py:210) и [`balances.item_id`](app/models/balance.py:20), поэтому текущее поведение read-model не ломается.
+- Модерация Phase 1 меняет только жизненный цикл временной ТМЦ: approve активирует backing item, merge помечает временную ТМЦ как слитую. Полный переход на `inventory_subjects`, служебные движения резолюции и перенос read-model отложены.

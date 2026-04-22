@@ -116,6 +116,81 @@
 - references `Site`
 - references `Item`
 
+## Entity: PendingAcceptanceBalance
+**Description:** Items awaiting acceptance after operation submission (for RECEIVE and MOVE operations).
+
+**Fields:**
+- `operation_line_id` (primary key)
+- `operation_id`
+- `destination_site_id` – warehouse where items are expected
+- `source_site_id` – source warehouse (only for MOVE)
+- `item_id`
+- `qty` – quantity awaiting acceptance
+- `updated_at`
+
+**Relations:**
+- references `OperationLine` via `operation_line_id`
+- references `Site` as destination site
+- references `Site` as source site (optional)
+- references `Item`
+
+**Lifecycle:**
+- Created when a RECEIVE or MOVE operation is submitted
+- Removed when the operation line is accepted (or cancelled)
+
+## Entity: LostAssetBalance
+**Description:** Unaccepted items that were not received during acceptance (lost assets).
+
+**Fields:**
+- `operation_line_id` (primary key)
+- `operation_id`
+- `site_id` – warehouse where the lost items are physically located
+- `source_site_id` – source warehouse (only for MOVE)
+- `item_id`
+- `qty` – lost quantity
+- `updated_at`
+
+**Relations:**
+- references `OperationLine` via `operation_line_id`
+- references `Site` as current site
+- references `Site` as source site (optional)
+- references `Item`
+
+**Lifecycle:**
+- Created when an operation line is accepted with `lost_qty > 0`
+- Removed when the lost asset is resolved (returned, written off, or moved)
+
+## Entity: IssuedAssetBalance
+**Description:** Items issued to a recipient (for ISSUE and ISSUE_RETURN operations).
+
+**Fields:**
+- `recipient_id` (primary key)
+- `item_id` (primary key)
+- `qty` – issued quantity
+- `updated_at`
+
+**Relations:**
+- references `Recipient`
+- references `Item`
+
+## Entity: OperationAcceptanceAction
+**Description:** Audit log of acceptance and lost asset resolution actions.
+
+**Fields:**
+- `id`
+- `operation_id`
+- `operation_line_id`
+- `action_type` – "accept", "return_to_source", "write_off", "found_to_destination"
+- `performed_by_user_id`
+- `recipient_id` (for ISSUE operations)
+- `performed_at`
+
+**Relations:**
+- references `Operation`
+- references `OperationLine`
+- references `User`
+- references `Recipient` (optional)
+
 ## Entity: UserAccessScope
 **Description:** Per-site permissions for a user.
 
@@ -131,3 +206,8 @@
 **Relations:**
 - references `User`
 - references `Site`
+## Temporary items Phase 1
+
+- Добавлена сущность [`TemporaryItem`](app/models/temporary_item.py:14) со статусом, автором создания, ссылкой на backing [`Item`](app/models/temporary_item.py:18) и опциональной резолюцией в постоянную ТМЦ.
+- Phase 1 не вводит `inventory_subjects`: текущие связи остаются item-centric в [`OperationLine`](app/models/operation.py:197), [`Balance`](app/models/balance.py:12) и asset-регистрах.
+- Для исторического API строк операций добавлены вычисляемые поля [`OperationLine.temporary_item_id`](app/models/operation.py:247), [`OperationLine.temporary_item_status`](app/models/operation.py:252) и [`OperationLine.resolved_item_id`](app/models/operation.py:257).

@@ -46,23 +46,25 @@ scripts/                 Bootstrap and migration helpers
 
 Alternative container setup:
 1. Configure `.env`
-2. Run `docker compose up --build`
+2. Build image: `docker compose build`
+3. Run migrations in a separate container: `docker compose run --rm migrate`
+4. Start web service: `docker compose up -d syncserver`
 
 ## Running The Project
 - Local dev: `uvicorn main:app --reload`
-- Docker: `docker compose up --build`
+- Docker: first `docker compose run --rm migrate`, then `docker compose up -d syncserver`
 - OpenAPI docs: `/api/docs`
 - OpenAPI JSON: `/api/openapi.json`
-- On service startup, SyncServer automatically brings the database schema to Alembic `head`
+- SyncServer no longer runs Alembic inside the web process; apply migrations as a separate step before starting the API container.
 - Existing databases: after expanding supported operation types, run `python scripts/migrate_operation_constraints.py` once to refresh operation check constraints.
 
 ## Database Migrations
-- Service startup automatically runs Alembic reconciliation and upgrade to `head`
 - `scripts/bootstrap_root.py` now runs migrations before seeding bootstrap data
 - `scripts/bootstrap_root.py` still returns the bootstrap root token and bootstrap Django device token
 - Fresh database manual path: `python -m alembic upgrade head`
 - Existing database that already matches the current schema baseline: `python -m alembic stamp head`
 - Alembic reads the connection string from `.env` through `app.core.config`, so `DATABASE_URL` remains the single source of truth.
+- Container deployment flow is documented in [docs/CONTAINER_DEPLOY.md](docs/CONTAINER_DEPLOY.md).
 
 ## Main Modules
 - `auth` - user bootstrap, session context, available sites

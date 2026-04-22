@@ -26,6 +26,10 @@ class DevicesRepo:
         result = await self.session.execute(select(Device).where(Device.site_id == site_id))
         return list(result.scalars().all())
 
+    async def get_by_code(self, device_code: str) -> Device | None:
+        result = await self.session.execute(select(Device).where(Device.device_code == device_code))
+        return result.scalar_one_or_none()
+
     async def get_by_device_token(self, device_token: UUID) -> Device | None:
         result = await self.session.execute(
             select(Device).where(Device.device_token == device_token)
@@ -57,3 +61,13 @@ class DevicesRepo:
 
         device.last_seen_at = datetime.now(UTC)
         await self.session.flush()
+
+    async def soft_delete(self, device_id: int | UUID | str) -> Device | None:
+        device = await self.get_by_id(device_id)
+        if device is None:
+            return None
+
+        device.is_active = False
+        await self.session.flush()
+        await self.session.refresh(device)
+        return device

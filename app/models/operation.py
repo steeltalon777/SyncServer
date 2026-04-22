@@ -169,11 +169,13 @@ class Operation(Base):
         "Document",
         secondary="document_operations",
         back_populates="operations",
+        overlaps="document_operations_assoc,document,operation",
     )
     document_operations_assoc: Mapped[list["DocumentOperation"]] = relationship(
         "DocumentOperation",
         back_populates="operation",
         cascade="all, delete-orphan",
+        overlaps="documents,operations",
     )
 
     __table_args__ = (
@@ -205,10 +207,15 @@ class OperationLine(Base):
 
     line_number: Mapped[int] = mapped_column(nullable=False)
 
+    inventory_subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_subjects.id"),
+        nullable=False,
+    )
     item_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("items.id"),
-        nullable=False,
+        nullable=True,
     )
 
     qty: Mapped[Decimal] = mapped_column(
@@ -239,7 +246,23 @@ class OperationLine(Base):
     category_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     operation: Mapped[Operation] = relationship("Operation", back_populates="lines")
+    inventory_subject = relationship("InventorySubject")
     item = relationship("Item")
+
+    @property
+    def temporary_item_id(self) -> int | None:
+        temporary_item = getattr(self.item, "temporary_item", None)
+        return None if temporary_item is None else temporary_item.id
+
+    @property
+    def temporary_item_status(self) -> str | None:
+        temporary_item = getattr(self.item, "temporary_item", None)
+        return None if temporary_item is None else temporary_item.status
+
+    @property
+    def resolved_item_id(self) -> int | None:
+        temporary_item = getattr(self.item, "temporary_item", None)
+        return None if temporary_item is None else temporary_item.resolved_item_id
 
     __table_args__ = (
         CheckConstraint("qty <> 0", name="ck_operation_lines_qty_non_zero"),
