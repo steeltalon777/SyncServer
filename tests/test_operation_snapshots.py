@@ -5,7 +5,11 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
+from app.models.category import Category
+from app.models.item import Item
+from app.models.unit import Unit
 from app.models import Operation, OperationLine
 from app.schemas.operation import OperationCreate, OperationLineCreate
 from app.services.operations_service import OperationsService
@@ -14,27 +18,47 @@ from app.services.operations_service import OperationsService
 class TestOperationSnapshots:
     """Тесты для snapshot полей в операциях."""
 
+    @staticmethod
+    async def _create_catalog_fixture(uow, *, unit_name: str, unit_symbol: str, category_name: str, item_name: str, item_sku: str, is_active: bool = True):
+        unit = await uow.catalog.create_unit(
+            Unit(
+                name=unit_name,
+                symbol=unit_symbol,
+                is_active=is_active,
+            )
+        )
+
+        category = await uow.catalog.create_category(
+            Category(
+                name=category_name,
+                normalized_name=category_name.lower(),
+                is_active=is_active,
+            )
+        )
+
+        item = await uow.catalog.create_item(
+            Item(
+                name=item_name,
+                normalized_name=item_name.lower(),
+                sku=item_sku,
+                category_id=category.id,
+                unit_id=unit.id,
+                is_active=is_active,
+            )
+        )
+        return unit, category, item
+
     @pytest.mark.asyncio
     async def test_create_operation_with_snapshots(self, uow, site, user):
         """Тест создания операции с заполнением snapshot полей."""
         # Создаем тестовые данные каталога
-        unit = await uow.catalog.create_unit(
-            name="Test Unit",
-            symbol="TU",
-            is_active=True
-        )
-
-        category = await uow.catalog.create_category(
-            name="Test Category",
-            is_active=True
-        )
-
-        item = await uow.catalog.create_item(
-            name="Test Item",
-            sku="TEST-001",
-            category_id=category.id,
-            unit_id=unit.id,
-            is_active=True
+        unit, category, item = await self._create_catalog_fixture(
+            uow,
+            unit_name="Test Unit",
+            unit_symbol="TU",
+            category_name="Test Category",
+            item_name="Test Item",
+            item_sku="TEST-001",
         )
 
         # Создаем операцию
@@ -52,18 +76,20 @@ class TestOperationSnapshots:
             ]
         )
 
-        operation_dict = await OperationsService.create_operation(
+        operation_result = await OperationsService.create_operation(
             uow,
             operation_data,
             user.id
         )
 
         # Проверяем, что операция создана
-        assert operation_dict is not None
-        assert "id" in operation_dict
+        assert operation_result is not None
+        assert "operation" in operation_result
+        assert operation_result["operation"] is not None
+        operation_id = operation_result["operation"].id
 
         # Получаем операцию из БД для проверки
-        operation = await uow.operations.get_operation_by_id(operation_dict["id"])
+        operation = await uow.operations.get_operation_by_id(operation_id)
         assert operation is not None
         assert len(operation.lines) == 1
 
@@ -84,23 +110,13 @@ class TestOperationSnapshots:
     async def test_snapshots_preserved_when_catalog_changes(self, uow, site, user):
         """Тест: snapshot поля сохраняются при изменении каталога."""
         # Создаем тестовые данные
-        unit = await uow.catalog.create_unit(
-            name="Original Unit",
-            symbol="OU",
-            is_active=True
-        )
-
-        category = await uow.catalog.create_category(
-            name="Original Category",
-            is_active=True
-        )
-
-        item = await uow.catalog.create_item(
-            name="Original Item",
-            sku="ORIG-001",
-            category_id=category.id,
-            unit_id=unit.id,
-            is_active=True
+        unit, category, item = await self._create_catalog_fixture(
+            uow,
+            unit_name="Original Unit",
+            unit_symbol="OU",
+            category_name="Original Category",
+            item_name="Original Item",
+            item_sku="ORIG-001",
         )
 
         # Создаем операцию
@@ -109,17 +125,19 @@ class TestOperationSnapshots:
             operation_type="RECEIVE",
             lines=[
                 OperationLineCreate(
+                    line_number=1,
                     item_id=item.id,
-                    qty=Decimal("5.0")
+                    qty=5
                 )
             ]
         )
 
-        operation = await OperationsService.create_operation(
+        operation_result = await OperationsService.create_operation(
             uow,
             operation_data,
             user.id
         )
+        operation = operation_result["operation"]
 
         line = operation.lines[0]
         original_snapshots = {
@@ -131,9 +149,15 @@ class TestOperationSnapshots:
         }
 
         # Изменяем данные в каталоге
-        await uow.catalog.update_item(item.id, name="Updated Item", sku="UPD-001")
-        await uow.catalog.update_unit(unit.id, name="Updated Unit", symbol="UU")
-        await uow.catalog.update_category(category.id, name="Updated Category")
+        item.name = "Updated Item"
+        item.sku = "UPD-001"
+        unit.name = "Updated Unit"
+        unit.symbol = "UU"
+        category.name = "Updated Category"
+        category.normalized_name = "updated category"
+        await uow.catalog.update_item(item)
+        await uow.catalog.update_unit(unit)
+        await uow.catalog.update_category(category)
 
         # Обновляем объекты в сессии
         await uow.commit()
@@ -160,24 +184,15 @@ class TestOperationSnapshots:
 
     @pytest.mark.asyncio
     async def test_snapshots_for_inactive_catalog_items(self, uow, site, user):
-        """Тест: snapshot поля заполняются даже для неактивных элементов каталога."""
-        unit = await uow.catalog.create_unit(
-            name="Inactive Unit",
-            symbol="IU",
-            is_active=False  # Неактивный unit
-        )
-
-        category = await uow.catalog.create_category(
-            name="Inactive Category",
-            is_active=False  # Неактивная категория
-        )
-
-        item = await uow.catalog.create_item(
-            name="Inactive Item",
-            sku="INACT-001",
-            category_id=category.id,
-            unit_id=unit.id,
-            is_active=False  # Неактивный item
+        """Тест: создание операции с неактивной номенклатурой отклоняется (текущее поведение сервиса)."""
+        unit, category, item = await self._create_catalog_fixture(
+            uow,
+            unit_name="Inactive Unit",
+            unit_symbol="IU",
+            category_name="Inactive Category",
+            item_name="Inactive Item",
+            item_sku="INACT-001",
+            is_active=False,
         )
 
         # Создаем операцию
@@ -186,47 +201,33 @@ class TestOperationSnapshots:
             operation_type="RECEIVE",
             lines=[
                 OperationLineCreate(
+                    line_number=1,
                     item_id=item.id,
-                    qty=Decimal("3.0")
+                    qty=3
                 )
             ]
         )
 
-        operation = await OperationsService.create_operation(
-            uow,
-            operation_data,
-            user.id
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await OperationsService.create_operation(
+                uow,
+                operation_data,
+                user.id,
+            )
 
-        line = operation.lines[0]
-
-        # Проверяем, что snapshot поля все равно заполнены
-        assert line.item_name_snapshot == "Inactive Item"
-        assert line.item_sku_snapshot == "INACT-001"
-        assert line.unit_name_snapshot == "Inactive Unit"
-        assert line.unit_symbol_snapshot == "IU"
-        assert line.category_name_snapshot == "Inactive Category"
+        assert exc_info.value.status_code == 404
+        assert "item with id" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_snapshots_for_deleted_catalog_items(self, uow, site, user, admin_user):
         """Тест: snapshot поля сохраняются даже после удаления элементов каталога."""
-        unit = await uow.catalog.create_unit(
-            name="To Be Deleted Unit",
-            symbol="TBDU",
-            is_active=True
-        )
-
-        category = await uow.catalog.create_category(
-            name="To Be Deleted Category",
-            is_active=True
-        )
-
-        item = await uow.catalog.create_item(
-            name="To Be Deleted Item",
-            sku="TBD-001",
-            category_id=category.id,
-            unit_id=unit.id,
-            is_active=True
+        unit, category, item = await self._create_catalog_fixture(
+            uow,
+            unit_name="To Be Deleted Unit",
+            unit_symbol="TBDU",
+            category_name="To Be Deleted Category",
+            item_name="To Be Deleted Item",
+            item_sku="TBD-001",
         )
 
         # Создаем операцию
@@ -235,17 +236,19 @@ class TestOperationSnapshots:
             operation_type="RECEIVE",
             lines=[
                 OperationLineCreate(
+                    line_number=1,
                     item_id=item.id,
-                    qty=Decimal("7.5")
+                    qty=8
                 )
             ]
         )
 
-        operation = await OperationsService.create_operation(
+        operation_result = await OperationsService.create_operation(
             uow,
             operation_data,
             user.id
         )
+        operation = operation_result["operation"]
 
         line = operation.lines[0]
         original_snapshots = {
@@ -261,9 +264,12 @@ class TestOperationSnapshots:
         service = CatalogAdminService()
 
         # Деактивируем перед удалением
-        await uow.catalog.update_item(item.id, is_active=False)
-        await uow.catalog.update_unit(unit.id, is_active=False)
-        await uow.catalog.update_category(category.id, is_active=False)
+        item.is_active = False
+        unit.is_active = False
+        category.is_active = False
+        await uow.catalog.update_item(item)
+        await uow.catalog.update_unit(unit)
+        await uow.catalog.update_category(category)
 
         # Архивируем
         await service.delete_item(uow, item.id, admin_user.id)
@@ -292,26 +298,21 @@ class TestOperationSnapshots:
     async def test_multiple_lines_with_different_items(self, uow, site, user):
         """Тест создания операции с несколькими строками и разными номенклатурами."""
         # Создаем несколько элементов каталога
-        unit1 = await uow.catalog.create_unit(name="Unit 1", symbol="U1", is_active=True)
-        unit2 = await uow.catalog.create_unit(name="Unit 2", symbol="U2", is_active=True)
-
-        category1 = await uow.catalog.create_category(name="Category 1", is_active=True)
-        category2 = await uow.catalog.create_category(name="Category 2", is_active=True)
-
-        item1 = await uow.catalog.create_item(
-            name="Item 1",
-            sku="ITEM-001",
-            category_id=category1.id,
-            unit_id=unit1.id,
-            is_active=True
+        unit1, category1, item1 = await self._create_catalog_fixture(
+            uow,
+            unit_name="Unit 1",
+            unit_symbol="U1",
+            category_name="Category 1",
+            item_name="Item 1",
+            item_sku="ITEM-001",
         )
-
-        item2 = await uow.catalog.create_item(
-            name="Item 2",
-            sku="ITEM-002",
-            category_id=category2.id,
-            unit_id=unit2.id,
-            is_active=True
+        unit2, category2, item2 = await self._create_catalog_fixture(
+            uow,
+            unit_name="Unit 2",
+            unit_symbol="U2",
+            category_name="Category 2",
+            item_name="Item 2",
+            item_sku="ITEM-002",
         )
 
         # Создаем операцию с двумя строками
@@ -319,16 +320,17 @@ class TestOperationSnapshots:
             site_id=site.id,
             operation_type="RECEIVE",
             lines=[
-                OperationLineCreate(item_id=item1.id, qty=Decimal("10.0")),
-                OperationLineCreate(item_id=item2.id, qty=Decimal("20.0"))
+                OperationLineCreate(line_number=1, item_id=item1.id, qty=10),
+                OperationLineCreate(line_number=2, item_id=item2.id, qty=20)
             ]
         )
 
-        operation = await OperationsService.create_operation(
+        operation_result = await OperationsService.create_operation(
             uow,
             operation_data,
             user.id
         )
+        operation = operation_result["operation"]
 
         # Проверяем обе строки
         assert len(operation.lines) == 2

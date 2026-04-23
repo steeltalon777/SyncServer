@@ -68,11 +68,14 @@ class OperationsService:
         uow: UnitOfWork,
         *,
         site_id: int,
-        item_id: int,
+        inventory_subject_id: int,
         required_qty: Decimal,
         error_message: str,
     ) -> None:
-        balance = await uow.balances.get_for_update(site_id=site_id, item_id=item_id)
+        balance = await uow.balances.get_for_update(
+            site_id=site_id,
+            inventory_subject_id=inventory_subject_id,
+        )
         current_qty = balance.qty if balance is not None else Decimal("0")
         if current_qty < required_qty:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=error_message)
@@ -91,7 +94,7 @@ class OperationsService:
         uow: UnitOfWork,
         *,
         site_id: int,
-        item_id: int,
+        inventory_subject_id: int,
         quantity_delta: Decimal,
         error_context: str,
     ) -> None:
@@ -99,16 +102,16 @@ class OperationsService:
             await OperationsService._ensure_sufficient_balance(
                 uow,
                 site_id=site_id,
-                item_id=item_id,
+                inventory_subject_id=inventory_subject_id,
                 required_qty=abs(quantity_delta),
                 error_message=(
                     f"insufficient stock for {error_context}: "
-                    f"item={item_id}, site={site_id}, required={abs(quantity_delta)}"
+                    f"inventory_subject={inventory_subject_id}, site={site_id}, required={abs(quantity_delta)}"
                 ),
             )
         await uow.balances.update_balance_quantity(
             site_id=site_id,
-            item_id=item_id,
+            inventory_subject_id=inventory_subject_id,
             quantity_delta=quantity_delta,
         )
 
@@ -120,7 +123,7 @@ class OperationsService:
         operation_line_id: int,
         destination_site_id: int,
         source_site_id: int | None,
-        item_id: int,
+        inventory_subject_id: int,
         qty_delta: Decimal,
         error_context: str,
     ) -> None:
@@ -130,7 +133,7 @@ class OperationsService:
                 operation_line_id=operation_line_id,
                 destination_site_id=destination_site_id,
                 source_site_id=source_site_id,
-                item_id=item_id,
+                inventory_subject_id=inventory_subject_id,
                 qty_delta=qty_delta,
             )
         except ValueError as exc:
@@ -147,7 +150,7 @@ class OperationsService:
         operation_line_id: int,
         site_id: int,
         source_site_id: int | None,
-        item_id: int,
+        inventory_subject_id: int,
         qty_delta: Decimal,
         error_context: str,
     ) -> None:
@@ -157,7 +160,7 @@ class OperationsService:
                 operation_line_id=operation_line_id,
                 site_id=site_id,
                 source_site_id=source_site_id,
-                item_id=item_id,
+                inventory_subject_id=inventory_subject_id,
                 qty_delta=qty_delta,
             )
         except ValueError as exc:
@@ -171,14 +174,14 @@ class OperationsService:
         uow: UnitOfWork,
         *,
         recipient_id: int,
-        item_id: int,
+        inventory_subject_id: int,
         qty_delta: Decimal,
         error_context: str,
     ) -> None:
         try:
             await uow.asset_registers.upsert_issued(
                 recipient_id=recipient_id,
-                item_id=item_id,
+                inventory_subject_id=inventory_subject_id,
                 qty_delta=qty_delta,
             )
         except ValueError as exc:
@@ -280,6 +283,20 @@ class OperationsService:
         return operation.site_id
 
     @staticmethod
+    async def _ensure_line_inventory_subject(uow: UnitOfWork, line) -> int:
+        if line.inventory_subject_id is not None:
+            return int(line.inventory_subject_id)
+        if line.item_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"operation line {line.id} has neither inventory_subject_id nor item_id",
+            )
+        subject = await uow.inventory_subjects.get_or_create_for_item(item_id=int(line.item_id))
+        line.inventory_subject_id = subject.id
+        await uow.session.flush()
+        return int(subject.id)
+
+    @staticmethod
     async def create_operation(
         uow: UnitOfWork,
         operation_data: OperationCreate,
@@ -313,6 +330,54 @@ class OperationsService:
                 client_request_id=operation_data.client_request_id or "",
             )
             if existing_operation is not None:
+                # Idempotency replay: if payload matches, return existing operation.
+                # If payload differs, return 409 Conflict per spec §7.4.
+                # Compare by line_number, qty, batch, comment and snapshot name
+                # (item_id differs after creation for temporary items).
+                # Normalize comparison for idempotency, especially for temporary items
+                def normalize_qty(q):
+                    # Convert to Decimal for consistent comparison
+                    from decimal import Decimal
+                    if isinstance(q, (int, float, str)):
+                        return Decimal(str(q))
+                    return q if isinstance(q, Decimal) else Decimal("0")
+
+                def normalize_str(s):
+                    if s is None:
+                        return None
+                    return s.strip().lower()
+
+                existing_lines = []
+                for line in existing_operation.lines:
+                    existing_lines.append({
+                        "line_number": line.line_number,
+                        "qty": normalize_qty(line.qty),
+                        "batch": normalize_str(line.batch),
+                        "comment": normalize_str(line.comment),
+                        "item_name_snapshot": normalize_str(line.item_name_snapshot),
+                    })
+
+                incoming_lines = []
+                for line in operation_data.lines:
+                    incoming_lines.append({
+                        "line_number": line.line_number,
+                        "qty": normalize_qty(line.qty),
+                        "batch": normalize_str(line.batch),
+                        "comment": normalize_str(line.comment),
+                        "item_name_snapshot": normalize_str(
+                            line.temporary_item.name.strip() if line.temporary_item is not None else None
+                        ),
+                    })
+
+                if existing_lines != incoming_lines:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            f"Idempotency conflict: client_request_id '{operation_data.client_request_id}' "
+                            f"was already used with a different payload. "
+                            f"Existing operation id={existing_operation.id}."
+                        ),
+                    )
                 return {"operation": existing_operation}
 
         recipient_id, recipient_name_snapshot = await OperationsService._resolve_recipient(
@@ -344,6 +409,7 @@ class OperationsService:
         unit_cache = {}
         category_cache = {}
         temporary_created_by_key = {}
+        temporary_subject_by_key = {}
 
         for client_key, payload in temporary_batch.items():
             if payload.category_id is None:
@@ -387,18 +453,29 @@ class OperationsService:
                 hashtags=payload.hashtags,
                 created_by_user_id=user_id,
             )
+            temporary_subject = await uow.inventory_subjects.get_or_create_for_temporary_item(
+                temporary_item_id=temporary_item.id,
+                item_id=backing_item.id,
+            )
             item_cache[backing_item.id] = backing_item
             unit_cache[payload.unit_id] = unit
             category_cache[payload.category_id] = category
             temporary_created_by_key[client_key] = temporary_item
+            temporary_subject_by_key[client_key] = temporary_subject
 
         for line_data in operation_data.lines:
             line_item_id = line_data.item_id
+            line_subject_id: int | None = None
             if line_data.temporary_item is not None:
                 line_item_id = temporary_created_by_key[line_data.temporary_item.client_key].item_id
+                line_subject_id = temporary_subject_by_key[line_data.temporary_item.client_key].id
 
             if line_item_id is None:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="line item resolution failed")
+
+            if line_subject_id is None:
+                line_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=line_item_id)
+                line_subject_id = line_subject.id
 
             item = item_cache.get(line_item_id)
             if item is None:
@@ -434,6 +511,7 @@ class OperationsService:
             await uow.operations.create_operation_line(
                 operation_id=operation.id,
                 line_number=line_data.line_number,
+                inventory_subject_id=line_subject_id,
                 item_id=line_item_id,
                 qty=line_data.qty,
                 batch=line_data.batch,
@@ -548,9 +626,11 @@ class OperationsService:
                 if line.item_id is None:
                     raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="item_id is required")
                 await OperationsService._ensure_item_usable(uow, line.item_id)
+                line_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=line.item_id)
                 await uow.operations.create_operation_line(
                     operation_id=operation_id,
                     line_number=line.line_number,
+                    inventory_subject_id=line_subject.id,
                     item_id=line.item_id,
                     qty=line.qty,
                     batch=line.batch,
@@ -570,6 +650,7 @@ class OperationsService:
         OperationsWorkflowPolicy.require_draft_for_submit(operation)
 
         for line in operation.lines:
+            await OperationsService._ensure_line_inventory_subject(uow, line)
             quantity = Decimal(line.qty)
             if operation.operation_type == "RECEIVE":
                 if operation.acceptance_required:
@@ -579,30 +660,30 @@ class OperationsService:
                         operation_line_id=line.id,
                         destination_site_id=operation.site_id,
                         source_site_id=None,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         qty_delta=quantity,
                         error_context="RECEIVE submit",
                     )
                 else:
                     await uow.balances.update_balance_quantity(
                         site_id=operation.site_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
                     )
             elif operation.operation_type in DECREMENT_OPERATION_TYPES:
                 await OperationsService._ensure_sufficient_balance(
                     uow,
                     site_id=operation.site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     required_qty=quantity,
                     error_message=(
-                        f"insufficient stock for {operation.operation_type}: item={line.item_id}, "
+                        f"insufficient stock for {operation.operation_type}: inventory_subject={line.inventory_subject_id}, "
                         f"site={operation.site_id}, required={line.qty}"
                     ),
                 )
                 await uow.balances.update_balance_quantity(
                     site_id=operation.site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     quantity_delta=-quantity,
                 )
             elif operation.operation_type == "ADJUSTMENT":
@@ -610,16 +691,16 @@ class OperationsService:
                     await OperationsService._ensure_sufficient_balance(
                         uow,
                         site_id=operation.site_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         required_qty=abs(quantity),
                         error_message=(
-                            f"insufficient stock for ADJUSTMENT: item={line.item_id}, "
+                            f"insufficient stock for ADJUSTMENT: inventory_subject={line.inventory_subject_id}, "
                             f"site={operation.site_id}, delta={line.qty}"
                         ),
                     )
                 await uow.balances.update_balance_quantity(
                     site_id=operation.site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     quantity_delta=quantity,
                 )
             elif operation.operation_type == "MOVE":
@@ -632,16 +713,16 @@ class OperationsService:
                 await OperationsService._ensure_sufficient_balance(
                     uow,
                     site_id=operation.source_site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     required_qty=quantity,
                     error_message=(
-                        f"insufficient stock for MOVE: item={line.item_id}, "
+                        f"insufficient stock for MOVE: inventory_subject={line.inventory_subject_id}, "
                         f"source_site={operation.source_site_id}, required={line.qty}"
                     ),
                 )
                 await uow.balances.update_balance_quantity(
                     site_id=operation.source_site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     quantity_delta=-quantity,
                 )
                 if operation.acceptance_required:
@@ -651,14 +732,14 @@ class OperationsService:
                         operation_line_id=line.id,
                         destination_site_id=operation.destination_site_id,
                         source_site_id=operation.source_site_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         qty_delta=quantity,
                         error_context="MOVE submit",
                     )
                 else:
                     await uow.balances.update_balance_quantity(
                         site_id=operation.destination_site_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
                     )
             elif operation.operation_type == "ISSUE":
@@ -670,22 +751,22 @@ class OperationsService:
                 await OperationsService._ensure_sufficient_balance(
                     uow,
                     site_id=operation.site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     required_qty=quantity,
                     error_message=(
-                        f"insufficient stock for ISSUE: item={line.item_id}, "
+                        f"insufficient stock for ISSUE: inventory_subject={line.inventory_subject_id}, "
                         f"site={operation.site_id}, required={line.qty}"
                     ),
                 )
                 await uow.balances.update_balance_quantity(
                     site_id=operation.site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     quantity_delta=-quantity,
                 )
                 await OperationsService._upsert_issued(
                     uow,
                     recipient_id=operation.recipient_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     qty_delta=quantity,
                     error_context="ISSUE submit",
                 )
@@ -698,13 +779,13 @@ class OperationsService:
                 await OperationsService._upsert_issued(
                     uow,
                     recipient_id=operation.recipient_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     qty_delta=-quantity,
                     error_context="ISSUE_RETURN submit",
                 )
                 await uow.balances.update_balance_quantity(
                     site_id=operation.site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     quantity_delta=quantity,
                 )
 
@@ -712,7 +793,7 @@ class OperationsService:
             operation_id=operation_id,
             submitted_by_user_id=user_id,
         )
-        
+
         # Автоматически создаём документ для операции (если включено в конфиге)
         # Пока создаём только для определённых типов операций
         document_created = None
@@ -727,7 +808,7 @@ class OperationsService:
                 "WRITE_OFF": "act",
                 "ADJUSTMENT": "act",
             }
-            
+
             document_type = document_type_map.get(submitted_operation.operation_type)
             if document_type:
                 # Генерируем документ с автоматической финализацией
@@ -752,11 +833,11 @@ class OperationsService:
                 operation_id,
                 str(e),
             )
-        
+
         response = {"operation": submitted_operation}
         if document_created:
             response["document"] = document_created
-        
+
         return response
 
     @staticmethod
@@ -792,6 +873,7 @@ class OperationsService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"operation line {update.line_id} not found",
                 )
+            await OperationsService._ensure_line_inventory_subject(uow, line)
 
             remaining = Decimal(line.qty) - Decimal(line.accepted_qty) - Decimal(line.lost_qty)
             if accepted_delta + lost_delta > remaining:
@@ -810,13 +892,13 @@ class OperationsService:
                     operation_line_id=line.id,
                     destination_site_id=destination_site_id,
                     source_site_id=source_site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     qty_delta=-accepted_delta,
                     error_context="accept line",
                 )
                 await uow.balances.update_balance_quantity(
                     site_id=destination_site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     quantity_delta=accepted_delta,
                 )
                 await uow.operations.update_operation_line_progress(
@@ -840,7 +922,7 @@ class OperationsService:
                     operation_line_id=line.id,
                     destination_site_id=destination_site_id,
                     source_site_id=source_site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     qty_delta=-lost_delta,
                     error_context="mark lost",
                 )
@@ -850,7 +932,7 @@ class OperationsService:
                     operation_line_id=line.id,
                     site_id=destination_site_id,
                     source_site_id=source_site_id,
-                    item_id=line.item_id,
+                    inventory_subject_id=line.inventory_subject_id,
                     qty_delta=lost_delta,
                     error_context="mark lost",
                 )
@@ -911,7 +993,7 @@ class OperationsService:
             destination_site_id = OperationsService._destination_site_for_acceptance(operation)
             await uow.balances.update_balance_quantity(
                 site_id=destination_site_id,
-                item_id=lost_row.item_id,
+                inventory_subject_id=lost_row.inventory_subject_id,
                 quantity_delta=qty,
             )
         elif action == "return_to_source":
@@ -922,7 +1004,7 @@ class OperationsService:
                 )
             await uow.balances.update_balance_quantity(
                 site_id=lost_row.source_site_id,
-                item_id=lost_row.item_id,
+                inventory_subject_id=lost_row.inventory_subject_id,
                 quantity_delta=qty,
             )
         elif action == "write_off":
@@ -938,7 +1020,7 @@ class OperationsService:
             operation_line_id=lost_row.operation_line_id,
             site_id=lost_row.site_id,
             source_site_id=lost_row.source_site_id,
-            item_id=lost_row.item_id,
+            inventory_subject_id=lost_row.inventory_subject_id,
             qty_delta=-qty,
             error_context=action,
         )
@@ -966,6 +1048,7 @@ class OperationsService:
 
         if operation.status == "submitted":
             for line in operation.lines:
+                await OperationsService._ensure_line_inventory_subject(uow, line)
                 quantity = Decimal(line.qty)
                 accepted_qty = Decimal(line.accepted_qty)
                 lost_qty = Decimal(line.lost_qty)
@@ -980,7 +1063,7 @@ class OperationsService:
                                 operation_line_id=line.id,
                                 destination_site_id=operation.site_id,
                                 source_site_id=None,
-                                item_id=line.item_id,
+                                inventory_subject_id=line.inventory_subject_id,
                                 qty_delta=-pending_qty,
                                 error_context="RECEIVE rollback pending",
                             )
@@ -988,7 +1071,7 @@ class OperationsService:
                             await OperationsService._apply_balance_delta(
                                 uow,
                                 site_id=operation.site_id,
-                                item_id=line.item_id,
+                                inventory_subject_id=line.inventory_subject_id,
                                 quantity_delta=-accepted_qty,
                                 error_context="RECEIVE rollback accepted",
                             )
@@ -999,7 +1082,7 @@ class OperationsService:
                                 operation_line_id=line.id,
                                 site_id=operation.site_id,
                                 source_site_id=None,
-                                item_id=line.item_id,
+                                inventory_subject_id=line.inventory_subject_id,
                                 qty_delta=-lost_qty,
                                 error_context="RECEIVE rollback lost",
                             )
@@ -1007,7 +1090,7 @@ class OperationsService:
                         await OperationsService._apply_balance_delta(
                             uow,
                             site_id=operation.site_id,
-                            item_id=line.item_id,
+                            inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=-quantity,
                             error_context="RECEIVE rollback",
                         )
@@ -1015,7 +1098,7 @@ class OperationsService:
                     await OperationsService._apply_balance_delta(
                         uow,
                         site_id=operation.site_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
                         error_context=f"{operation.operation_type} rollback",
                     )
@@ -1023,7 +1106,7 @@ class OperationsService:
                     await OperationsService._apply_balance_delta(
                         uow,
                         site_id=operation.site_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=-quantity,
                         error_context="ADJUSTMENT rollback",
                     )
@@ -1041,7 +1124,7 @@ class OperationsService:
                                 operation_line_id=line.id,
                                 destination_site_id=operation.destination_site_id,
                                 source_site_id=operation.source_site_id,
-                                item_id=line.item_id,
+                                inventory_subject_id=line.inventory_subject_id,
                                 qty_delta=-pending_qty,
                                 error_context="MOVE rollback pending",
                             )
@@ -1049,7 +1132,7 @@ class OperationsService:
                             await OperationsService._apply_balance_delta(
                                 uow,
                                 site_id=operation.destination_site_id,
-                                item_id=line.item_id,
+                                inventory_subject_id=line.inventory_subject_id,
                                 quantity_delta=-accepted_qty,
                                 error_context="MOVE rollback accepted from destination",
                             )
@@ -1060,14 +1143,14 @@ class OperationsService:
                                 operation_line_id=line.id,
                                 site_id=operation.destination_site_id,
                                 source_site_id=operation.source_site_id,
-                                item_id=line.item_id,
+                                inventory_subject_id=line.inventory_subject_id,
                                 qty_delta=-lost_qty,
                                 error_context="MOVE rollback lost",
                             )
                         await OperationsService._apply_balance_delta(
                             uow,
                             site_id=operation.source_site_id,
-                            item_id=line.item_id,
+                            inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=quantity,
                             error_context="MOVE rollback to source",
                         )
@@ -1075,24 +1158,24 @@ class OperationsService:
                         await OperationsService._ensure_sufficient_balance(
                             uow,
                             site_id=operation.destination_site_id,
-                            item_id=line.item_id,
+                            inventory_subject_id=line.inventory_subject_id,
                             required_qty=quantity,
                             error_message=(
                                 f"insufficient stock for MOVE rollback from destination: "
-                                f"item={line.item_id}, site={operation.destination_site_id}, required={line.qty}"
+                                f"inventory_subject={line.inventory_subject_id}, site={operation.destination_site_id}, required={line.qty}"
                             ),
                         )
                         await OperationsService._apply_balance_delta(
                             uow,
                             site_id=operation.source_site_id,
-                            item_id=line.item_id,
+                            inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=quantity,
                             error_context="MOVE rollback to source",
                         )
                         await OperationsService._apply_balance_delta(
                             uow,
                             site_id=operation.destination_site_id,
-                            item_id=line.item_id,
+                            inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=-quantity,
                             error_context="MOVE rollback from destination",
                         )
@@ -1102,14 +1185,14 @@ class OperationsService:
                     await OperationsService._upsert_issued(
                         uow,
                         recipient_id=operation.recipient_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         qty_delta=-quantity,
                         error_context="ISSUE rollback from recipient",
                     )
                     await OperationsService._apply_balance_delta(
                         uow,
                         site_id=operation.site_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
                         error_context="ISSUE rollback to stock",
                     )
@@ -1119,14 +1202,14 @@ class OperationsService:
                     await OperationsService._apply_balance_delta(
                         uow,
                         site_id=operation.site_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=-quantity,
                         error_context="ISSUE_RETURN rollback from stock",
                     )
                     await OperationsService._upsert_issued(
                         uow,
                         recipient_id=operation.recipient_id,
-                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
                         qty_delta=quantity,
                         error_context="ISSUE_RETURN rollback to recipient",
                     )

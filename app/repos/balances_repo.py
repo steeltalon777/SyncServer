@@ -1,14 +1,15 @@
 ﻿from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import and_, func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.balance import Balance
 from app.models.category import Category
+from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
 from app.models.site import Site
+from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class BalancesRepo:
@@ -17,20 +18,35 @@ class BalancesRepo:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_for_update(self, site_id: int, item_id: int) -> Balance | None:
+    async def get_for_update(self, site_id: int, inventory_subject_id: int) -> Balance | None:
         stmt = (
             select(Balance)
-            .where(and_(Balance.site_id == site_id, Balance.item_id == item_id))
+            .where(and_(Balance.site_id == site_id, Balance.inventory_subject_id == inventory_subject_id))
             .with_for_update()
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def upsert(self, site_id: int, item_id: int, delta_qty: Decimal) -> Balance:
-        balance = await self.get_for_update(site_id=site_id, item_id=item_id)
+    async def upsert(
+        self,
+        site_id: int,
+        inventory_subject_id: int,
+        delta_qty: Decimal,
+    ) -> Balance:
+        balance = await self.get_for_update(site_id=site_id, inventory_subject_id=inventory_subject_id)
 
         if balance is None:
-            balance = Balance(site_id=site_id, item_id=item_id, qty=delta_qty)
+            # Получаем item_id из inventory_subject
+            stmt = select(InventorySubject.item_id).where(InventorySubject.id == inventory_subject_id)
+            result = await self.session.execute(stmt)
+            item_id = result.scalar_one_or_none()
+
+            balance = Balance(
+                site_id=site_id,
+                inventory_subject_id=inventory_subject_id,
+                item_id=item_id,
+                qty=delta_qty,
+            )
             self.session.add(balance)
         else:
             balance.qty = balance.qty + delta_qty
@@ -42,14 +58,19 @@ class BalancesRepo:
     async def update_balance_quantity(
         self,
         site_id: int,
-        item_id: int,
+        inventory_subject_id: int,
         quantity_delta: Decimal,
     ) -> Balance:
         return await self.upsert(
             site_id=site_id,
-            item_id=item_id,
+            inventory_subject_id=inventory_subject_id,
             delta_qty=quantity_delta,
         )
+
+    async def get_all_by_inventory_subject(self, inventory_subject_id: int) -> list[Balance]:
+        """Get all balance rows for a given inventory_subject_id (across all sites)."""
+        stmt = select(Balance).where(Balance.inventory_subject_id == inventory_subject_id)
+        return list((await self.session.execute(stmt)).scalars().all())
 
     async def list_balances(
         self,
@@ -62,7 +83,13 @@ class BalancesRepo:
             select(
                 Balance.site_id.label("site_id"),
                 Site.name.label("site_name"),
-                Balance.item_id.label("item_id"),
+                Balance.inventory_subject_id.label("inventory_subject_id"),
+                InventorySubject.subject_type.label("subject_type"),
+                InventorySubject.item_id.label("item_id"),
+                InventorySubject.temporary_item_id.label("temporary_item_id"),
+                TemporaryItem.resolved_item_id.label("resolved_item_id"),
+                Item.name.label("resolved_item_name"),
+                func.coalesce(TemporaryItem.name, Item.name).label("display_name"),
                 Item.name.label("item_name"),
                 Item.sku.label("sku"),
                 Item.unit_id.label("unit_id"),
@@ -74,9 +101,11 @@ class BalancesRepo:
             )
             .select_from(Balance)
             .join(Site, Site.id == Balance.site_id)
-            .join(Item, Item.id == Balance.item_id)
-            .join(Category, Category.id == Item.category_id)
-            .join(Unit, Unit.id == Item.unit_id)
+            .join(InventorySubject, InventorySubject.id == Balance.inventory_subject_id)
+            .outerjoin(Item, Item.id == InventorySubject.item_id)
+            .outerjoin(TemporaryItem, TemporaryItem.id == InventorySubject.temporary_item_id)
+            .outerjoin(Category, Category.id == Item.category_id)
+            .outerjoin(Unit, Unit.id == Item.unit_id)
             .where(Balance.site_id.in_(user_site_ids))
         )
 
@@ -84,7 +113,10 @@ class BalancesRepo:
             stmt = stmt.where(Balance.site_id == filter.site_id)
 
         if filter.item_id is not None:
-            stmt = stmt.where(Balance.item_id == filter.item_id)
+            stmt = stmt.where(InventorySubject.item_id == filter.item_id)
+
+        if filter.inventory_subject_id is not None:
+            stmt = stmt.where(Balance.inventory_subject_id == filter.inventory_subject_id)
 
         if filter.category_id is not None:
             stmt = stmt.where(Item.category_id == filter.category_id)
@@ -107,7 +139,7 @@ class BalancesRepo:
         total_count = (await self.session.execute(count_stmt)).scalar_one()
 
         stmt = (
-            stmt.order_by(Balance.updated_at.desc(), Site.name, Item.name, Balance.item_id)
+            stmt.order_by(Balance.updated_at.desc(), Site.name, Item.name, InventorySubject.item_id)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )

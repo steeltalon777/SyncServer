@@ -16,6 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import relationship
 
 from app.models.base import Base
 
@@ -43,10 +44,15 @@ class PendingAcceptanceBalance(Base):
         ForeignKey("sites.id"),
         nullable=True,
     )
-    item_id: Mapped[int] = mapped_column(
+    inventory_subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_subjects.id"),
+        nullable=False,
+    )
+    item_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("items.id"),
-        nullable=False,
+        nullable=True,
     )
     qty: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(
@@ -59,6 +65,9 @@ class PendingAcceptanceBalance(Base):
     __table_args__ = (
         CheckConstraint("qty >= 0", name="ck_pending_acceptance_qty_non_negative"),
     )
+
+    inventory_subject = relationship("InventorySubject")
+    item = relationship("Item")
 
 
 class LostAssetBalance(Base):
@@ -84,10 +93,15 @@ class LostAssetBalance(Base):
         ForeignKey("sites.id"),
         nullable=True,
     )
-    item_id: Mapped[int] = mapped_column(
+    inventory_subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_subjects.id"),
+        nullable=False,
+    )
+    item_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("items.id"),
-        nullable=False,
+        nullable=True,
     )
     qty: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(
@@ -101,6 +115,9 @@ class LostAssetBalance(Base):
         CheckConstraint("qty >= 0", name="ck_lost_asset_qty_non_negative"),
     )
 
+    inventory_subject = relationship("InventorySubject")
+    item = relationship("Item")
+
 
 class IssuedAssetBalance(Base):
     __tablename__ = "issued_asset_balances"
@@ -110,10 +127,15 @@ class IssuedAssetBalance(Base):
         ForeignKey("recipients.id"),
         primary_key=True,
     )
+    inventory_subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_subjects.id"),
+        primary_key=True,
+    )
     item_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("items.id"),
-        primary_key=True,
+        nullable=True,
     )
     qty: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(
@@ -126,6 +148,9 @@ class IssuedAssetBalance(Base):
     __table_args__ = (
         CheckConstraint("qty >= 0", name="ck_issued_asset_qty_non_negative"),
     )
+
+    inventory_subject = relationship("InventorySubject")
+    item = relationship("Item")
 
 
 class OperationAcceptanceAction(Base):

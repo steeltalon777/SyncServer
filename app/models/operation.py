@@ -207,10 +207,10 @@ class OperationLine(Base):
 
     line_number: Mapped[int] = mapped_column(nullable=False)
 
-    inventory_subject_id: Mapped[int] = mapped_column(
+    inventory_subject_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("inventory_subjects.id"),
-        nullable=False,
+        nullable=True,
     )
     item_id: Mapped[int] = mapped_column(
         Integer,
@@ -250,19 +250,42 @@ class OperationLine(Base):
     item = relationship("Item")
 
     @property
+    def subject_type(self) -> str | None:
+        subject = getattr(self, "inventory_subject", None)
+        return None if subject is None else subject.subject_type
+
+    @property
     def temporary_item_id(self) -> int | None:
+        subject = getattr(self, "inventory_subject", None)
+        if subject is not None and subject.temporary_item_id is not None:
+            return subject.temporary_item_id
         temporary_item = getattr(self.item, "temporary_item", None)
         return None if temporary_item is None else temporary_item.id
 
     @property
     def temporary_item_status(self) -> str | None:
-        temporary_item = getattr(self.item, "temporary_item", None)
+        subject = getattr(self, "inventory_subject", None)
+        temporary_item = None if subject is None else getattr(subject, "temporary_item", None)
+        if temporary_item is None:
+            temporary_item = getattr(self.item, "temporary_item", None)
         return None if temporary_item is None else temporary_item.status
 
     @property
     def resolved_item_id(self) -> int | None:
-        temporary_item = getattr(self.item, "temporary_item", None)
+        subject = getattr(self, "inventory_subject", None)
+        temporary_item = None if subject is None else getattr(subject, "temporary_item", None)
+        if temporary_item is None:
+            temporary_item = getattr(self.item, "temporary_item", None)
         return None if temporary_item is None else temporary_item.resolved_item_id
+
+    @property
+    def resolved_item_name(self) -> str | None:
+        subject = getattr(self, "inventory_subject", None)
+        temporary_item = None if subject is None else getattr(subject, "temporary_item", None)
+        if temporary_item is None:
+            temporary_item = getattr(self.item, "temporary_item", None)
+        resolved_item = None if temporary_item is None else getattr(temporary_item, "resolved_item", None)
+        return None if resolved_item is None else resolved_item.name
 
     __table_args__ = (
         CheckConstraint("qty <> 0", name="ck_operation_lines_qty_non_zero"),

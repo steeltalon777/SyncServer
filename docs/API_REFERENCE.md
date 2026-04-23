@@ -132,7 +132,7 @@ Endpoints:
 - `POST /operations/{operation_id}/accept-lines` - accept operation lines (destination site access)
 
 Rules:
-- submit updates balances
+- submit updates balances and/or asset registers according to operation type
 - cancel rolls back submitted deltas
 - if `effective_at` is omitted on create, the server sets it to the current timestamp
 - `effective_at` cannot be changed through the general `PATCH /operations/{operation_id}` endpoint
@@ -141,12 +141,20 @@ Rules:
 - rollback is blocked if reversing a submitted operation would make a balance invalid (for example, negative stock on the affected site)
 - server validates site access and MOVE source/destination
 - `ADJUSTMENT` uses signed `qty`: positive adds stock, negative subtracts stock
-- `ISSUE` and `ISSUE_RETURN` are accepted by the API, but submit/rollback is currently a placeholder and returns `501`
+- `ISSUE` submit moves quantity from site balances into `issued-assets`; `ISSUE_RETURN` submit moves quantity from `issued-assets` back into site balances
+- `ISSUE` and `ISSUE_RETURN` require `recipient_id` or `recipient_name`
+- `POST /operations/{operation_id}/accept-lines` is used for acceptance-required operations (`RECEIVE`, `MOVE`)
 - `storekeeper` may create operations on allowed sites, but submit is reserved for `chief_storekeeper` and `root`
 - `storekeeper` may update only own draft operations
 - `storekeeper` may cancel only own draft operations
 - `storekeeper` may not change `effective_at`
 - `chief_storekeeper` is a global business supervisor and may work with operations across all sites
+
+Read DTO notes:
+- operation line rows expose `inventory_subject_id` and `subject_type`
+- temporary-item compatibility fields: `temporary_item_id`, `temporary_item_status`, `resolved_item_id`, `resolved_item_name`
+- historical snapshots: `item_name_snapshot`, `item_sku_snapshot`, `unit_name_snapshot`, `unit_symbol_snapshot`, `category_name_snapshot`
+- acceptance counters: `accepted_qty`, `lost_qty`
 
 ## Documents API
 
@@ -204,9 +212,10 @@ Access:
 
 `GET /balances` list rows are UI-ready and include:
 - `site_id`, `site_name`
-- `item_id`, `item_name`, `sku`
-- `unit_id`, `unit_symbol`
-- `category_id`, `category_name`
+- `inventory_subject_id`, `subject_type`
+- `display_name`
+- optional catalog compatibility fields: `item_id`, `item_name`, `sku`, `unit_id`, `unit_symbol`, `category_id`, `category_name`
+- optional temporary-item resolution fields: `temporary_item_id`, `resolved_item_id`, `resolved_item_name`
 - `qty`, `updated_at`
 
 ## Asset Register API (read-only)
@@ -251,7 +260,13 @@ Access:
       "site_name": "Склад А",
       "source_site_id": null,
       "source_site_name": null,
+      "inventory_subject_id": 501,
+      "subject_type": "catalog_item",
       "item_id": 456,
+      "temporary_item_id": null,
+      "resolved_item_id": null,
+      "resolved_item_name": null,
+      "display_name": "Товар",
       "item_name": "Товар",
       "sku": "SKU123",
       "qty": "5.00",
@@ -266,7 +281,7 @@ Access:
 
 ### GET /lost-assets/{operation_line_id}
 
-Возвращает детальную информацию о конкретном непринятом активе.
+Возвращает детальную информацию о конкретном непринятом активе в том же subject-aware формате, что и список.
 
 Параметры пути:
 - `operation_line_id` – ID строки операции (целое число)
@@ -280,7 +295,13 @@ Access:
   "site_name": "Склад А",
   "source_site_id": null,
   "source_site_name": null,
+  "inventory_subject_id": 501,
+  "subject_type": "catalog_item",
   "item_id": 456,
+  "temporary_item_id": null,
+  "resolved_item_id": null,
+  "resolved_item_name": null,
+  "display_name": "Товар",
   "item_name": "Товар",
   "sku": "SKU123",
   "qty": "5.00",
@@ -296,6 +317,8 @@ Access:
 
 Разрешение непринятого актива: возврат на исходный склад, списание или перемещение на другой склад.
 
+Доступно только для `chief_storekeeper` и `root`.
+
 Тело запроса:
 ```json
 {
@@ -310,7 +333,8 @@ Access:
 
 ### GET /pending-acceptance и GET /issued-assets
 
-Аналогично поддерживают фильтрацию по сайту, товару, поиск и пагинацию.
+- `GET /pending-acceptance` поддерживает фильтры `site_id`, `operation_id`, `item_id`, `search`, `page`, `page_size` и возвращает строки с `destination_site_id`, `destination_site_name`, optional `source_site_id`, `inventory_subject_id`, `subject_type`, `display_name`, optional `item_id`, `item_name`, `sku`, `temporary_item_id`, `resolved_item_id`, `resolved_item_name`, `qty`, `updated_at`.
+- `GET /issued-assets` поддерживает фильтры `recipient_id`, `item_id`, `search`, `page`, `page_size` и возвращает строки с `recipient_id`, `recipient_name`, `recipient_type`, `inventory_subject_id`, `subject_type`, `display_name`, optional `item_id`, `item_name`, `sku`, `temporary_item_id`, `resolved_item_id`, `resolved_item_name`, `qty`, `updated_at`.
 
 ## Reports API (read-only)
 - `GET /reports/item-movement`
@@ -323,19 +347,22 @@ Access:
 
 `GET /reports/item-movement` returns aggregated rows with:
 - `site_id`, `site_name`
-- `item_id`, `item_name`, `sku`
-- `unit_id`, `unit_symbol`
-- `category_id`, `category_name`
+- `inventory_subject_id`, `subject_type`, `display_name`
+- optional catalog compatibility fields: `item_id`, `item_name`, `sku`, `unit_id`, `unit_symbol`, `category_id`, `category_name`
+- optional temporary-item resolution fields: `temporary_item_id`, `resolved_item_id`, `resolved_item_name`
 - `incoming_qty`, `outgoing_qty`, `net_qty`
 - `last_operation_at`
 
 Rules:
 - only `submitted` operations participate in movement reports
 - report period uses `effective_at` when present, otherwise falls back to `created_at`
-- movement is grouped by `(site_id, item_id)` so internal `MOVE` operations appear as outgoing on source and incoming on destination
+- movement is grouped by `(site_id, inventory_subject_id)` so internal `MOVE` operations appear as outgoing on source and incoming on destination
+- for acceptance-required incoming flows (`RECEIVE`, destination side of `MOVE`) incoming quantity is based on accepted quantity
 
-`GET /reports/stock-summary` returns grouped current-balance aggregates per site:
+`GET /reports/stock-summary` returns current summary rows scoped by visible sites with:
 - `site_id`, `site_name`
+- `inventory_subject_id`, `subject_type`, `display_name`
+- optional subject resolution fields: `item_id`, `temporary_item_id`, `resolved_item_id`, `resolved_item_name`
 - `items_count`
 - `positive_items_count`
 - `total_quantity`
@@ -597,6 +624,7 @@ Response:
 
 ### Operation line response extensions
 
-- [`OperationLineResponse.temporary_item_id`](app/schemas/operation.py:143)
-- [`OperationLineResponse.temporary_item_status`](app/schemas/operation.py:144)
-- [`OperationLineResponse.resolved_item_id`](app/schemas/operation.py:145)
+- subject fields: `inventory_subject_id`, `subject_type`
+- temporary-item compatibility: `temporary_item_id`, `temporary_item_status`, `resolved_item_id`, `resolved_item_name`
+- historical snapshots: `item_name_snapshot`, `item_sku_snapshot`, `unit_name_snapshot`, `unit_symbol_snapshot`, `category_name_snapshot`
+- acceptance counters in read DTOs: `accepted_qty`, `lost_qty`

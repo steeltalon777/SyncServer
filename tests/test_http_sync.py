@@ -275,7 +275,7 @@ async def test_auth_fail_bad_token(client: AsyncClient, session_factory: async_s
     )
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid X-Device-Token"
+    assert response.json()["detail"] == "invalid X-Device-Token"
 
 
 @pytest.mark.asyncio

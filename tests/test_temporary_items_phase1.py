@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -9,7 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import get_db
 from app.models.category import Category
+from app.models.balance import Balance
+from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
+from app.models.operation import OperationLine
 from app.models.site import Site
 from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
@@ -178,6 +182,97 @@ async def test_receive_operation_can_create_inline_temporary_item_atomically(
         assert backing_item is not None
         assert backing_item.is_active is False
 
+        lines = list((await session.execute(select(OperationLine).order_by(OperationLine.line_number))).scalars().all())
+        assert len(lines) == 2
+        assert lines[0].inventory_subject_id is not None
+        assert lines[1].inventory_subject_id is not None
+
+        subject_line_1 = await session.get(InventorySubject, lines[0].inventory_subject_id)
+        subject_line_2 = await session.get(InventorySubject, lines[1].inventory_subject_id)
+        assert subject_line_1 is not None
+        assert subject_line_2 is not None
+        assert subject_line_1.subject_type == "temporary_item"
+        assert subject_line_2.subject_type == "catalog_item"
+
+
+@pytest.mark.asyncio
+async def test_receive_submit_accept_updates_balances_by_inventory_subject(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "tmp-receive-write-path-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 2,
+                    "temporary_item": {
+                        "client_key": "tmp-1",
+                        "name": "Временный кабель",
+                        "sku": None,
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+                {
+                    "line_number": 2,
+                    "qty": 1,
+                    "item_id": seed["catalog_item_id"],
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+
+    submit_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+
+    accept_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/accept-lines",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "lines": [
+                {"line_id": operation["lines"][0]["id"], "accepted_qty": 2, "lost_qty": 0},
+                {"line_id": operation["lines"][1]["id"], "accepted_qty": 1, "lost_qty": 0},
+            ]
+        },
+    )
+    assert accept_response.status_code == 200
+
+    async with session_factory() as session:
+        lines = list((await session.execute(select(OperationLine).order_by(OperationLine.line_number))).scalars().all())
+        assert len(lines) == 2
+
+        balances = list(
+            (
+                await session.execute(
+                    select(Balance)
+                    .where(Balance.site_id == seed["site_id"])
+                    .order_by(Balance.inventory_subject_id)
+                )
+            ).scalars().all()
+        )
+        assert len(balances) == 2
+
+        balances_by_subject = {int(row.inventory_subject_id): row for row in balances}
+        assert Decimal(str(balances_by_subject[int(lines[0].inventory_subject_id)].qty)) == Decimal("2")
+        assert Decimal(str(balances_by_subject[int(lines[1].inventory_subject_id)].qty)) == Decimal("1")
+
+        assert balances_by_subject[int(lines[0].inventory_subject_id)].item_id == lines[0].item_id
+        assert balances_by_subject[int(lines[1].inventory_subject_id)].item_id == lines[1].item_id
+
 
 @pytest.mark.asyncio
 async def test_inline_temporary_item_requires_client_request_id_and_blocks_observer(
@@ -321,4 +416,6 @@ async def test_temporary_items_review_endpoints_support_list_detail_and_phase1_r
     )
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved_as_item"
-    assert approve_response.json()["backing_item_is_active"] is True
+    # Stage 3A: approve creates a new permanent item; backing item stays inactive
+    assert approve_response.json()["resolved_item_id"] is not None
+    assert approve_response.json()["resolution_type"] == "approve_as_item"

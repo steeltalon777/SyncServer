@@ -103,18 +103,40 @@
 - belongs to `Unit`
 - used by `Balance`
 
+## Entity: InventorySubject
+**Description:** Canonical inventory subject key used by operation lines and read projections. A subject points either to a catalog item or to a temporary item.
+
+**Fields:**
+- `id`
+- `subject_type` – `catalog_item` or `temporary_item`
+- `item_id` – optional backing catalog item
+- `temporary_item_id` – optional temporary item reference
+- `created_at`
+- `archived_at`
+
+**Relations:**
+- optional one-to-one with `Item`
+- optional one-to-one with `TemporaryItem`
+- referenced by `OperationLine`
+- referenced by `Balance`
+- referenced by `PendingAcceptanceBalance`
+- referenced by `LostAssetBalance`
+- referenced by `IssuedAssetBalance`
+
 ## Entity: Balance
-**Description:** Aggregated quantity of an item on a site.
+**Description:** Subject-based stock balance projection for a site.
 
 **Fields:**
 - `site_id`
-- `item_id`
+- `inventory_subject_id`
+- `item_id` – optional compatibility/back-reference to catalog item
 - `qty`
 - `updated_at`
 
 **Relations:**
 - references `Site`
-- references `Item`
+- references `InventorySubject`
+- optionally references `Item`
 
 ## Entity: PendingAcceptanceBalance
 **Description:** Items awaiting acceptance after operation submission (for RECEIVE and MOVE operations).
@@ -124,7 +146,8 @@
 - `operation_id`
 - `destination_site_id` – warehouse where items are expected
 - `source_site_id` – source warehouse (only for MOVE)
-- `item_id`
+- `inventory_subject_id`
+- `item_id` – optional compatibility/back-reference to catalog item
 - `qty` – quantity awaiting acceptance
 - `updated_at`
 
@@ -132,7 +155,8 @@
 - references `OperationLine` via `operation_line_id`
 - references `Site` as destination site
 - references `Site` as source site (optional)
-- references `Item`
+- references `InventorySubject`
+- optionally references `Item`
 
 **Lifecycle:**
 - Created when a RECEIVE or MOVE operation is submitted
@@ -146,7 +170,8 @@
 - `operation_id`
 - `site_id` – warehouse where the lost items are physically located
 - `source_site_id` – source warehouse (only for MOVE)
-- `item_id`
+- `inventory_subject_id`
+- `item_id` – optional compatibility/back-reference to catalog item
 - `qty` – lost quantity
 - `updated_at`
 
@@ -154,35 +179,40 @@
 - references `OperationLine` via `operation_line_id`
 - references `Site` as current site
 - references `Site` as source site (optional)
-- references `Item`
+- references `InventorySubject`
+- optionally references `Item`
 
 **Lifecycle:**
 - Created when an operation line is accepted with `lost_qty > 0`
 - Removed when the lost asset is resolved (returned, written off, or moved)
 
 ## Entity: IssuedAssetBalance
-**Description:** Items issued to a recipient (for ISSUE and ISSUE_RETURN operations).
+**Description:** Inventory subjects issued to a recipient (for ISSUE and ISSUE_RETURN operations).
 
 **Fields:**
 - `recipient_id` (primary key)
-- `item_id` (primary key)
+- `inventory_subject_id` (primary key)
+- `item_id` – optional compatibility/back-reference to catalog item
 - `qty` – issued quantity
 - `updated_at`
 
 **Relations:**
 - references `Recipient`
-- references `Item`
+- references `InventorySubject`
+- optionally references `Item`
 
 ## Entity: OperationAcceptanceAction
-**Description:** Audit log of acceptance and lost asset resolution actions.
+**Description:** Audit log of acceptance, mark-lost, and lost asset resolution actions.
 
 **Fields:**
 - `id`
 - `operation_id`
 - `operation_line_id`
-- `action_type` – "accept", "return_to_source", "write_off", "found_to_destination"
+- `action_type` – `accept`, `mark_lost`, `return_to_source`, `write_off`, `found_to_destination`
+- `qty`
 - `performed_by_user_id`
 - `recipient_id` (for ISSUE operations)
+- `notes`
 - `performed_at`
 
 **Relations:**
@@ -206,8 +236,10 @@
 **Relations:**
 - references `User`
 - references `Site`
-## Temporary items Phase 1
 
-- Добавлена сущность [`TemporaryItem`](app/models/temporary_item.py:14) со статусом, автором создания, ссылкой на backing [`Item`](app/models/temporary_item.py:18) и опциональной резолюцией в постоянную ТМЦ.
-- Phase 1 не вводит `inventory_subjects`: текущие связи остаются item-centric в [`OperationLine`](app/models/operation.py:197), [`Balance`](app/models/balance.py:12) и asset-регистрах.
-- Для исторического API строк операций добавлены вычисляемые поля [`OperationLine.temporary_item_id`](app/models/operation.py:247), [`OperationLine.temporary_item_status`](app/models/operation.py:252) и [`OperationLine.resolved_item_id`](app/models/operation.py:257).
+## Inventory subjects and historical operation read-model
+
+- Phase 2 uses `inventory_subjects` as the shared link for `OperationLine`, `Balance`, and asset registers.
+- `item_id` remains a nullable compatibility field in balances and asset registers so catalog-backed rows can still expose item metadata.
+- `OperationLine` stores historical snapshots: `item_name_snapshot`, `item_sku_snapshot`, `unit_name_snapshot`, `unit_symbol_snapshot`, `category_name_snapshot`.
+- Public read DTOs keep temporary-item compatibility fields: `temporary_item_id`, `temporary_item_status`, `resolved_item_id`, `resolved_item_name`.

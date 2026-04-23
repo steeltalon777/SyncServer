@@ -28,7 +28,13 @@ settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
 
-def create_app() -> FastAPI:
+def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
+    # Backward-compatible argument for test bootstrap:
+    # older tests call create_app(enable_startup_migrations=False).
+    # Current app startup does not run migrations in lifespan,
+    # so this flag is intentionally a no-op for now.
+    _ = enable_startup_migrations
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         yield

@@ -8,6 +8,7 @@ from app.core.db import get_db
 from app.models.balance import Balance
 from app.models.category import Category
 from app.models.item import Item
+from app.models.inventory_subject import InventorySubject
 from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user import User
@@ -78,10 +79,15 @@ async def _seed_balances_fixture(
         session.add_all([milk_item, tool_item])
         await session.flush()
 
+        milk_subject = InventorySubject(subject_type="catalog_item", item_id=milk_item.id)
+        tool_subject = InventorySubject(subject_type="catalog_item", item_id=tool_item.id)
+        session.add_all([milk_subject, tool_subject])
+        await session.flush()
+
         session.add_all(
             [
-                Balance(site_id=site.id, item_id=milk_item.id, qty=7),
-                Balance(site_id=other_site.id, item_id=tool_item.id, qty=3),
+                Balance(site_id=site.id, inventory_subject_id=milk_subject.id, item_id=milk_item.id, qty=7),
+                Balance(site_id=other_site.id, inventory_subject_id=tool_subject.id, item_id=tool_item.id, qty=3),
             ]
         )
         await session.commit()

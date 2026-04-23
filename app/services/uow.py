@@ -8,6 +8,7 @@ from app.repos.catalog_repo import CatalogRepo
 from app.repos.devices_repo import DevicesRepo
 from app.repos.documents_repo import DocumentsRepo
 from app.repos.events_repo import EventsRepo
+from app.repos.inventory_subjects_repo import InventorySubjectsRepo
 from app.repos.machine_repo import MachineRepo
 from app.repos.operations_repo import OperationsRepo
 from app.repos.recipients_repo import RecipientsRepo
@@ -27,6 +28,7 @@ class UnitOfWork:
         self.sites = SitesRepo(session)
         self.devices = DevicesRepo(session)
         self.events = EventsRepo(session)
+        self.inventory_subjects = InventorySubjectsRepo(session)
         self.catalog = CatalogRepo(session)
         self.balances = BalancesRepo(session)
         self.asset_registers = AssetRegistersRepo(session)

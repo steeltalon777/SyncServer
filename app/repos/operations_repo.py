@@ -9,8 +9,10 @@ from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
 from app.models.operation import Operation, OperationLine
+from app.models.temporary_item import TemporaryItem
 from app.schemas.operation import OperationFilter
 
 
@@ -62,7 +64,16 @@ class OperationsRepo:
         stmt = (
             select(Operation)
             .where(Operation.id == operation_id)
-            .options(selectinload(Operation.lines).selectinload(OperationLine.item).selectinload(Item.temporary_item))
+            .options(
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.item)
+                .selectinload(Item.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.inventory_subject)
+                .selectinload(InventorySubject.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+            )
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
@@ -72,7 +83,16 @@ class OperationsRepo:
             select(Operation)
             .where(Operation.created_by_user_id == created_by_user_id)
             .where(Operation.machine_last_batch_id == client_request_id)
-            .options(selectinload(Operation.lines).selectinload(OperationLine.item).selectinload(Item.temporary_item))
+            .options(
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.item)
+                .selectinload(Item.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.inventory_subject)
+                .selectinload(InventorySubject.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+            )
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
@@ -183,7 +203,16 @@ class OperationsRepo:
         page: int = 1,
         page_size: int = 50,
     ) -> tuple[list[Operation], int]:
-        stmt = select(Operation).options(selectinload(Operation.lines))
+        stmt = select(Operation).options(
+            selectinload(Operation.lines)
+            .selectinload(OperationLine.item)
+            .selectinload(Item.temporary_item)
+            .selectinload(TemporaryItem.resolved_item),
+            selectinload(Operation.lines)
+            .selectinload(OperationLine.inventory_subject)
+            .selectinload(InventorySubject.temporary_item)
+            .selectinload(TemporaryItem.resolved_item),
+        )
         where_clauses = []
 
         if user_site_ids:
@@ -236,7 +265,8 @@ class OperationsRepo:
         self,
         operation_id: UUID,
         line_number: int,
-        item_id: int,
+        inventory_subject_id: int,
+        item_id: int | None,
         qty: Decimal | int,
         batch: str | None = None,
         comment: str | None = None,
@@ -249,6 +279,7 @@ class OperationsRepo:
         line = OperationLine(
             operation_id=operation_id,
             line_number=line_number,
+            inventory_subject_id=inventory_subject_id,
             item_id=item_id,
             qty=qty,
             accepted_qty=Decimal("0"),
@@ -286,6 +317,71 @@ class OperationsRepo:
         line.lost_qty = next_lost
         await self.session.flush()
         return line
+
+    async def get_operations_by_temporary_item_id(
+        self,
+        temporary_item_id: int,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Operation], int]:
+        """Return all operations where the given temporary_item_id participated.
+
+        Finds operation lines whose inventory_subject references the temporary item,
+        then returns the parent operations with their lines loaded.
+        """
+        # First find operation_line ids that reference this temporary item
+        line_ids_subq = (
+            select(OperationLine.id)
+            .join(InventorySubject, OperationLine.inventory_subject_id == InventorySubject.id)
+            .where(InventorySubject.temporary_item_id == temporary_item_id)
+            .subquery()
+        )
+        # Also find operation_lines where item -> temporary_item matches
+        line_ids_subq2 = (
+            select(OperationLine.id)
+            .join(Item, OperationLine.item_id == Item.id)
+            .join(TemporaryItem, Item.id == TemporaryItem.item_id)
+            .where(TemporaryItem.id == temporary_item_id)
+            .subquery()
+        )
+
+        # Get distinct operation IDs from matching lines
+        op_ids_subq = (
+            select(OperationLine.operation_id)
+            .where(
+                or_(
+                    OperationLine.id.in_(select(line_ids_subq)),
+                    OperationLine.id.in_(select(line_ids_subq2)),
+                )
+            )
+            .distinct()
+            .subquery()
+        )
+
+        count_stmt = select(func.count()).select_from(
+            select(Operation).where(Operation.id.in_(select(op_ids_subq))).subquery()
+        )
+        total_count = int((await self.session.execute(count_stmt)).scalar_one())
+
+        stmt = (
+            select(Operation)
+            .where(Operation.id.in_(select(op_ids_subq)))
+            .options(
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.item)
+                .selectinload(Item.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.inventory_subject)
+                .selectinload(InventorySubject.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+            )
+            .order_by(desc(Operation.created_at))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        operations = list((await self.session.execute(stmt)).scalars().all())
+        return operations, total_count
 
     async def delete_operation_lines(self, operation_id: UUID) -> None:
         stmt = select(OperationLine).where(OperationLine.operation_id == operation_id)

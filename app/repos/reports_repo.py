@@ -5,9 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.balance import Balance
 from app.models.category import Category
+from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
 from app.models.operation import Operation, OperationLine
 from app.models.site import Site
+from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
 
 
@@ -34,6 +36,7 @@ class ReportsRepo:
         receive_rows = (
             select(
                 Operation.site_id.label("site_id"),
+                OperationLine.inventory_subject_id.label("inventory_subject_id"),
                 OperationLine.item_id.label("item_id"),
                 operation_at.label("operation_at"),
                 accepted_or_full_qty.label("delta_qty"),
@@ -47,6 +50,7 @@ class ReportsRepo:
         decrement_rows = (
             select(
                 Operation.site_id.label("site_id"),
+                OperationLine.inventory_subject_id.label("inventory_subject_id"),
                 OperationLine.item_id.label("item_id"),
                 operation_at.label("operation_at"),
                 (-OperationLine.qty).label("delta_qty"),
@@ -60,6 +64,7 @@ class ReportsRepo:
         adjustment_rows = (
             select(
                 Operation.site_id.label("site_id"),
+                OperationLine.inventory_subject_id.label("inventory_subject_id"),
                 OperationLine.item_id.label("item_id"),
                 operation_at.label("operation_at"),
                 OperationLine.qty.label("delta_qty"),
@@ -73,6 +78,7 @@ class ReportsRepo:
         move_out_rows = (
             select(
                 Operation.source_site_id.label("site_id"),
+                OperationLine.inventory_subject_id.label("inventory_subject_id"),
                 OperationLine.item_id.label("item_id"),
                 operation_at.label("operation_at"),
                 (-OperationLine.qty).label("delta_qty"),
@@ -87,6 +93,7 @@ class ReportsRepo:
         move_in_rows = (
             select(
                 Operation.destination_site_id.label("site_id"),
+                OperationLine.inventory_subject_id.label("inventory_subject_id"),
                 OperationLine.item_id.label("item_id"),
                 operation_at.label("operation_at"),
                 accepted_or_full_qty.label("delta_qty"),
@@ -110,7 +117,13 @@ class ReportsRepo:
             select(
                 movement_rows.c.site_id.label("site_id"),
                 Site.name.label("site_name"),
-                movement_rows.c.item_id.label("item_id"),
+                movement_rows.c.inventory_subject_id.label("inventory_subject_id"),
+                InventorySubject.subject_type.label("subject_type"),
+                InventorySubject.item_id.label("item_id"),
+                InventorySubject.temporary_item_id.label("temporary_item_id"),
+                TemporaryItem.resolved_item_id.label("resolved_item_id"),
+                Item.name.label("resolved_item_name"),
+                func.coalesce(TemporaryItem.name, Item.name).label("display_name"),
                 Item.name.label("item_name"),
                 Item.sku.label("sku"),
                 Item.unit_id.label("unit_id"),
@@ -140,9 +153,11 @@ class ReportsRepo:
             )
             .select_from(movement_rows)
             .join(Site, Site.id == movement_rows.c.site_id)
-            .join(Item, Item.id == movement_rows.c.item_id)
-            .join(Category, Category.id == Item.category_id)
-            .join(Unit, Unit.id == Item.unit_id)
+            .join(InventorySubject, InventorySubject.id == movement_rows.c.inventory_subject_id)
+            .outerjoin(Item, Item.id == InventorySubject.item_id)
+            .outerjoin(TemporaryItem, TemporaryItem.id == InventorySubject.temporary_item_id)
+            .outerjoin(Category, Category.id == Item.category_id)
+            .outerjoin(Unit, Unit.id == Item.unit_id)
             .where(movement_rows.c.site_id.in_(user_site_ids))
         )
 
@@ -150,7 +165,7 @@ class ReportsRepo:
             base_stmt = base_stmt.where(movement_rows.c.site_id == filter.site_id)
 
         if filter.item_id is not None:
-            base_stmt = base_stmt.where(movement_rows.c.item_id == filter.item_id)
+            base_stmt = base_stmt.where(InventorySubject.item_id == filter.item_id)
 
         if filter.category_id is not None:
             base_stmt = base_stmt.where(Item.category_id == filter.category_id)
@@ -175,7 +190,11 @@ class ReportsRepo:
         base_stmt = base_stmt.group_by(
             movement_rows.c.site_id,
             Site.name,
-            movement_rows.c.item_id,
+            movement_rows.c.inventory_subject_id,
+            InventorySubject.subject_type,
+            InventorySubject.item_id,
+            InventorySubject.temporary_item_id,
+            TemporaryItem.resolved_item_id,
             Item.name,
             Item.sku,
             Item.unit_id,
@@ -192,7 +211,7 @@ class ReportsRepo:
                 func.max(movement_rows.c.operation_at).desc(),
                 Site.name,
                 Item.name,
-                movement_rows.c.item_id,
+                InventorySubject.item_id,
             )
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -213,6 +232,13 @@ class ReportsRepo:
             select(
                 Balance.site_id.label("site_id"),
                 Site.name.label("site_name"),
+                Balance.inventory_subject_id.label("inventory_subject_id"),
+                InventorySubject.subject_type.label("subject_type"),
+                InventorySubject.item_id.label("item_id"),
+                InventorySubject.temporary_item_id.label("temporary_item_id"),
+                TemporaryItem.resolved_item_id.label("resolved_item_id"),
+                Item.name.label("resolved_item_name"),
+                func.coalesce(TemporaryItem.name, Item.name).label("display_name"),
                 func.count().label("items_count"),
                 func.coalesce(
                     func.sum(
@@ -228,8 +254,10 @@ class ReportsRepo:
             )
             .select_from(Balance)
             .join(Site, Site.id == Balance.site_id)
-            .join(Item, Item.id == Balance.item_id)
-            .join(Category, Category.id == Item.category_id)
+            .join(InventorySubject, InventorySubject.id == Balance.inventory_subject_id)
+            .outerjoin(Item, Item.id == InventorySubject.item_id)
+            .outerjoin(TemporaryItem, TemporaryItem.id == InventorySubject.temporary_item_id)
+            .outerjoin(Category, Category.id == Item.category_id)
             .where(Balance.site_id.in_(user_site_ids))
         )
 
@@ -253,7 +281,17 @@ class ReportsRepo:
                 )
             )
 
-        base_stmt = base_stmt.group_by(Balance.site_id, Site.name)
+        base_stmt = base_stmt.group_by(
+            Balance.site_id,
+            Site.name,
+            Balance.inventory_subject_id,
+            InventorySubject.subject_type,
+            InventorySubject.item_id,
+            InventorySubject.temporary_item_id,
+            TemporaryItem.resolved_item_id,
+            Item.name,
+            TemporaryItem.name,
+        )
 
         count_stmt = select(func.count()).select_from(base_stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()

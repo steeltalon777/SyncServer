@@ -4,9 +4,6 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, Response
-
 from app.api.deps import get_request_id, get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.document import (
@@ -18,9 +15,11 @@ from app.schemas.document import (
     DocumentType,
     DocumentUpdate,
 )
-from app.services.document_service import DocumentService
 from app.services.document_renderer import DocumentRenderer
+from app.services.document_service import DocumentService
 from app.services.uow import UnitOfWork
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, Response
 
 router = APIRouter(prefix="/documents")
 logger = logging.getLogger(__name__)
@@ -76,10 +75,10 @@ async def generate_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"operation with id {data.operation_id} not found",
         )
-    
+
     # Проверяем права на площадку операции
     _require_operate_site(identity, operation.site_id)
-    
+
     # Генерируем документ
     result = await DocumentService.generate_from_operation(
         uow=uow,
@@ -93,14 +92,14 @@ async def generate_document(
         basis_number=data.basis_number,
         basis_date=data.basis_date,
     )
-    
+
     logger.info(
         "Generated document id=%s for operation id=%s by user id=%s",
         result["document"].id,
         data.operation_id,
         identity.user_id,
     )
-    
+
     return {
         "document": DocumentResponse.model_validate(result["document"]),
         "operation_id": str(data.operation_id),
@@ -122,10 +121,10 @@ async def get_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"document with id {document_id} not found",
         )
-    
+
     # Проверяем права на площадку документа
     _require_read_site(identity, document.site_id)
-    
+
     return DocumentResponse.model_validate(document)
 
 
@@ -200,7 +199,7 @@ async def list_documents(
         # Если площадка не указана и нет глобальных прав, возвращаем только доступные площадки
         # Для упрощения возвращаем пустой список - в реальности нужно получить доступные площадки
         return DocumentListResponse(items=[], total=0, offset=offset, limit=limit)
-    
+
     # Создаём фильтр
     filter_obj = DocumentFilter(
         site_id=site_id,
@@ -210,14 +209,14 @@ async def list_documents(
         date_from=date_from,
         date_to=date_to,
     )
-    
+
     # Получаем документы
     documents, total = await uow.documents.list_documents(
-        filter_obj=filter_obj,
+        filter=filter_obj,
         offset=offset,
         limit=limit,
     )
-    
+
     return DocumentListResponse(
         items=[DocumentResponse.model_validate(doc) for doc in documents],
         total=total,
@@ -241,10 +240,10 @@ async def update_document_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"document with id {document_id} not found",
         )
-    
+
     # Проверяем права на площадку документа
     _require_operate_site(identity, document.site_id)
-    
+
     # Проверяем допустимость изменения статуса
     if update_data.status:
         if document.status == "finalized" and update_data.status != "void":
@@ -252,13 +251,13 @@ async def update_document_status(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="cannot change status of finalized document",
             )
-        
+
         if update_data.status == "finalized" and document.status != "draft":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="can only finalize draft documents",
             )
-    
+
     # Обновляем документ
     updated = await uow.documents.update_document(
         document_id=document_id,
@@ -267,20 +266,20 @@ async def update_document_status(
         payload=update_data.payload,
         payload_hash=update_data.payload_hash,
     )
-    
+
     if not updated:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="failed to update document",
         )
-    
+
     logger.info(
         "Updated document id=%s status=%s by user id=%s",
         document_id,
         update_data.status,
         identity.user_id,
     )
-    
+
     return DocumentResponse.model_validate(updated)
 
 
@@ -299,16 +298,16 @@ async def get_documents_by_operation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"operation with id {operation_id} not found",
         )
-    
+
     # Проверяем права на площадку операции
     _require_read_site(identity, operation.site_id)
-    
+
     # Получаем документы
     documents = await uow.documents.get_documents_by_operation(
         operation_id=operation_id,
         document_type=document_type,
     )
-    
+
     return [DocumentResponse.model_validate(doc) for doc in documents]
 
 
@@ -334,9 +333,9 @@ async def generate_document_for_operation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"operation with id {operation_id} not found",
         )
-    
+
     _require_operate_site(identity, operation.site_id)
-    
+
     # Генерируем документ
     result = await DocumentService.generate_from_operation(
         uow=uow,
@@ -350,14 +349,14 @@ async def generate_document_for_operation(
         basis_number=basis_number,
         basis_date=basis_date,
     )
-    
+
     logger.info(
         "Generated document id=%s for operation id=%s via shortcut by user id=%s",
         result["document"].id,
         operation_id,
         identity.user_id,
     )
-    
+
     return {
         "document": DocumentResponse.model_validate(result["document"]),
         "operation_id": str(operation_id),

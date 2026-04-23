@@ -13,36 +13,34 @@ import pytest
 
 @pytest.mark.stand
 @pytest.mark.smoke
-def test_stand_health(stand_client):
+def test_stand_health(stand_client, stand_api_prefix):
     """Проверяет доступность health endpoint стенда."""
-    response = stand_client.get("/api/health")
+    response = stand_client.get(f"{stand_api_prefix}/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "healthy"
-    print(f"✓ Health check passed: {data}")
+    assert data["status"] == "ok"
+    print(f"OK: Health check passed: {data}")
 
 
 @pytest.mark.stand
 @pytest.mark.smoke
-def test_stand_readiness(stand_client):
+def test_stand_readiness(stand_client, stand_api_prefix):
     """Проверяет доступность readiness endpoint стенда."""
-    response = stand_client.get("/api/health/ready")
+    response = stand_client.get(f"{stand_api_prefix}/ready")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ready"
-    print(f"✓ Readiness check passed: {data}")
+    print(f"OK: Readiness check passed: {data}")
 
 
 @pytest.mark.stand
 @pytest.mark.smoke
-def test_stand_auth(stand_client):
+def test_stand_auth(stand_client, stand_api_prefix):
     """Проверяет, что аутентификация через root token работает."""
     # Простой запрос к защищённому endpoint (например, список сайтов)
-    response = stand_client.get("/api/admin/sites")
-    # Ожидаем либо 200 (если есть сайты), либо 404 если endpoint не существует
-    # Главное - не получить 401 Unauthorized
-    assert response.status_code != 401, f"Authentication failed: {response.status_code} {response.text}"
-    print(f"✓ Auth check passed: {response.status_code}")
+    response = stand_client.get(f"{stand_api_prefix}/admin/sites")
+    assert response.status_code == 200, f"Authentication failed: {response.status_code} {response.text}"
+    print(f"OK: Auth check passed: {response.status_code}")
 
 
 @pytest.mark.stand
@@ -52,4 +50,4 @@ def test_stand_run_id(stand_run_id):
     assert stand_run_id is not None
     assert isinstance(stand_run_id, str)
     assert len(stand_run_id) > 0
-    print(f"✓ Run ID: {stand_run_id}")
+    print(f"OK: Run ID: {stand_run_id}")

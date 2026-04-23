@@ -24,7 +24,10 @@ class OperationAcceptLinesRequest(BaseModel):
 class PendingAcceptanceFilter(BaseModel):
     site_id: int | None = None
     operation_id: UUID | None = None
-    item_id: int | None = None
+    item_id: int | None = Field(
+        default=None,
+        description="[deprecated] Use inventory_subject_id for filtering",
+    )
     search: str | None = None
 
     model_config = ConfigDict(extra="forbid")
@@ -36,8 +39,17 @@ class PendingAcceptanceRow(ORMBaseModel):
     destination_site_id: int
     destination_site_name: str
     source_site_id: int | None = None
-    item_id: int
-    item_name: str
+    inventory_subject_id: int
+    subject_type: str
+    item_id: int | None = Field(
+        default=None,
+        description="[deprecated] Use inventory_subject_id to resolve item info via subject",
+    )
+    temporary_item_id: int | None = None
+    resolved_item_id: int | None = None
+    resolved_item_name: str | None = None
+    display_name: str
+    item_name: str | None = None
     sku: str | None = None
     qty: Decimal
     updated_at: datetime
@@ -54,7 +66,10 @@ class LostAssetFilter(BaseModel):
     site_id: int | None = None
     source_site_id: int | None = None
     operation_id: UUID | None = None
-    item_id: int | None = None
+    item_id: int | None = Field(
+        default=None,
+        description="[deprecated] Use inventory_subject_id for filtering",
+    )
     search: str | None = None
     updated_after: datetime | None = None
     updated_before: datetime | None = None
@@ -71,8 +86,17 @@ class LostAssetRow(ORMBaseModel):
     site_name: str
     source_site_id: int | None = None
     source_site_name: str | None = None
-    item_id: int
-    item_name: str
+    inventory_subject_id: int
+    subject_type: str
+    item_id: int | None = Field(
+        default=None,
+        description="[deprecated] Use inventory_subject_id to resolve item info via subject",
+    )
+    temporary_item_id: int | None = None
+    resolved_item_id: int | None = None
+    resolved_item_name: str | None = None
+    display_name: str
+    item_name: str | None = None
     sku: str | None = None
     qty: Decimal
     updated_at: datetime
@@ -94,7 +118,10 @@ class LostAssetResolveRequest(BaseModel):
 
 class IssuedAssetFilter(BaseModel):
     recipient_id: int | None = None
-    item_id: int | None = None
+    item_id: int | None = Field(
+        default=None,
+        description="[deprecated] Use inventory_subject_id for filtering",
+    )
     search: str | None = None
 
     model_config = ConfigDict(extra="forbid")
@@ -104,8 +131,17 @@ class IssuedAssetRow(ORMBaseModel):
     recipient_id: int
     recipient_name: str
     recipient_type: str
-    item_id: int
-    item_name: str
+    inventory_subject_id: int
+    subject_type: str
+    item_id: int | None = Field(
+        default=None,
+        description="[deprecated] Use inventory_subject_id to resolve item info via subject",
+    )
+    temporary_item_id: int | None = None
+    resolved_item_id: int | None = None
+    resolved_item_name: str | None = None
+    display_name: str
+    item_name: str | None = None
     sku: str | None = None
     qty: Decimal
     updated_at: datetime

@@ -13,14 +13,50 @@ from app.models.asset_register import (
     OperationAcceptanceAction,
     PendingAcceptanceBalance,
 )
+from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
 from app.models.recipient import Recipient
 from app.models.site import Site
+from app.models.temporary_item import TemporaryItem
 
 
 class AssetRegistersRepo:
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def has_active_registers(self, inventory_subject_id: int) -> bool:
+        """Check if there are any active pending/lost/issued registers for a given inventory_subject."""
+        pending_stmt = select(func.count()).select_from(
+            select(PendingAcceptanceBalance)
+            .where(PendingAcceptanceBalance.inventory_subject_id == inventory_subject_id)
+            .where(PendingAcceptanceBalance.qty > 0)
+            .subquery()
+        )
+        pending_count = int((await self.session.execute(pending_stmt)).scalar_one() or 0)
+        if pending_count > 0:
+            return True
+
+        lost_stmt = select(func.count()).select_from(
+            select(LostAssetBalance)
+            .where(LostAssetBalance.inventory_subject_id == inventory_subject_id)
+            .where(LostAssetBalance.qty > 0)
+            .subquery()
+        )
+        lost_count = int((await self.session.execute(lost_stmt)).scalar_one() or 0)
+        if lost_count > 0:
+            return True
+
+        issued_stmt = select(func.count()).select_from(
+            select(IssuedAssetBalance)
+            .where(IssuedAssetBalance.inventory_subject_id == inventory_subject_id)
+            .where(IssuedAssetBalance.qty > 0)
+            .subquery()
+        )
+        issued_count = int((await self.session.execute(issued_stmt)).scalar_one() or 0)
+        if issued_count > 0:
+            return True
+
+        return False
 
     async def _get_pending_for_update(self, operation_line_id: int) -> PendingAcceptanceBalance | None:
         stmt = (
@@ -38,13 +74,13 @@ class AssetRegistersRepo:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def _get_issued_for_update(self, recipient_id: int, item_id: int) -> IssuedAssetBalance | None:
+    async def _get_issued_for_update(self, recipient_id: int, inventory_subject_id: int) -> IssuedAssetBalance | None:
         stmt = (
             select(IssuedAssetBalance)
             .where(
                 and_(
                     IssuedAssetBalance.recipient_id == recipient_id,
-                    IssuedAssetBalance.item_id == item_id,
+                    IssuedAssetBalance.inventory_subject_id == inventory_subject_id,
                 )
             )
             .with_for_update()
@@ -58,7 +94,7 @@ class AssetRegistersRepo:
         operation_line_id: int,
         destination_site_id: int,
         source_site_id: int | None,
-        item_id: int,
+        inventory_subject_id: int,
         qty_delta: Decimal,
     ) -> PendingAcceptanceBalance | None:
         row = await self._get_pending_for_update(operation_line_id)
@@ -72,7 +108,7 @@ class AssetRegistersRepo:
                 operation_id=operation_id,
                 destination_site_id=destination_site_id,
                 source_site_id=source_site_id,
-                item_id=item_id,
+                inventory_subject_id=inventory_subject_id,
                 qty=qty_delta,
             )
             self.session.add(row)
@@ -99,7 +135,7 @@ class AssetRegistersRepo:
         operation_line_id: int,
         site_id: int,
         source_site_id: int | None,
-        item_id: int,
+        inventory_subject_id: int,
         qty_delta: Decimal,
     ) -> LostAssetBalance | None:
         row = await self._get_lost_for_update(operation_line_id)
@@ -113,7 +149,7 @@ class AssetRegistersRepo:
                 operation_id=operation_id,
                 site_id=site_id,
                 source_site_id=source_site_id,
-                item_id=item_id,
+                inventory_subject_id=inventory_subject_id,
                 qty=qty_delta,
             )
             self.session.add(row)
@@ -137,10 +173,10 @@ class AssetRegistersRepo:
         self,
         *,
         recipient_id: int,
-        item_id: int,
+        inventory_subject_id: int,
         qty_delta: Decimal,
     ) -> IssuedAssetBalance | None:
-        row = await self._get_issued_for_update(recipient_id, item_id)
+        row = await self._get_issued_for_update(recipient_id, inventory_subject_id)
         if row is None:
             if qty_delta < 0:
                 raise ValueError("insufficient issued quantity")
@@ -148,7 +184,7 @@ class AssetRegistersRepo:
                 return None
             row = IssuedAssetBalance(
                 recipient_id=recipient_id,
-                item_id=item_id,
+                inventory_subject_id=inventory_subject_id,
                 qty=qty_delta,
             )
             self.session.add(row)
@@ -186,7 +222,13 @@ class AssetRegistersRepo:
                 PendingAcceptanceBalance.destination_site_id.label("destination_site_id"),
                 Site.name.label("destination_site_name"),
                 PendingAcceptanceBalance.source_site_id.label("source_site_id"),
-                PendingAcceptanceBalance.item_id.label("item_id"),
+                PendingAcceptanceBalance.inventory_subject_id.label("inventory_subject_id"),
+                InventorySubject.subject_type.label("subject_type"),
+                InventorySubject.item_id.label("item_id"),
+                InventorySubject.temporary_item_id.label("temporary_item_id"),
+                TemporaryItem.resolved_item_id.label("resolved_item_id"),
+                Item.name.label("resolved_item_name"),
+                func.coalesce(TemporaryItem.name, Item.name).label("display_name"),
                 Item.name.label("item_name"),
                 Item.sku.label("sku"),
                 PendingAcceptanceBalance.qty.label("qty"),
@@ -194,7 +236,9 @@ class AssetRegistersRepo:
             )
             .select_from(PendingAcceptanceBalance)
             .join(Site, Site.id == PendingAcceptanceBalance.destination_site_id)
-            .join(Item, Item.id == PendingAcceptanceBalance.item_id)
+            .join(InventorySubject, InventorySubject.id == PendingAcceptanceBalance.inventory_subject_id)
+            .outerjoin(Item, Item.id == InventorySubject.item_id)
+            .outerjoin(TemporaryItem, TemporaryItem.id == InventorySubject.temporary_item_id)
             .where(PendingAcceptanceBalance.destination_site_id.in_(user_site_ids))
         )
 
@@ -203,7 +247,7 @@ class AssetRegistersRepo:
         if operation_id is not None:
             stmt = stmt.where(PendingAcceptanceBalance.operation_id == operation_id)
         if item_id is not None:
-            stmt = stmt.where(PendingAcceptanceBalance.item_id == item_id)
+            stmt = stmt.where(InventorySubject.item_id == item_id)
         if search:
             term = f"%{search.strip()}%"
             stmt = stmt.where(or_(Item.name.ilike(term), Item.sku.ilike(term), Site.name.ilike(term)))
@@ -246,7 +290,13 @@ class AssetRegistersRepo:
                 destination.name.label("site_name"),
                 LostAssetBalance.source_site_id.label("source_site_id"),
                 source.c.name.label("source_site_name"),
-                LostAssetBalance.item_id.label("item_id"),
+                LostAssetBalance.inventory_subject_id.label("inventory_subject_id"),
+                InventorySubject.subject_type.label("subject_type"),
+                InventorySubject.item_id.label("item_id"),
+                InventorySubject.temporary_item_id.label("temporary_item_id"),
+                TemporaryItem.resolved_item_id.label("resolved_item_id"),
+                Item.name.label("resolved_item_name"),
+                func.coalesce(TemporaryItem.name, Item.name).label("display_name"),
                 Item.name.label("item_name"),
                 Item.sku.label("sku"),
                 LostAssetBalance.qty.label("qty"),
@@ -254,7 +304,9 @@ class AssetRegistersRepo:
             )
             .select_from(LostAssetBalance)
             .join(destination, destination.id == LostAssetBalance.site_id)
-            .join(Item, Item.id == LostAssetBalance.item_id)
+            .join(InventorySubject, InventorySubject.id == LostAssetBalance.inventory_subject_id)
+            .outerjoin(Item, Item.id == InventorySubject.item_id)
+            .outerjoin(TemporaryItem, TemporaryItem.id == InventorySubject.temporary_item_id)
             .outerjoin(source, source.c.id == LostAssetBalance.source_site_id)
             .where(LostAssetBalance.site_id.in_(user_site_ids))
         )
@@ -266,7 +318,7 @@ class AssetRegistersRepo:
         if operation_id is not None:
             stmt = stmt.where(LostAssetBalance.operation_id == operation_id)
         if item_id is not None:
-            stmt = stmt.where(LostAssetBalance.item_id == item_id)
+            stmt = stmt.where(InventorySubject.item_id == item_id)
         if search:
             term = f"%{search.strip()}%"
             stmt = stmt.where(
@@ -310,7 +362,13 @@ class AssetRegistersRepo:
                 IssuedAssetBalance.recipient_id.label("recipient_id"),
                 Recipient.display_name.label("recipient_name"),
                 Recipient.recipient_type.label("recipient_type"),
-                IssuedAssetBalance.item_id.label("item_id"),
+                IssuedAssetBalance.inventory_subject_id.label("inventory_subject_id"),
+                InventorySubject.subject_type.label("subject_type"),
+                InventorySubject.item_id.label("item_id"),
+                InventorySubject.temporary_item_id.label("temporary_item_id"),
+                TemporaryItem.resolved_item_id.label("resolved_item_id"),
+                Item.name.label("resolved_item_name"),
+                func.coalesce(TemporaryItem.name, Item.name).label("display_name"),
                 Item.name.label("item_name"),
                 Item.sku.label("sku"),
                 IssuedAssetBalance.qty.label("qty"),
@@ -318,13 +376,15 @@ class AssetRegistersRepo:
             )
             .select_from(IssuedAssetBalance)
             .join(Recipient, Recipient.id == IssuedAssetBalance.recipient_id)
-            .join(Item, Item.id == IssuedAssetBalance.item_id)
+            .join(InventorySubject, InventorySubject.id == IssuedAssetBalance.inventory_subject_id)
+            .outerjoin(Item, Item.id == InventorySubject.item_id)
+            .outerjoin(TemporaryItem, TemporaryItem.id == InventorySubject.temporary_item_id)
         )
 
         if recipient_id is not None:
             stmt = stmt.where(IssuedAssetBalance.recipient_id == recipient_id)
         if item_id is not None:
-            stmt = stmt.where(IssuedAssetBalance.item_id == item_id)
+            stmt = stmt.where(InventorySubject.item_id == item_id)
         if search:
             term = f"%{search.strip()}%"
             stmt = stmt.where(or_(Recipient.display_name.ilike(term), Item.name.ilike(term), Item.sku.ilike(term)))
@@ -362,7 +422,13 @@ class AssetRegistersRepo:
                 destination.name.label("site_name"),
                 LostAssetBalance.source_site_id.label("source_site_id"),
                 source.c.name.label("source_site_name"),
-                LostAssetBalance.item_id.label("item_id"),
+                LostAssetBalance.inventory_subject_id.label("inventory_subject_id"),
+                InventorySubject.subject_type.label("subject_type"),
+                InventorySubject.item_id.label("item_id"),
+                InventorySubject.temporary_item_id.label("temporary_item_id"),
+                TemporaryItem.resolved_item_id.label("resolved_item_id"),
+                Item.name.label("resolved_item_name"),
+                func.coalesce(TemporaryItem.name, Item.name).label("display_name"),
                 Item.name.label("item_name"),
                 Item.sku.label("sku"),
                 LostAssetBalance.qty.label("qty"),
@@ -370,7 +436,9 @@ class AssetRegistersRepo:
             )
             .select_from(LostAssetBalance)
             .join(destination, destination.id == LostAssetBalance.site_id)
-            .join(Item, Item.id == LostAssetBalance.item_id)
+            .join(InventorySubject, InventorySubject.id == LostAssetBalance.inventory_subject_id)
+            .outerjoin(Item, Item.id == InventorySubject.item_id)
+            .outerjoin(TemporaryItem, TemporaryItem.id == InventorySubject.temporary_item_id)
             .outerjoin(source, source.c.id == LostAssetBalance.source_site_id)
             .where(LostAssetBalance.operation_line_id == operation_line_id)
         )

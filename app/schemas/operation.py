@@ -154,10 +154,21 @@ class OperationCancel(BaseModel):
 class OperationLineResponse(ORMBaseModel):
     id: int
     line_number: int
-    item_id: int
+    inventory_subject_id: int | None = None
+    subject_type: str | None = None
+    item_id: int | None = Field(
+        default=None,
+        description="[deprecated] Use inventory_subject_id to resolve item info via subject",
+    )
     temporary_item_id: int | None = None
     temporary_item_status: str | None = None
     resolved_item_id: int | None = None
+    resolved_item_name: str | None = None
+    item_name_snapshot: str | None = None
+    item_sku_snapshot: str | None = None
+    unit_name_snapshot: str | None = None
+    unit_symbol_snapshot: str | None = None
+    category_name_snapshot: str | None = None
     qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
     accepted_qty: Decimal = Decimal("0")
     lost_qty: Decimal = Decimal("0")

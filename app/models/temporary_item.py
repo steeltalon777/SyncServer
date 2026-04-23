@@ -15,7 +15,7 @@ class TemporaryItem(Base):
     __tablename__ = "temporary_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    item_id: Mapped[int] = mapped_column(Integer, ForeignKey("items.id"), nullable=False, unique=True)
+    item_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("items.id"), nullable=True, unique=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     normalized_name: Mapped[str] = mapped_column(String(255), nullable=False)
     sku: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -39,6 +39,12 @@ class TemporaryItem(Base):
     )
 
     item = relationship("Item", foreign_keys=[item_id], back_populates="temporary_item")
+    inventory_subject = relationship(
+        "InventorySubject",
+        foreign_keys="InventorySubject.temporary_item_id",
+        back_populates="temporary_item",
+        uselist=False,
+    )
     resolved_item = relationship("Item", foreign_keys=[resolved_item_id])
     unit = relationship("Unit")
     category = relationship("Category")
