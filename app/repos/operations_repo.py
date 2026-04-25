@@ -265,7 +265,7 @@ class OperationsRepo:
         self,
         operation_id: UUID,
         line_number: int,
-        inventory_subject_id: int,
+        inventory_subject_id: int | None,
         item_id: int | None,
         qty: Decimal | int,
         batch: str | None = None,
@@ -275,6 +275,7 @@ class OperationsRepo:
         unit_name_snapshot: str | None = None,
         unit_symbol_snapshot: str | None = None,
         category_name_snapshot: str | None = None,
+        temporary_draft_payload: dict | None = None,
     ) -> OperationLine:
         line = OperationLine(
             operation_id=operation_id,
@@ -291,6 +292,7 @@ class OperationsRepo:
             unit_name_snapshot=unit_name_snapshot,
             unit_symbol_snapshot=unit_symbol_snapshot,
             category_name_snapshot=category_name_snapshot,
+            temporary_draft_payload=temporary_draft_payload,
         )
         self.session.add(line)
         await self.session.flush()

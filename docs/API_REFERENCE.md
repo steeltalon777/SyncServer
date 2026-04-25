@@ -96,11 +96,13 @@ Admin:
 - `GET /catalog/admin/units` - list units
 - `GET /catalog/admin/units/{unit_id}` - get unit by ID
 - `POST /catalog/admin/units` - create unit
+- `POST /catalog/admin/units/bulk` - create units in one atomic request
 - `PATCH /catalog/admin/units/{unit_id}` - update unit
 - `DELETE /catalog/admin/units/{unit_id}` - delete unit
 - `GET /catalog/admin/categories` - list categories
 - `GET /catalog/admin/categories/{category_id}` - get category by ID
 - `POST /catalog/admin/categories` - create category
+- `POST /catalog/admin/categories/bulk` - create categories in one atomic request
 - `PATCH /catalog/admin/categories/{category_id}` - update category
 - `DELETE /catalog/admin/categories/{category_id}` - delete category
 - `GET /catalog/admin/items` - list items
@@ -110,6 +112,32 @@ Admin:
 - `DELETE /catalog/admin/items/{item_id}` - delete item
 - `POST /catalog/admin/items` fallback: missing/null/unknown/inactive category resolves to `__UNCATEGORIZED__`
 - `PATCH /catalog/admin/items/{item_id}` category semantics: omitted keeps current category, `null` moves to `__UNCATEGORIZED__`
+
+Bulk catalog admin creation:
+- endpoints accept JSON body `{ "items": [...] }`
+- behavior is atomic: if one row conflicts or fails validation, the whole request is rolled back
+- auth rules are the same as single create: `root` may omit `X-Site-Id`; `chief_storekeeper` must send `X-Site-Id` with catalog-management access; `storekeeper` and `observer` are denied
+- category bulk create supports `parent_id` references to already existing categories; `client_key` / `parent_key` tree import is not part of this contract
+
+Bulk units example:
+```json
+{
+  "items": [
+    { "name": "Box", "symbol": "box" },
+    { "name": "Pallet", "symbol": "pallet", "sort_order": 20, "is_active": true }
+  ]
+}
+```
+
+Bulk categories example:
+```json
+{
+  "items": [
+    { "name": "Food", "code": "FOOD" },
+    { "name": "Drinks", "code": "DRINKS", "parent_id": 1 }
+  ]
+}
+```
 
 ## Operations API
 Supported operation types:

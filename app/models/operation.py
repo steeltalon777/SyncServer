@@ -4,9 +4,11 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import sqlalchemy
+from app.models.base import Base
 from sqlalchemy import (
-    Boolean,
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -18,8 +20,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.models.base import Base
 
 
 class Operation(Base):
@@ -245,6 +245,17 @@ class OperationLine(Base):
     unit_symbol_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
     category_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Deferred temporary creation payload (JSON)
+    # Хранит данные для materialization temporary сущностей при submit.
+    # Пока поле не null — строка считается draft-temporary.
+    # После materialization на submit поле очищается.
+    temporary_draft_payload: Mapped[dict | None] = mapped_column(
+        "temporary_draft_payload",
+        sqlalchemy.JSON(none_as_null=True),
+        nullable=True,
+        default=None,
+    )
+
     operation: Mapped[Operation] = relationship("Operation", back_populates="lines")
     inventory_subject = relationship("InventorySubject")
     item = relationship("Item")
@@ -286,6 +297,11 @@ class OperationLine(Base):
             temporary_item = getattr(self.item, "temporary_item", None)
         resolved_item = None if temporary_item is None else getattr(temporary_item, "resolved_item", None)
         return None if resolved_item is None else resolved_item.name
+
+    @property
+    def is_draft_temporary(self) -> bool:
+        """Returns True if this line has a deferred temporary payload not yet materialized."""
+        return self.temporary_draft_payload is not None
 
     __table_args__ = (
         CheckConstraint("qty <> 0", name="ck_operation_lines_qty_non_zero"),

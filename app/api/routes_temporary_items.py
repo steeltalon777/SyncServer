@@ -3,16 +3,21 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-
 from app.api.deps import get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.operation import OperationListResponse
-from app.schemas.temporary_item import TemporaryItemListResponse, TemporaryItemMergeRequest, TemporaryItemResponse
+from app.schemas.temporary_item import (
+    TemporaryItemListResponse,
+    TemporaryItemMergeRequest,
+    TemporaryItemResponse,
+)
 from app.schemas.temporary_item_views import build_temporary_item_response
 from app.services.operations_policy import OperationsPolicy
-from app.services.temporary_items_resolution_service import TemporaryItemsResolutionService
+from app.services.temporary_items_resolution_service import (
+    TemporaryItemsResolutionService,
+)
 from app.services.uow import UnitOfWork
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 router = APIRouter(prefix="/temporary-items", tags=["temporary-items"])
 
@@ -74,6 +79,8 @@ async def approve_temporary_item(
     identity: Identity = Depends(require_user_identity),
 ) -> TemporaryItemResponse:
     OperationsPolicy.require_temporary_item_moderation(identity, site_id=identity.default_site_id)
+    if identity.user_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User authentication required")
     async with uow:
         await TemporaryItemsResolutionService.approve_as_item(
             uow,
@@ -121,6 +128,8 @@ async def merge_temporary_item(
     identity: Identity = Depends(require_user_identity),
 ) -> TemporaryItemResponse:
     OperationsPolicy.require_temporary_item_moderation(identity, site_id=identity.default_site_id)
+    if identity.user_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User authentication required")
     async with uow:
         await TemporaryItemsResolutionService.merge_to_item(
             uow,
@@ -128,6 +137,28 @@ async def merge_temporary_item(
             target_item_id=payload.target_item_id,
             resolved_by_user_id=identity.user_id,
             resolution_note=payload.comment,
+        )
+        item = await uow.temporary_items.get_by_id(temporary_item_id)
+    return build_temporary_item_response(item)
+
+
+@router.delete("/{temporary_item_id}", response_model=TemporaryItemResponse)
+async def delete_temporary_item(
+    temporary_item_id: int,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> TemporaryItemResponse:
+    """Удалить временный ТМЦ (мягкое удаление)."""
+    OperationsPolicy.require_temporary_item_moderation(identity, site_id=identity.default_site_id)
+    if identity.user_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User authentication required")
+    async with uow:
+        await TemporaryItemsResolutionService.delete_temporary_item(
+            uow,
+            temporary_item_id=temporary_item_id,
+            resolved_by_user_id=identity.user_id,
+            resolution_note="Удалён пользователем",
         )
         item = await uow.temporary_items.get_by_id(temporary_item_id)
     return build_temporary_item_response(item)

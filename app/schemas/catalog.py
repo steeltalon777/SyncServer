@@ -3,9 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
-
 from app.schemas.common import ORMBaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 class CatalogRequest(BaseModel):
@@ -136,6 +135,10 @@ class UnitCreateRequest(BaseModel):
     is_active: bool = True
 
 
+class UnitBulkCreateRequest(BaseModel):
+    items: list[UnitCreateRequest] = Field(min_length=1)
+
+
 class UnitUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     symbol: str | None = Field(default=None, min_length=1, max_length=20)
@@ -155,12 +158,20 @@ class UnitResponse(ORMBaseModel):
     deleted_by_user_id: UUID | None = None
 
 
+class UnitBulkCreateResponse(ORMBaseModel):
+    items: list[UnitResponse]
+
+
 class CategoryCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     code: str | None = Field(default=None, max_length=100)
     parent_id: int | None = None
     sort_order: int | None = None
     is_active: bool = True
+
+
+class CategoryBulkCreateRequest(BaseModel):
+    items: list[CategoryCreateRequest] = Field(min_length=1)
 
 
 class CategoryUpdateRequest(BaseModel):
@@ -182,6 +193,10 @@ class CategoryResponse(ORMBaseModel):
     updated_at: datetime
     deleted_at: datetime | None = None
     deleted_by_user_id: UUID | None = None
+
+
+class CategoryBulkCreateResponse(ORMBaseModel):
+    items: list[CategoryResponse]
 
 
 class ItemCreateRequest(BaseModel):

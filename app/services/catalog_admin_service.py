@@ -5,8 +5,6 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import HTTPException, status
-
 from app.core.catalog_defaults import (
     UNCATEGORIZED_CATEGORY_CODE,
     UNCATEGORIZED_CATEGORY_NAME,
@@ -15,15 +13,18 @@ from app.models.category import Category
 from app.models.item import Item
 from app.models.unit import Unit
 from app.schemas.catalog import (
+    CategoryBulkCreateRequest,
     CategoryCreateRequest,
     CategoryUpdateRequest,
     ItemCreateRequest,
     ItemUpdateRequest,
+    UnitBulkCreateRequest,
     UnitCreateRequest,
     UnitUpdateRequest,
 )
-from app.services.uow import UnitOfWork
+from fastapi import HTTPException, status
 
+from app.services.uow import UnitOfWork
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,25 @@ class CatalogAdminService:
             is_active=payload.is_active,
         )
         return await uow.catalog.create_unit(unit)
+
+    async def bulk_create_units(self, uow: UnitOfWork, payload: UnitBulkCreateRequest) -> list[Unit]:
+        seen_names: set[str] = set()
+        seen_symbols: set[str] = set()
+        for item in payload.items:
+            normalized_name = _normalize_text(item.name)
+            normalized_symbol = _normalize_text(item.symbol)
+            if normalized_name in seen_names:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="duplicate unit name in payload")
+            if normalized_symbol in seen_symbols:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="duplicate unit symbol in payload")
+            seen_names.add(normalized_name)
+            seen_symbols.add(normalized_symbol)
+
+        created: list[Unit] = []
+        for item in payload.items:
+            unit = await self.create_unit(uow, item)
+            created.append(unit)
+        return created
 
     async def update_unit(self, uow: UnitOfWork, unit_id: int, payload: UnitUpdateRequest) -> Unit:
         unit = await uow.catalog.get_unit_by_id(unit_id)
@@ -96,6 +116,13 @@ class CatalogAdminService:
             is_active=payload.is_active,
         )
         return await uow.catalog.create_category(category)
+
+    async def bulk_create_categories(self, uow: UnitOfWork, payload: CategoryBulkCreateRequest) -> list[Category]:
+        created: list[Category] = []
+        for item in payload.items:
+            category = await self.create_category(uow, item)
+            created.append(category)
+        return created
 
     async def update_category(self, uow: UnitOfWork, category_id: int, payload: CategoryUpdateRequest) -> Category:
         category = await uow.catalog.get_category_by_id(category_id)

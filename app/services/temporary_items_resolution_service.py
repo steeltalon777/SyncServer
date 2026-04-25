@@ -5,11 +5,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import HTTPException, status
-
 from app.models.item import Item
 from app.services.operations_service import OperationsService
 from app.services.uow import UnitOfWork
+from fastapi import HTTPException, status
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +172,11 @@ class TemporaryItemsResolutionService:
         new_subject = await uow.inventory_subjects.create_for_item(item_id=new_item.id)
 
         # Transfer balances via service operations
+        if temp_item.item_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="temporary item has no backing item",
+            )
         await TemporaryItemsResolutionService._transfer_balances_via_service_operations(
             uow,
             source_inventory_subject_id=int(temp_subject.id),
@@ -253,6 +257,11 @@ class TemporaryItemsResolutionService:
         target_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=target_item_id)
 
         # Transfer balances via service operations
+        if temp_item.item_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="temporary item has no backing item",
+            )
         await TemporaryItemsResolutionService._transfer_balances_via_service_operations(
             uow,
             source_inventory_subject_id=int(temp_subject.id),
@@ -280,3 +289,67 @@ class TemporaryItemsResolutionService:
         )
 
         return {"resolved_item_id": target_item_id, "resolution_type": "merge"}
+
+    @staticmethod
+    async def delete_temporary_item(
+        uow: UnitOfWork,
+        *,
+        temporary_item_id: int,
+        resolved_by_user_id: UUID,
+        resolution_note: str | None,
+    ) -> dict:
+        """Удалить временный ТМЦ (мягкое удаление).
+
+        Проверки:
+        1. Временный ТМЦ существует и имеет статус "active".
+        2. Нет активных регистров (pending/lost/issued с ненулевым количеством).
+        3. Нулевые остатки (balances) по всем сайтам.
+        4. Архивировать inventory_subject (если существует).
+        5. Деактивировать backing item (если существует).
+
+        Возвращает:
+            {"resolution_type": "deleted"}
+        """
+        from app.models.temporary_item import TemporaryItem
+
+        temp_item = await uow.temporary_items.get_by_id(temporary_item_id)
+        if temp_item is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="temporary item not found")
+        if temp_item.status != TemporaryItem.STATUS_ACTIVE:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="temporary item is already resolved",
+            )
+
+        # Получить inventory subject для временного ТМЦ
+        temp_subject = await uow.inventory_subjects.get_by_temporary_item_id(temporary_item_id)
+        if temp_subject is not None:
+            # Проверить активные регистры
+            await TemporaryItemsResolutionService._check_no_active_registers(
+                uow, int(temp_subject.id), temporary_item_id,
+            )
+
+            # Проверить нулевые остатки
+            balances = await uow.balances.get_all_by_inventory_subject(int(temp_subject.id))
+            for balance_row in balances:
+                if balance_row.qty != 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="temporary item has non-zero balances; cannot delete",
+                    )
+
+            # Архивировать inventory subject
+            await uow.inventory_subjects.archive(int(temp_subject.id))
+
+        # Деактивировать backing item
+        if temp_item.item is not None:
+            temp_item.item.is_active = False
+
+        # Пометить временный ТМЦ как удалённый
+        await uow.temporary_items.mark_deleted(
+            temporary_item_id=temporary_item_id,
+            resolved_by_user_id=resolved_by_user_id,
+            resolution_note=resolution_note or "Удалён пользователем",
+        )
+
+        return {"resolution_type": "deleted"}

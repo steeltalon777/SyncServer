@@ -3,12 +3,20 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from app.models.base import Base
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.models.base import Base
 
 
 class TemporaryItem(Base):
@@ -55,3 +63,9 @@ class TemporaryItem(Base):
         Index("ix_temporary_items_created_by_user_id", "created_by_user_id"),
         Index("ix_temporary_items_normalized_name", "normalized_name"),
     )
+
+    # Статусы временных ТМЦ
+    STATUS_ACTIVE = "active"
+    STATUS_APPROVED_AS_ITEM = "approved_as_item"
+    STATUS_MERGED_TO_ITEM = "merged_to_item"
+    STATUS_DELETED = "deleted"

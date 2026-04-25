@@ -147,3 +147,24 @@ class TemporaryItemsRepo:
             entity.item.is_active = False
         await self.session.flush()
         return entity
+
+    async def mark_deleted(
+        self,
+        *,
+        temporary_item_id: int,
+        resolved_by_user_id: UUID,
+        resolution_note: str | None,
+    ) -> TemporaryItem | None:
+        """Пометить временный ТМЦ как удалённый (мягкое удаление)."""
+        entity = await self.get_by_id(temporary_item_id)
+        if entity is None:
+            return None
+        entity.status = "deleted"
+        entity.resolution_type = "deleted"
+        entity.resolution_note = resolution_note
+        entity.resolved_by_user_id = resolved_by_user_id
+        entity.resolved_at = datetime.now(UTC)
+        if entity.item is not None:
+            entity.item.is_active = False
+        await self.session.flush()
+        return entity

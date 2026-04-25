@@ -2,9 +2,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from app.core.db import get_db
 from app.models.category import Category
 from app.models.device import Device
@@ -12,7 +9,9 @@ from app.models.item import Item
 from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user import User
+from httpx import ASGITransport, AsyncClient
 from main import create_app
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 app = create_app()
 
@@ -328,6 +327,48 @@ async def test_catalog_admin_write_flow(client: AsyncClient, session_factory: as
     )
     assert deactivate_item.status_code == 200
     assert deactivate_item.json()["is_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_catalog_admin_bulk_create_units(client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    root_user = await _seed_root_user(session_factory)
+    headers = {"X-User-Token": str(root_user.user_token)}
+
+    response = await client.post(
+        "/api/v1/catalog/admin/units/bulk",
+        json={"items": [{"name": "Box", "symbol": "box"}, {"name": "Pallet", "symbol": "pallet"}]},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_admin_bulk_create_categories(client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    root_user = await _seed_root_user(session_factory)
+    headers = {"X-User-Token": str(root_user.user_token)}
+
+    response = await client.post(
+        "/api/v1/catalog/admin/categories/bulk",
+        json={"items": [{"name": "Food"}, {"name": "Drinks"}]},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_admin_bulk_create_units_duplicate_in_payload_fails(client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    root_user = await _seed_root_user(session_factory)
+    headers = {"X-User-Token": str(root_user.user_token)}
+
+    response = await client.post(
+        "/api/v1/catalog/admin/units/bulk",
+        json={"items": [{"name": "Box", "symbol": "box"}, {"name": "Box", "symbol": "box2"}]},
+        headers=headers,
+    )
+    assert response.status_code == 409
+
 
 
 @pytest.mark.asyncio

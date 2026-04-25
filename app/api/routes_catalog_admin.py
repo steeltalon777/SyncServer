@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-
 from app.api.deps import get_request_id, get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.catalog import (
+    CategoryBulkCreateRequest,
+    CategoryBulkCreateResponse,
     CategoryCreateRequest,
     CategoryListResponse,
     CategoryResponse,
@@ -16,6 +16,8 @@ from app.schemas.catalog import (
     ItemListResponse,
     ItemResponse,
     ItemUpdateRequest,
+    UnitBulkCreateRequest,
+    UnitBulkCreateResponse,
     UnitCreateRequest,
     UnitListResponse,
     UnitResponse,
@@ -25,6 +27,7 @@ from app.services.access_guard import AccessGuard
 from app.services.access_service import AccessService
 from app.services.catalog_admin_service import CatalogAdminService
 from app.services.uow import UnitOfWork
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 router = APIRouter(prefix="/catalog/admin")
 logger = logging.getLogger(__name__)
@@ -76,6 +79,23 @@ async def create_unit(
     return UnitResponse.model_validate(unit)
 
 
+@router.post("/units/bulk", response_model=UnitBulkCreateResponse)
+async def bulk_create_units(
+    payload: UnitBulkCreateRequest,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
+) -> UnitBulkCreateResponse:
+    service = CatalogAdminService()
+    async with uow:
+        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        units = await service.bulk_create_units(uow, payload)
+
+    logger.info("request_id=%s bulk_create_units count=%s user_id=%s", get_request_id(request), len(units), identity.user_id)
+    return UnitBulkCreateResponse(items=[UnitResponse.model_validate(unit) for unit in units])
+
+
 @router.patch("/units/{unit_id}", response_model=UnitResponse)
 async def update_unit(
     unit_id: int,
@@ -114,6 +134,28 @@ async def create_category(
         identity.user_id,
     )
     return CategoryResponse.model_validate(category)
+
+
+@router.post("/categories/bulk", response_model=CategoryBulkCreateResponse)
+async def bulk_create_categories(
+    payload: CategoryBulkCreateRequest,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
+) -> CategoryBulkCreateResponse:
+    service = CatalogAdminService()
+    async with uow:
+        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        categories = await service.bulk_create_categories(uow, payload)
+
+    logger.info(
+        "request_id=%s bulk_create_categories count=%s user_id=%s",
+        get_request_id(request),
+        len(categories),
+        identity.user_id,
+    )
+    return CategoryBulkCreateResponse(items=[CategoryResponse.model_validate(category) for category in categories])
 
 
 @router.patch("/categories/{category_id}", response_model=CategoryResponse)

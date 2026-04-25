@@ -5,15 +5,16 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import HTTPException, status
-
+from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
+from app.models.category import Category
 from app.models.item import Item
 from app.repos.recipients_repo import normalize_recipient_name
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
 from app.services.document_service import DocumentService
-from app.services.uow import UnitOfWork
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
+from app.services.uow import UnitOfWork
+from fastapi import HTTPException, status
 
 logger = logging.getLogger(__name__)
 
@@ -332,11 +333,7 @@ class OperationsService:
             if existing_operation is not None:
                 # Idempotency replay: if payload matches, return existing operation.
                 # If payload differs, return 409 Conflict per spec §7.4.
-                # Compare by line_number, qty, batch, comment and snapshot name
-                # (item_id differs after creation for temporary items).
-                # Normalize comparison for idempotency, especially for temporary items
                 def normalize_qty(q):
-                    # Convert to Decimal for consistent comparison
                     from decimal import Decimal
                     if isinstance(q, (int, float, str)):
                         return Decimal(str(q))
@@ -405,123 +402,100 @@ class OperationsService:
             client_request_id=operation_data.client_request_id,
         )
 
-        item_cache = {}
-        unit_cache = {}
-        category_cache = {}
-        temporary_created_by_key = {}
-        temporary_subject_by_key = {}
-
-        for client_key, payload in temporary_batch.items():
-            if payload.category_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"temporary_item '{client_key}' requires category_id in Phase 1 because current item model is category-bound"
-                    ),
-                )
-            unit = await uow.catalog.get_unit_by_id(payload.unit_id)
-            if unit is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"unit with id {payload.unit_id} not found")
-            category = await uow.catalog.get_category_by_id(payload.category_id)
-            if category is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"category with id {payload.category_id} not found",
-                )
-
-            backing_item = Item(
-                sku=payload.sku,
-                name=payload.name.strip(),
-                normalized_name=OperationsService._normalize_name(payload.name),
-                category_id=payload.category_id,
-                unit_id=payload.unit_id,
-                description=payload.description,
-                hashtags=payload.hashtags,
-                is_active=False,
-                source_system="temporary_item",
-                source_ref=payload.client_key,
-            )
-            backing_item = await uow.catalog.create_item(backing_item)
-            temporary_item = await uow.temporary_items.create(
-                item_id=backing_item.id,
-                name=payload.name.strip(),
-                normalized_name=OperationsService._normalize_name(payload.name),
-                sku=payload.sku,
-                unit_id=payload.unit_id,
-                category_id=payload.category_id,
-                description=payload.description,
-                hashtags=payload.hashtags,
-                created_by_user_id=user_id,
-            )
-            temporary_subject = await uow.inventory_subjects.get_or_create_for_temporary_item(
-                temporary_item_id=temporary_item.id,
-                item_id=backing_item.id,
-            )
-            item_cache[backing_item.id] = backing_item
-            unit_cache[payload.unit_id] = unit
-            category_cache[payload.category_id] = category
-            temporary_created_by_key[client_key] = temporary_item
-            temporary_subject_by_key[client_key] = temporary_subject
-
+        # Для temporary строк нормализуем category_id и собираем snapshot-поля
+        # без materialization сущностей. Реальные temporary/backing/inventory_subject
+        # будут созданы только при submit.
         for line_data in operation_data.lines:
-            line_item_id = line_data.item_id
-            line_subject_id: int | None = None
             if line_data.temporary_item is not None:
-                line_item_id = temporary_created_by_key[line_data.temporary_item.client_key].item_id
-                line_subject_id = temporary_subject_by_key[line_data.temporary_item.client_key].id
+                payload = line_data.temporary_item
+                # Нормализация category_id
+                if payload.category_id is None:
+                    uncategorized = await OperationsService._get_or_create_uncategorized_category(uow)
+                    category_id_value = uncategorized.id
+                    category_name = uncategorized.name
+                else:
+                    category_id_value = payload.category_id
+                    category = await uow.catalog.get_category_by_id(category_id_value)
+                    if category is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"category with id {category_id_value} not found",
+                        )
+                    category_name = category.name
 
-            if line_item_id is None:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="line item resolution failed")
+                unit = await uow.catalog.get_unit_by_id(payload.unit_id)
+                if unit is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"unit with id {payload.unit_id} not found")
 
-            if line_subject_id is None:
-                line_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=line_item_id)
-                line_subject_id = line_subject.id
+                # Сохраняем draft-temporary payload в строке операции
+                draft_payload = {
+                    "client_key": payload.client_key,
+                    "name": payload.name.strip(),
+                    "sku": payload.sku,
+                    "unit_id": payload.unit_id,
+                    "category_id": category_id_value,
+                    "description": payload.description,
+                    "hashtags": payload.hashtags,
+                }
 
-            item = item_cache.get(line_item_id)
-            if item is None:
+                await uow.operations.create_operation_line(
+                    operation_id=operation.id,
+                    line_number=line_data.line_number,
+                    inventory_subject_id=None,  # Будет проставлено при submit
+                    item_id=None,  # Будет проставлено при submit
+                    qty=line_data.qty,
+                    batch=line_data.batch,
+                    comment=line_data.comment,
+                    item_name_snapshot=payload.name.strip(),
+                    item_sku_snapshot=payload.sku,
+                    unit_name_snapshot=unit.name,
+                    unit_symbol_snapshot=unit.symbol,
+                    category_name_snapshot=category_name,
+                    temporary_draft_payload=draft_payload,
+                )
+            else:
+                # Каталожная строка — создаём как обычно
+                line_item_id = line_data.item_id
+                if line_item_id is None:
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="line item resolution failed")
+
                 item = await uow.catalog.get_item_by_id(line_item_id)
                 if not item:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=f"item with id {line_item_id} not found",
                     )
-                item_cache[line_item_id] = item
 
-            unit = unit_cache.get(item.unit_id)
-            if unit is None:
                 unit = await uow.catalog.get_unit_by_id(item.unit_id)
                 if not unit:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=f"unit with id {item.unit_id} not found",
                     )
-                unit_cache[item.unit_id] = unit
 
-            # Получаем category
-            category = category_cache.get(item.category_id)
-            if category is None:
                 category = await uow.catalog.get_category_by_id(item.category_id)
                 if not category:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=f"category with id {item.category_id} not found",
                     )
-                category_cache[item.category_id] = category
 
-            await uow.operations.create_operation_line(
-                operation_id=operation.id,
-                line_number=line_data.line_number,
-                inventory_subject_id=line_subject_id,
-                item_id=line_item_id,
-                qty=line_data.qty,
-                batch=line_data.batch,
-                comment=line_data.comment,
-                item_name_snapshot=item.name,
-                item_sku_snapshot=item.sku,
-                unit_name_snapshot=unit.name,
-                unit_symbol_snapshot=unit.symbol,
-                category_name_snapshot=category.name,
-            )
+                line_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=line_item_id)
+
+                await uow.operations.create_operation_line(
+                    operation_id=operation.id,
+                    line_number=line_data.line_number,
+                    inventory_subject_id=line_subject.id,
+                    item_id=line_item_id,
+                    qty=line_data.qty,
+                    batch=line_data.batch,
+                    comment=line_data.comment,
+                    item_name_snapshot=item.name,
+                    item_sku_snapshot=item.sku,
+                    unit_name_snapshot=unit.name,
+                    unit_symbol_snapshot=unit.symbol,
+                    category_name_snapshot=category.name,
+                )
 
         created_operation = await uow.operations.get_operation_by_id(operation.id)
         return {"operation": created_operation}
@@ -640,6 +614,91 @@ class OperationsService:
         return await uow.operations.get_operation_by_id(updated.id)
 
     @staticmethod
+    async def _materialize_deferred_temporary_lines(
+        uow: UnitOfWork,
+        operation,
+        user_id: UUID,
+    ) -> None:
+        """Materialize deferred temporary lines: create backing item, temporary item,
+        inventory subject, and set references on operation lines.
+
+        All changes happen within the current UoW transaction.
+        """
+        from app.models.item import Item
+
+        deferred_lines = [line for line in operation.lines if line.temporary_draft_payload is not None]
+        if not deferred_lines:
+            return
+
+        # Группируем по client_key (один temporary item на уникальный ключ)
+        from collections import OrderedDict
+        grouped: OrderedDict[str, list] = OrderedDict()
+        for line in deferred_lines:
+            payload = line.temporary_draft_payload
+            ck = payload["client_key"]
+            if ck not in grouped:
+                grouped[ck] = []
+            grouped[ck].append(line)
+
+        materialized_by_key: dict[str, dict[str, object]] = {}
+
+        for client_key, lines in grouped.items():
+            # Берём payload из первой линии с этим ключом (они гарантированно одинаковы)
+            payload = lines[0].temporary_draft_payload
+
+            category_id_value = payload["category_id"]
+            unit_id_value = payload["unit_id"]
+
+            # Создаём backing item
+            backing_item = Item(
+                sku=payload.get("sku"),
+                name=payload["name"].strip(),
+                normalized_name=OperationsService._normalize_name(payload["name"]),
+                category_id=category_id_value,
+                unit_id=unit_id_value,
+                description=payload.get("description"),
+                hashtags=payload.get("hashtags"),
+                is_active=False,
+                source_system="temporary_item",
+                source_ref=client_key,
+            )
+            backing_item = await uow.catalog.create_item(backing_item)
+
+            # Создаём temporary item
+            temporary_item = await uow.temporary_items.create(
+                item_id=backing_item.id,
+                name=payload["name"].strip(),
+                normalized_name=OperationsService._normalize_name(payload["name"]),
+                sku=payload.get("sku"),
+                unit_id=unit_id_value,
+                category_id=category_id_value,
+                description=payload.get("description"),
+                hashtags=payload.get("hashtags"),
+                created_by_user_id=user_id,
+            )
+
+            # Создаём inventory subject
+            temporary_subject = await uow.inventory_subjects.get_or_create_for_temporary_item(
+                temporary_item_id=temporary_item.id,
+                item_id=backing_item.id,
+            )
+
+            materialized_by_key[client_key] = {
+                "item_id": backing_item.id,
+                "inventory_subject_id": temporary_subject.id,
+            }
+
+        # Проставляем ссылки в строках и очищаем draft payload
+        for line in deferred_lines:
+            ck = line.temporary_draft_payload["client_key"]
+            refs = materialized_by_key[ck]
+            line.item_id = refs["item_id"]
+            line.inventory_subject_id = refs["inventory_subject_id"]
+            line.temporary_draft_payload = None
+
+        await uow.session.flush()
+
+    @staticmethod
     async def submit_operation(
         uow: UnitOfWork,
         operation_id: UUID,
@@ -648,6 +707,11 @@ class OperationsService:
         operation = await uow.operations.get_operation_by_id(operation_id)
         OperationsWorkflowPolicy.require_exists(operation)
         OperationsWorkflowPolicy.require_draft_for_submit(operation)
+
+        # Materialize deferred temporary lines before balance/register workflow
+        await OperationsService._materialize_deferred_temporary_lines(
+            uow, operation, user_id,
+        )
 
         for line in operation.lines:
             await OperationsService._ensure_line_inventory_subject(uow, line)
@@ -1218,5 +1282,88 @@ class OperationsService:
             operation_id=operation_id,
             cancelled_by_user_id=user_id,
         )
+
+        # Удалить временные ТМЦ, связанные с операцией
+        await OperationsService._delete_temporary_items_of_operation(
+            uow, operation_id=operation_id, user_id=user_id,
+        )
+
         logger.info("cancelled operation=%s by user=%s reason=%s", operation_id, user_id, reason)
         return {"operation": cancelled_operation}
+
+    @staticmethod
+    async def _delete_temporary_items_of_operation(
+        uow: UnitOfWork,
+        operation_id: UUID,
+        user_id: UUID,
+    ) -> None:
+        """Удалить временные ТМЦ, связанные с операцией.
+
+        Проходит по всем линиям операции, находит InventorySubject
+        с temporary_item_id и мягко удаляет активные временные ТМЦ.
+        Уже разрешённые (approved/merged/deleted) ТМЦ пропускает.
+        """
+        from app.models.temporary_item import TemporaryItem
+        from app.services.temporary_items_resolution_service import (
+            TemporaryItemsResolutionService,
+        )
+
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        if operation is None:
+            return
+
+        seen_temp_ids: set[int] = set()
+
+        for line in operation.lines:
+            if line.inventory_subject_id is None:
+                continue
+
+            subject = await uow.inventory_subjects.get_by_id(line.inventory_subject_id)
+            if subject is None or subject.temporary_item_id is None:
+                continue
+
+            temp_id = subject.temporary_item_id
+            if temp_id in seen_temp_ids:
+                continue
+            seen_temp_ids.add(temp_id)
+
+            temp_item = await uow.temporary_items.get_by_id(temp_id)
+            if temp_item is None:
+                continue
+            if temp_item.status != TemporaryItem.STATUS_ACTIVE:
+                continue
+
+            await TemporaryItemsResolutionService.delete_temporary_item(
+                uow,
+                temporary_item_id=temp_id,
+                resolved_by_user_id=user_id,
+                resolution_note=(
+                    f"Auto-deleted on cancel of operation {operation_id}"
+                ),
+            )
+
+    @staticmethod
+    async def _get_or_create_uncategorized_category(uow: UnitOfWork) -> Category:
+        """Найти или создать категорию 'Без категории'."""
+        categories = await uow.catalog.list_categories_by_code(UNCATEGORIZED_CATEGORY_CODE)
+        if len(categories) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="multiple uncategorized categories configured",
+            )
+        if categories:
+            category = categories[0]
+            category.name = UNCATEGORIZED_CATEGORY_NAME
+            category.parent_id = None
+            category.is_active = True
+            await uow.catalog.update_category(category)
+            return category
+
+        category = Category(
+            name=UNCATEGORIZED_CATEGORY_NAME,
+            code=UNCATEGORIZED_CATEGORY_CODE,
+            parent_id=None,
+            sort_order=9999,
+            is_active=True,
+        )
+        return await uow.catalog.create_category(category)

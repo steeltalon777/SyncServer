@@ -174,6 +174,7 @@ class OperationLineResponse(ORMBaseModel):
     lost_qty: Decimal = Decimal("0")
     batch: str | None = None
     comment: str | None = Field(default=None, validation_alias=AliasChoices("comment", "notes"))
+    is_draft_temporary: bool = False
 
     @property
     def quantity(self) -> int:

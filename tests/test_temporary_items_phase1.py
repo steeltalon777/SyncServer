@@ -13,7 +13,7 @@ from app.models.category import Category
 from app.models.balance import Balance
 from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
-from app.models.operation import OperationLine
+from app.models.operation import Operation, OperationLine
 from app.models.site import Site
 from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
@@ -131,11 +131,18 @@ async def _seed(session_factory: async_sessionmaker[AsyncSession]) -> dict[str, 
         }
 
 
+# =============================================================================
+# 1. CREATE draft — temporary entities are NOT materialized yet
+# =============================================================================
+
+
 @pytest.mark.asyncio
-async def test_receive_operation_can_create_inline_temporary_item_atomically(
+async def test_create_draft_with_temporary_line_does_not_materialize(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """При создании draft с временной строкой temporary сущности ещё не созданы,
+    но snapshots и is_draft_temporary проставлены."""
     seed = await _seed(session_factory)
 
     response = await client.post(
@@ -144,7 +151,7 @@ async def test_receive_operation_can_create_inline_temporary_item_atomically(
         json={
             "operation_type": "RECEIVE",
             "site_id": seed["site_id"],
-            "client_request_id": "tmp-receive-1",
+            "client_request_id": "deferred-create-1",
             "lines": [
                 {
                     "line_number": 1,
@@ -155,7 +162,7 @@ async def test_receive_operation_can_create_inline_temporary_item_atomically(
                         "sku": None,
                         "unit_id": seed["unit_id"],
                         "category_id": seed["category_id"],
-                        "description": "inline create",
+                        "description": "deferred create",
                         "hashtags": ["кабель"],
                     },
                 },
@@ -170,45 +177,62 @@ async def test_receive_operation_can_create_inline_temporary_item_atomically(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["lines"][0]["temporary_item_id"] is not None
-    assert body["lines"][0]["temporary_item_status"] == "active"
-    assert body["lines"][1]["temporary_item_id"] is None
+    # Temporary line: item_id и inventory_subject_id должны быть None
+    assert body["lines"][0]["item_id"] is None
+    assert body["lines"][0]["inventory_subject_id"] is None
+    assert body["lines"][0]["temporary_item_id"] is None
+    assert body["lines"][0]["is_draft_temporary"] is True
+    # Snapshots должны быть заполнены
+    assert body["lines"][0]["item_name_snapshot"] == "Временный кабель"
+    assert body["lines"][0]["category_name_snapshot"] is not None
+    # Catalog line: всё как обычно
+    assert body["lines"][1]["item_id"] == seed["catalog_item_id"]
+    assert body["lines"][1]["inventory_subject_id"] is not None
+    assert body["lines"][1]["is_draft_temporary"] is False
 
+    # Проверяем в БД: temporary сущности НЕ созданы
     async with session_factory() as session:
         temporary_items = list((await session.execute(select(TemporaryItem))).scalars().all())
-        assert len(temporary_items) == 1
-        assert temporary_items[0].name == "Временный кабель"
-        backing_item = await session.get(Item, temporary_items[0].item_id)
-        assert backing_item is not None
-        assert backing_item.is_active is False
+        assert len(temporary_items) == 0
 
+        # Проверяем draft payload в строке
         lines = list((await session.execute(select(OperationLine).order_by(OperationLine.line_number))).scalars().all())
         assert len(lines) == 2
-        assert lines[0].inventory_subject_id is not None
+        assert lines[0].temporary_draft_payload is not None
+        assert lines[0].temporary_draft_payload["client_key"] == "tmp-1"
+        assert lines[0].temporary_draft_payload["name"] == "Временный кабель"
+        assert lines[0].item_id is None
+        assert lines[0].inventory_subject_id is None
+        assert lines[1].temporary_draft_payload is None
+        assert lines[1].item_id == seed["catalog_item_id"]
         assert lines[1].inventory_subject_id is not None
 
-        subject_line_1 = await session.get(InventorySubject, lines[0].inventory_subject_id)
-        subject_line_2 = await session.get(InventorySubject, lines[1].inventory_subject_id)
-        assert subject_line_1 is not None
-        assert subject_line_2 is not None
-        assert subject_line_1.subject_type == "temporary_item"
-        assert subject_line_2.subject_type == "catalog_item"
+
+# =============================================================================
+# 2. SUBMIT — materialization происходит при submit
+# =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_receive_submit_accept_updates_balances_by_inventory_subject(
+async def test_submit_materializes_deferred_temporary_lines(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """При submit deferred temporary lines материализуются:
+    создаются backing item, temporary item, inventory subject,
+    строки получают ссылки, balance/register workflow отрабатывает."""
+    from app.models.asset_register import PendingAcceptanceBalance
+
     seed = await _seed(session_factory)
 
+    # Создаём draft
     create_response = await client.post(
         "/api/v1/operations",
         headers={"X-User-Token": seed["storekeeper_token"]},
         json={
             "operation_type": "RECEIVE",
             "site_id": seed["site_id"],
-            "client_request_id": "tmp-receive-write-path-1",
+            "client_request_id": "deferred-submit-1",
             "lines": [
                 {
                     "line_number": 1,
@@ -232,6 +256,12 @@ async def test_receive_submit_accept_updates_balances_by_inventory_subject(
     assert create_response.status_code == 200
     operation = create_response.json()
 
+    # До submit — temporary сущностей нет
+    async with session_factory() as session:
+        pre_temp = list((await session.execute(select(TemporaryItem))).scalars().all())
+        assert len(pre_temp) == 0
+
+    # Submit
     submit_response = await client.post(
         f"/api/v1/operations/{operation['id']}/submit",
         headers={"X-User-Token": seed["chief_token"]},
@@ -239,39 +269,338 @@ async def test_receive_submit_accept_updates_balances_by_inventory_subject(
     )
     assert submit_response.status_code == 200
 
-    accept_response = await client.post(
-        f"/api/v1/operations/{operation['id']}/accept-lines",
-        headers={"X-User-Token": seed["storekeeper_token"]},
-        json={
-            "lines": [
-                {"line_id": operation["lines"][0]["id"], "accepted_qty": 2, "lost_qty": 0},
-                {"line_id": operation["lines"][1]["id"], "accepted_qty": 1, "lost_qty": 0},
-            ]
-        },
-    )
-    assert accept_response.status_code == 200
-
+    # После submit — проверяем materialization
     async with session_factory() as session:
+        # Temporary item создан
+        temporary_items = list((await session.execute(select(TemporaryItem))).scalars().all())
+        assert len(temporary_items) == 1
+        assert temporary_items[0].name == "Временный кабель"
+
+        # Backing item создан
+        backing_item = await session.get(Item, temporary_items[0].item_id)
+        assert backing_item is not None
+        assert backing_item.is_active is False
+
+        # Inventory subject создан
+        subjects = list((await session.execute(select(InventorySubject))).scalars().all())
+        # Должно быть 2 subject: один для temporary, один для catalog
+        assert len(subjects) == 2
+
+        # Строки получили ссылки
         lines = list((await session.execute(select(OperationLine).order_by(OperationLine.line_number))).scalars().all())
         assert len(lines) == 2
+        assert lines[0].item_id is not None
+        assert lines[0].inventory_subject_id is not None
+        assert lines[0].temporary_draft_payload is None  # payload очищен
+        assert lines[1].item_id == seed["catalog_item_id"]
+        assert lines[1].inventory_subject_id is not None
 
-        balances = list(
-            (
-                await session.execute(
-                    select(Balance)
-                    .where(Balance.site_id == seed["site_id"])
-                    .order_by(Balance.inventory_subject_id)
+        # RECEIVE с acceptance_required создаёт pending registers, а не балансы
+        pending_rows = list(
+            (await session.execute(
+                select(PendingAcceptanceBalance).where(
+                    PendingAcceptanceBalance.destination_site_id == seed["site_id"]
                 )
-            ).scalars().all()
+            )).scalars().all()
         )
-        assert len(balances) == 2
+        assert len(pending_rows) == 2
 
-        balances_by_subject = {int(row.inventory_subject_id): row for row in balances}
-        assert Decimal(str(balances_by_subject[int(lines[0].inventory_subject_id)].qty)) == Decimal("2")
-        assert Decimal(str(balances_by_subject[int(lines[1].inventory_subject_id)].qty)) == Decimal("1")
 
-        assert balances_by_subject[int(lines[0].inventory_subject_id)].item_id == lines[0].item_id
-        assert balances_by_subject[int(lines[1].inventory_subject_id)].item_id == lines[1].item_id
+# =============================================================================
+# 3. CANCEL draft — не пытается удалять несуществующие temporary items
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_cancel_draft_with_temporary_line_does_not_fail(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Отмена draft с deferred temporary строкой не должна пытаться
+    удалять несуществующие temporary items."""
+    seed = await _seed(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "deferred-cancel-draft-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 2,
+                    "temporary_item": {
+                        "client_key": "tmp-1",
+                        "name": "Отменяемый",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+
+    # Cancel draft
+    cancel_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/cancel",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"cancel": True, "reason": "test cancel draft"},
+    )
+    assert cancel_response.status_code == 200
+
+    # Проверяем, что temporary items не создавались
+    async with session_factory() as session:
+        temporary_items = list((await session.execute(select(TemporaryItem))).scalars().all())
+        assert len(temporary_items) == 0
+
+        # Операция отменена
+        op = await session.get(Operation, operation["id"])
+        assert op is not None
+        assert op.status == "cancelled"
+
+
+# =============================================================================
+# 4. CANCEL submitted — materialized temporary items удаляются
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_cancel_submitted_operation_deletes_materialized_temporary_items(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Отмена submitted операции корректно удаляет materialized temporary items."""
+    seed = await _seed(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "deferred-cancel-submitted-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 2,
+                    "temporary_item": {
+                        "client_key": "tmp-1",
+                        "name": "Удаляемый",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+
+    # Submit
+    submit_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+
+    # Проверяем, что temporary item создан
+    async with session_factory() as session:
+        pre_temp = list((await session.execute(select(TemporaryItem))).scalars().all())
+        assert len(pre_temp) == 1
+        assert pre_temp[0].status == "active"
+
+    # Cancel submitted
+    cancel_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/cancel",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"cancel": True, "reason": "test cancel submitted"},
+    )
+    assert cancel_response.status_code == 200
+
+    # Проверяем, что temporary item мягко удалён
+    async with session_factory() as session:
+        temp_items = list((await session.execute(select(TemporaryItem))).scalars().all())
+        assert len(temp_items) == 1
+        assert temp_items[0].status == "deleted"
+        assert "Auto-deleted on cancel" in (temp_items[0].resolution_note or "")
+
+
+# =============================================================================
+# 5. Mixed scenario — catalog + temporary lines в одной операции
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_mixed_catalog_and_temporary_lines_work_together(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Каталожные и временные строки в одной операции работают вместе."""
+    from app.models.asset_register import PendingAcceptanceBalance
+
+    seed = await _seed(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "deferred-mixed-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 3,
+                    "temporary_item": {
+                        "client_key": "tmp-a",
+                        "name": "Временный А",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+                {
+                    "line_number": 2,
+                    "qty": 5,
+                    "item_id": seed["catalog_item_id"],
+                },
+                {
+                    "line_number": 3,
+                    "qty": 1,
+                    "temporary_item": {
+                        "client_key": "tmp-b",
+                        "name": "Временный Б",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+
+    # Draft: temporary lines без materialization
+    assert operation["lines"][0]["is_draft_temporary"] is True
+    assert operation["lines"][0]["item_id"] is None
+    assert operation["lines"][2]["is_draft_temporary"] is True
+    assert operation["lines"][2]["item_id"] is None
+    assert operation["lines"][1]["is_draft_temporary"] is False
+    assert operation["lines"][1]["item_id"] == seed["catalog_item_id"]
+
+    # Submit
+    submit_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+
+    # После submit: все строки материализованы
+    async with session_factory() as session:
+        lines = list((await session.execute(select(OperationLine).order_by(OperationLine.line_number))).scalars().all())
+        assert len(lines) == 3
+        for line in lines:
+            assert line.item_id is not None
+            assert line.inventory_subject_id is not None
+            assert line.temporary_draft_payload is None
+
+        # Должно быть 3 inventory subject (2 temporary + 1 catalog)
+        subjects = list((await session.execute(select(InventorySubject))).scalars().all())
+        assert len(subjects) == 3
+
+        # Должно быть 2 temporary item
+        temp_items = list((await session.execute(select(TemporaryItem))).scalars().all())
+        assert len(temp_items) == 2
+
+        # RECEIVE с acceptance_required создаёт pending registers
+        pending_rows = list(
+            (await session.execute(
+                select(PendingAcceptanceBalance).where(
+                    PendingAcceptanceBalance.destination_site_id == seed["site_id"]
+                )
+            )).scalars().all()
+        )
+        assert len(pending_rows) == 3
+
+
+# =============================================================================
+# 6. Response contract — is_draft_temporary отображается корректно
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_draft_temporary_line_response_contract(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Draft temporary line отображается как временная до submit."""
+    seed = await _seed(session_factory)
+
+    response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "contract-test-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 1,
+                    "temporary_item": {
+                        "client_key": "tmp-1",
+                        "name": "Тест контракта",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+                {
+                    "line_number": 2,
+                    "qty": 1,
+                    "item_id": seed["catalog_item_id"],
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+
+    # Temporary line
+    temp_line = body["lines"][0]
+    assert temp_line["is_draft_temporary"] is True
+    assert temp_line["temporary_item_id"] is None
+    assert temp_line["item_id"] is None
+    assert temp_line["inventory_subject_id"] is None
+    assert temp_line["item_name_snapshot"] == "Тест контракта"
+    assert temp_line["category_name_snapshot"] is not None
+
+    # Catalog line
+    cat_line = body["lines"][1]
+    assert cat_line["is_draft_temporary"] is False
+    assert cat_line["item_id"] == seed["catalog_item_id"]
+    assert cat_line["inventory_subject_id"] is not None
+
+    # После submit — is_draft_temporary должен стать False
+    submit_response = await client.post(
+        f"/api/v1/operations/{body['id']}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+    submitted = submit_response.json()
+    assert submitted["lines"][0]["is_draft_temporary"] is False
+    assert submitted["lines"][0]["item_id"] is not None
+    assert submitted["lines"][0]["inventory_subject_id"] is not None
+
+
+# =============================================================================
+# 7. Existing tests adapted to deferred model
+# =============================================================================
 
 
 @pytest.mark.asyncio
@@ -328,10 +657,14 @@ async def test_inline_temporary_item_requires_client_request_id_and_blocks_obser
 
 
 @pytest.mark.asyncio
-async def test_failed_inline_temporary_item_creation_rolls_back_created_entities(
+async def test_inline_temporary_item_without_category_uses_uncategorized(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """При category_id=None сервер подставляет системную категорию 'Без категории'.
+    При deferred создании категория нормализуется сразу, но сущности не создаются."""
+    from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE
+
     seed = await _seed(session_factory)
 
     response = await client.post(
@@ -340,14 +673,14 @@ async def test_failed_inline_temporary_item_creation_rolls_back_created_entities
         json={
             "operation_type": "RECEIVE",
             "site_id": seed["site_id"],
-            "client_request_id": "rollback-1",
+            "client_request_id": "no-category-deferred-1",
             "lines": [
                 {
                     "line_number": 1,
                     "qty": 1,
                     "temporary_item": {
-                        "client_key": "tmp-1",
-                        "name": "Откат",
+                        "client_key": "tmp-no-cat",
+                        "name": "Без категории",
                         "unit_id": seed["unit_id"],
                         "category_id": None,
                     },
@@ -356,20 +689,42 @@ async def test_failed_inline_temporary_item_creation_rolls_back_created_entities
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+    operation = response.json()
+    assert len(operation["lines"]) == 1
+    # В ответе должно быть указано имя категории "Без категории"
+    assert operation["lines"][0]["category_name_snapshot"] == "Без категории"
 
+    # Проверяем, что temporary сущности НЕ созданы (deferred)
     async with session_factory() as session:
-        temporary_count = len(list((await session.execute(select(TemporaryItem))).scalars().all()))
-        items = list((await session.execute(select(Item).where(Item.source_system == "temporary_item"))).scalars().all())
-        assert temporary_count == 0
-        assert items == []
+        uncategorized = (
+            await session.execute(select(Category).where(Category.code == UNCATEGORIZED_CATEGORY_CODE))
+        ).scalar_one_or_none()
+        assert uncategorized is not None, "Системная категория 'Без категории' должна существовать"
+
+        # Backing item НЕ создан
+        backing_item = (
+            await session.execute(
+                select(Item).where(Item.source_system == "temporary_item", Item.source_ref == "tmp-no-cat")
+            )
+        ).scalar_one_or_none()
+        assert backing_item is None, "Backing item не должен создаваться на create"
+
+        # Но в draft payload категория уже нормализована
+        line = (await session.execute(
+            select(OperationLine).where(OperationLine.operation_id == operation["id"])
+        )).scalar_one()
+        assert line.temporary_draft_payload is not None
+        assert line.temporary_draft_payload["category_id"] == uncategorized.id
 
 
 @pytest.mark.asyncio
-async def test_temporary_items_review_endpoints_support_list_detail_and_phase1_resolution(
+async def test_temporary_items_review_endpoints_require_submit_first(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """Temporary items создаются только после submit, поэтому review эндпоинты
+    должны работать с submit-нутыми операциями."""
     seed = await _seed(session_factory)
 
     create_response = await client.post(
@@ -378,7 +733,7 @@ async def test_temporary_items_review_endpoints_support_list_detail_and_phase1_r
         json={
             "operation_type": "RECEIVE",
             "site_id": seed["site_id"],
-            "client_request_id": "review-1",
+            "client_request_id": "review-deferred-1",
             "lines": [
                 {
                     "line_number": 1,
@@ -394,14 +749,33 @@ async def test_temporary_items_review_endpoints_support_list_detail_and_phase1_r
         },
     )
     assert create_response.status_code == 200
-    temporary_item_id = create_response.json()["lines"][0]["temporary_item_id"]
+    operation = create_response.json()
 
-    list_response = await client.get(
+    # До submit — temporary items пусто
+    list_before = await client.get(
         "/api/v1/temporary-items",
         headers={"X-User-Token": seed["chief_token"]},
     )
-    assert list_response.status_code == 200
-    assert list_response.json()["total_count"] == 1
+    assert list_before.status_code == 200
+    assert list_before.json()["total_count"] == 0
+
+    # Submit — materialization
+    submit_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+
+    # После submit — temporary item доступен
+    list_after = await client.get(
+        "/api/v1/temporary-items",
+        headers={"X-User-Token": seed["chief_token"]},
+    )
+    assert list_after.status_code == 200
+    assert list_after.json()["total_count"] == 1
+
+    temporary_item_id = list_after.json()["items"][0]["id"]
 
     detail_response = await client.get(
         f"/api/v1/temporary-items/{temporary_item_id}",
@@ -410,12 +784,76 @@ async def test_temporary_items_review_endpoints_support_list_detail_and_phase1_r
     assert detail_response.status_code == 200
     assert detail_response.json()["status"] == "active"
 
+    # RECEIVE с acceptance_required создаёт pending registers.
+    # Нужно сначала принять строки, чтобы разрешить pending, затем approve.
+    accept_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/accept-lines",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={
+            "lines": [
+                {
+                    "line_id": submit_response.json()["lines"][0]["id"],
+                    "accepted_qty": 1,
+                    "lost_qty": 0,
+                }
+            ]
+        },
+    )
+    assert accept_response.status_code == 200
+
     approve_response = await client.post(
         f"/api/v1/temporary-items/{temporary_item_id}/approve-as-item",
         headers={"X-User-Token": seed["chief_token"]},
     )
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved_as_item"
-    # Stage 3A: approve creates a new permanent item; backing item stays inactive
     assert approve_response.json()["resolved_item_id"] is not None
     assert approve_response.json()["resolution_type"] == "approve_as_item"
+
+
+# =============================================================================
+# 8. Idempotency — повторный create с тем же client_request_id
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_idempotent_create_with_temporary_lines(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Повторный POST с тем же client_request_id возвращает ту же операцию."""
+    seed = await _seed(session_factory)
+
+    payload = {
+        "operation_type": "RECEIVE",
+        "site_id": seed["site_id"],
+        "client_request_id": "idempotent-deferred-1",
+        "lines": [
+            {
+                "line_number": 1,
+                "qty": 2,
+                "temporary_item": {
+                    "client_key": "tmp-1",
+                    "name": "Idempotent",
+                    "unit_id": seed["unit_id"],
+                    "category_id": seed["category_id"],
+                },
+            },
+        ],
+    }
+
+    first = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json=payload,
+    )
+    assert first.status_code == 200
+    first_id = first.json()["id"]
+
+    second = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json=payload,
+    )
+    assert second.status_code == 200
+    assert second.json()["id"] == first_id

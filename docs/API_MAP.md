@@ -1,6 +1,6 @@
 # API MAP
 
-Generated from FastAPI OpenAPI schema on 2026-04-20 05:03:20Z.
+Generated from FastAPI OpenAPI schema on 2026-04-24 07:19:25Z.
 
 Source of truth: mounted routers in `main.py` and schemas registered in FastAPI OpenAPI.
 
@@ -9,8 +9,8 @@ Source of truth: mounted routers in `main.py` and schemas registered in FastAPI 
 - Primary API prefix: `/api/v1`
 - This file includes all OpenAPI-exposed HTTP endpoints, including service-level routes like `/` and `/db_check`.
 - Request and response examples below are schema-shaped examples generated from the OpenAPI contract.
-- Total paths: `69`
-- Total operations: `92`
+- Total paths: `76`
+- Total operations: `100`
 
 ## System
 
@@ -1855,13 +1855,19 @@ _No request body_
     {
       "site_id": 0,
       "site_name": "site name",
-      "item_id": 0,
-      "item_name": "item name",
+      "inventory_subject_id": 0,
+      "subject_type": "subject type",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "display_name": "display name",
+      "item_name": "...",
       "sku": "...",
-      "unit_id": 0,
-      "unit_symbol": "unit symbol",
-      "category_id": 0,
-      "category_name": "category name",
+      "unit_id": "...",
+      "unit_symbol": "...",
+      "category_id": "...",
+      "category_name": "...",
       "qty": "qty",
       "updated_at": "2026-01-01T00:00:00Z"
     }
@@ -1932,13 +1938,19 @@ _No request body_
     {
       "site_id": 0,
       "site_name": "site name",
-      "item_id": 0,
-      "item_name": "item name",
+      "inventory_subject_id": 0,
+      "subject_type": "subject type",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "display_name": "display name",
+      "item_name": "...",
       "sku": "...",
-      "unit_id": 0,
-      "unit_symbol": "unit symbol",
-      "category_id": 0,
-      "category_name": "category name",
+      "unit_id": "...",
+      "unit_symbol": "...",
+      "category_id": "...",
+      "category_name": "...",
       "qty": "qty",
       "updated_at": "2026-01-01T00:00:00Z"
     }
@@ -2246,6 +2258,93 @@ _No request body_
   "updated_at": "2026-01-01T00:00:00Z",
   "deleted_at": "2026-01-01T00:00:00Z",
   "deleted_by_user_id": "00000000-0000-0000-0000-000000000000"
+}
+```
+
+#### 422
+
+- Description: Validation Error
+- Content-Type: `application/json`
+- Schema: `HTTPValidationError`
+
+```json
+{
+  "detail": [
+    {
+      "loc": [
+        "..."
+      ],
+      "msg": "message",
+      "type": "error type",
+      "input": {},
+      "ctx": {}
+    }
+  ]
+}
+```
+
+---
+
+### POST /api/v1/catalog/admin/categories/bulk
+
+- Summary: Bulk Create Categories
+- Operation ID: `bulk_create_categories_api_v1_catalog_admin_categories_bulk_post`
+
+**Parameters**
+
+| Name | In | Required | Type | Description |
+| --- | --- | --- | --- | --- |
+| `X-Site-Id` | `header` | no | `anyOf` |  |
+| `X-User-Token` | `header` | no | `anyOf` |  |
+| `X-Device-Token` | `header` | no | `anyOf` |  |
+| `X-Client-Version` | `header` | no | `anyOf` |  |
+
+**Request body**
+
+- Required: yes
+- Content-Type: `application/json`
+- Schema: `CategoryBulkCreateRequest`
+- Required top-level fields: `items`
+
+```json
+{
+  "items": [
+    {
+      "name": "name",
+      "code": "...",
+      "parent_id": "...",
+      "sort_order": "...",
+      "is_active": true
+    }
+  ]
+}
+```
+
+**Expected responses**
+
+#### 200
+
+- Description: Successful Response
+- Content-Type: `application/json`
+- Schema: `CategoryBulkCreateResponse`
+- Required top-level fields: `items`
+
+```json
+{
+  "items": [
+    {
+      "id": 0,
+      "name": "name",
+      "code": "...",
+      "parent_id": "...",
+      "sort_order": "...",
+      "is_active": true,
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z",
+      "deleted_at": "...",
+      "deleted_by_user_id": "..."
+    }
+  ]
 }
 ```
 
@@ -2969,6 +3068,91 @@ _No request body_
   "updated_at": "2026-01-01T00:00:00Z",
   "deleted_at": "2026-01-01T00:00:00Z",
   "deleted_by_user_id": "00000000-0000-0000-0000-000000000000"
+}
+```
+
+#### 422
+
+- Description: Validation Error
+- Content-Type: `application/json`
+- Schema: `HTTPValidationError`
+
+```json
+{
+  "detail": [
+    {
+      "loc": [
+        "..."
+      ],
+      "msg": "message",
+      "type": "error type",
+      "input": {},
+      "ctx": {}
+    }
+  ]
+}
+```
+
+---
+
+### POST /api/v1/catalog/admin/units/bulk
+
+- Summary: Bulk Create Units
+- Operation ID: `bulk_create_units_api_v1_catalog_admin_units_bulk_post`
+
+**Parameters**
+
+| Name | In | Required | Type | Description |
+| --- | --- | --- | --- | --- |
+| `X-Site-Id` | `header` | no | `anyOf` |  |
+| `X-User-Token` | `header` | no | `anyOf` |  |
+| `X-Device-Token` | `header` | no | `anyOf` |  |
+| `X-Client-Version` | `header` | no | `anyOf` |  |
+
+**Request body**
+
+- Required: yes
+- Content-Type: `application/json`
+- Schema: `UnitBulkCreateRequest`
+- Required top-level fields: `items`
+
+```json
+{
+  "items": [
+    {
+      "name": "name",
+      "symbol": "symbol",
+      "sort_order": "...",
+      "is_active": true
+    }
+  ]
+}
+```
+
+**Expected responses**
+
+#### 200
+
+- Description: Successful Response
+- Content-Type: `application/json`
+- Schema: `UnitBulkCreateResponse`
+- Required top-level fields: `items`
+
+```json
+{
+  "items": [
+    {
+      "id": 0,
+      "name": "name",
+      "symbol": "symbol",
+      "sort_order": "...",
+      "is_active": true,
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z",
+      "deleted_at": "...",
+      "deleted_by_user_id": "..."
+    }
+  ]
 }
 ```
 
@@ -4628,8 +4812,14 @@ _No request body_
       "recipient_id": 0,
       "recipient_name": "recipient name",
       "recipient_type": "recipient type",
-      "item_id": 0,
-      "item_name": "item name",
+      "inventory_subject_id": 0,
+      "subject_type": "subject type",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "display_name": "display name",
+      "item_name": "...",
       "sku": "...",
       "qty": "qty",
       "updated_at": "2026-01-01T00:00:00Z"
@@ -4712,8 +4902,14 @@ _No request body_
       "site_name": "site name",
       "source_site_id": "...",
       "source_site_name": "...",
-      "item_id": 0,
-      "item_name": "item name",
+      "inventory_subject_id": 0,
+      "subject_type": "subject type",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "display_name": "display name",
+      "item_name": "...",
       "sku": "...",
       "qty": "qty",
       "updated_at": "2026-01-01T00:00:00Z"
@@ -4774,7 +4970,7 @@ _No request body_
 - Description: Successful Response
 - Content-Type: `application/json`
 - Schema: `LostAssetRow`
-- Required top-level fields: `item_id, item_name, operation_id, operation_line_id, qty, site_id, site_name, updated_at`
+- Required top-level fields: `display_name, inventory_subject_id, operation_id, operation_line_id, qty, site_id, site_name, subject_type, updated_at`
 
 ```json
 {
@@ -4784,8 +4980,14 @@ _No request body_
   "site_name": "site name",
   "source_site_id": 0,
   "source_site_name": "string",
+  "inventory_subject_id": 0,
+  "subject_type": "subject type",
   "item_id": 0,
-  "item_name": "item name",
+  "temporary_item_id": 0,
+  "resolved_item_id": 0,
+  "resolved_item_name": "string",
+  "display_name": "display name",
+  "item_name": "string",
   "sku": "string",
   "qty": "qty",
   "updated_at": "2026-01-01T00:00:00Z"
@@ -5017,13 +5219,15 @@ _No request body_
   "lines": [
     {
       "line_number": 0,
-      "item_id": 0,
+      "item_id": "...",
+      "temporary_item": "...",
       "qty": 0,
       "batch": "...",
       "comment": "..."
     }
   ],
-  "notes": "string"
+  "notes": "string",
+  "client_request_id": "string"
 }
 ```
 
@@ -5065,12 +5269,24 @@ _No request body_
     {
       "id": 0,
       "line_number": 0,
-      "item_id": 0,
+      "inventory_subject_id": "...",
+      "subject_type": "...",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "temporary_item_status": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "item_name_snapshot": "...",
+      "item_sku_snapshot": "...",
+      "unit_name_snapshot": "...",
+      "unit_symbol_snapshot": "...",
+      "category_name_snapshot": "...",
       "qty": 0,
       "accepted_qty": "accepted qty",
       "lost_qty": "lost qty",
       "batch": "...",
-      "comment": "..."
+      "comment": "...",
+      "is_draft_temporary": true
     }
   ]
 }
@@ -5156,12 +5372,24 @@ _No request body_
     {
       "id": 0,
       "line_number": 0,
-      "item_id": 0,
+      "inventory_subject_id": "...",
+      "subject_type": "...",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "temporary_item_status": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "item_name_snapshot": "...",
+      "item_sku_snapshot": "...",
+      "unit_name_snapshot": "...",
+      "unit_symbol_snapshot": "...",
+      "category_name_snapshot": "...",
       "qty": 0,
       "accepted_qty": "accepted qty",
       "lost_qty": "lost qty",
       "batch": "...",
-      "comment": "..."
+      "comment": "...",
+      "is_draft_temporary": true
     }
   ]
 }
@@ -5225,6 +5453,7 @@ _No request body_
     {
       "line_number": "...",
       "item_id": "...",
+      "temporary_item": "...",
       "qty": "...",
       "batch": "...",
       "comment": "..."
@@ -5271,12 +5500,24 @@ _No request body_
     {
       "id": 0,
       "line_number": 0,
-      "item_id": 0,
+      "inventory_subject_id": "...",
+      "subject_type": "...",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "temporary_item_status": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "item_name_snapshot": "...",
+      "item_sku_snapshot": "...",
+      "unit_name_snapshot": "...",
+      "unit_symbol_snapshot": "...",
+      "category_name_snapshot": "...",
       "qty": 0,
       "accepted_qty": "accepted qty",
       "lost_qty": "lost qty",
       "batch": "...",
-      "comment": "..."
+      "comment": "...",
+      "is_draft_temporary": true
     }
   ]
 }
@@ -5378,12 +5619,24 @@ _No request body_
     {
       "id": 0,
       "line_number": 0,
-      "item_id": 0,
+      "inventory_subject_id": "...",
+      "subject_type": "...",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "temporary_item_status": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "item_name_snapshot": "...",
+      "item_sku_snapshot": "...",
+      "unit_name_snapshot": "...",
+      "unit_symbol_snapshot": "...",
+      "category_name_snapshot": "...",
       "qty": 0,
       "accepted_qty": "accepted qty",
       "lost_qty": "lost qty",
       "batch": "...",
-      "comment": "..."
+      "comment": "...",
+      "is_draft_temporary": true
     }
   ]
 }
@@ -5478,12 +5731,24 @@ _No request body_
     {
       "id": 0,
       "line_number": 0,
-      "item_id": 0,
+      "inventory_subject_id": "...",
+      "subject_type": "...",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "temporary_item_status": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "item_name_snapshot": "...",
+      "item_sku_snapshot": "...",
+      "unit_name_snapshot": "...",
+      "unit_symbol_snapshot": "...",
+      "category_name_snapshot": "...",
       "qty": 0,
       "accepted_qty": "accepted qty",
       "lost_qty": "lost qty",
       "batch": "...",
-      "comment": "..."
+      "comment": "...",
+      "is_draft_temporary": true
     }
   ]
 }
@@ -5578,12 +5843,24 @@ _No request body_
     {
       "id": 0,
       "line_number": 0,
-      "item_id": 0,
+      "inventory_subject_id": "...",
+      "subject_type": "...",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "temporary_item_status": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "item_name_snapshot": "...",
+      "item_sku_snapshot": "...",
+      "unit_name_snapshot": "...",
+      "unit_symbol_snapshot": "...",
+      "category_name_snapshot": "...",
       "qty": 0,
       "accepted_qty": "accepted qty",
       "lost_qty": "lost qty",
       "batch": "...",
-      "comment": "..."
+      "comment": "...",
+      "is_draft_temporary": true
     }
   ]
 }
@@ -5677,12 +5954,24 @@ _No request body_
     {
       "id": 0,
       "line_number": 0,
-      "item_id": 0,
+      "inventory_subject_id": "...",
+      "subject_type": "...",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "temporary_item_status": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "item_name_snapshot": "...",
+      "item_sku_snapshot": "...",
+      "unit_name_snapshot": "...",
+      "unit_symbol_snapshot": "...",
+      "category_name_snapshot": "...",
       "qty": 0,
       "accepted_qty": "accepted qty",
       "lost_qty": "lost qty",
       "batch": "...",
-      "comment": "..."
+      "comment": "...",
+      "is_draft_temporary": true
     }
   ]
 }
@@ -5753,8 +6042,14 @@ _No request body_
       "destination_site_id": 0,
       "destination_site_name": "destination site name",
       "source_site_id": "...",
-      "item_id": 0,
-      "item_name": "item name",
+      "inventory_subject_id": 0,
+      "subject_type": "subject type",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "display_name": "display name",
+      "item_name": "...",
       "sku": "...",
       "qty": "qty",
       "updated_at": "2026-01-01T00:00:00Z"
@@ -6530,13 +6825,19 @@ _No request body_
     {
       "site_id": 0,
       "site_name": "site name",
-      "item_id": 0,
-      "item_name": "item name",
+      "inventory_subject_id": 0,
+      "subject_type": "subject type",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "display_name": "display name",
+      "item_name": "...",
       "sku": "...",
-      "unit_id": 0,
-      "unit_symbol": "unit symbol",
-      "category_id": 0,
-      "category_name": "category name",
+      "unit_id": "...",
+      "unit_symbol": "...",
+      "category_id": "...",
+      "category_name": "...",
       "incoming_qty": "incoming qty",
       "outgoing_qty": "outgoing qty",
       "net_qty": "net qty",
@@ -6613,10 +6914,533 @@ _No request body_
     {
       "site_id": 0,
       "site_name": "site name",
+      "inventory_subject_id": 0,
+      "subject_type": "subject type",
+      "item_id": "...",
+      "temporary_item_id": "...",
+      "resolved_item_id": "...",
+      "resolved_item_name": "...",
+      "display_name": "display name",
       "items_count": 0,
       "positive_items_count": 0,
       "total_quantity": "total quantity",
       "last_balance_at": "..."
+    }
+  ],
+  "total_count": 0,
+  "page": 0,
+  "page_size": 0
+}
+```
+
+#### 422
+
+- Description: Validation Error
+- Content-Type: `application/json`
+- Schema: `HTTPValidationError`
+
+```json
+{
+  "detail": [
+    {
+      "loc": [
+        "..."
+      ],
+      "msg": "message",
+      "type": "error type",
+      "input": {},
+      "ctx": {}
+    }
+  ]
+}
+```
+
+---
+
+## Temporary Items
+
+### GET /api/v1/temporary-items
+
+- Summary: List Temporary Items
+- Operation ID: `list_temporary_items_api_v1_temporary_items_get`
+
+**Parameters**
+
+| Name | In | Required | Type | Description |
+| --- | --- | --- | --- | --- |
+| `status` | `query` | no | `anyOf` |  |
+| `search` | `query` | no | `anyOf` |  |
+| `created_by_user_id` | `query` | no | `anyOf` |  |
+| `resolved_item_id` | `query` | no | `anyOf` |  |
+| `created_after` | `query` | no | `anyOf` |  |
+| `created_before` | `query` | no | `anyOf` |  |
+| `page` | `query` | no | `integer` |  |
+| `page_size` | `query` | no | `integer` |  |
+| `X-User-Token` | `header` | no | `anyOf` |  |
+| `X-Device-Token` | `header` | no | `anyOf` |  |
+| `X-Client-Version` | `header` | no | `anyOf` |  |
+
+**Request body**
+
+_No request body_
+
+**Expected responses**
+
+#### 200
+
+- Description: Successful Response
+- Content-Type: `application/json`
+- Schema: `TemporaryItemListResponse`
+- Required top-level fields: `items, page, page_size, total_count`
+
+```json
+{
+  "items": [
+    {
+      "id": 0,
+      "item_id": 0,
+      "name": "name",
+      "normalized_name": "normalized name",
+      "sku": "...",
+      "unit_id": 0,
+      "unit_name": "...",
+      "unit_symbol": "...",
+      "category_id": 0,
+      "category_name": "...",
+      "description": "...",
+      "hashtags": "...",
+      "status": "status",
+      "resolution_note": "...",
+      "resolved_item_id": "...",
+      "resolution_type": "...",
+      "created_by_user_id": "00000000-0000-0000-0000-000000000000",
+      "resolved_by_user_id": "...",
+      "created_at": "2026-01-01T00:00:00Z",
+      "resolved_at": "...",
+      "updated_at": "2026-01-01T00:00:00Z",
+      "backing_item_is_active": "..."
+    }
+  ],
+  "total_count": 0,
+  "page": 0,
+  "page_size": 0
+}
+```
+
+#### 422
+
+- Description: Validation Error
+- Content-Type: `application/json`
+- Schema: `HTTPValidationError`
+
+```json
+{
+  "detail": [
+    {
+      "loc": [
+        "..."
+      ],
+      "msg": "message",
+      "type": "error type",
+      "input": {},
+      "ctx": {}
+    }
+  ]
+}
+```
+
+---
+
+### GET /api/v1/temporary-items/{temporary_item_id}
+
+- Summary: Get Temporary Item
+- Operation ID: `get_temporary_item_api_v1_temporary_items__temporary_item_id__get`
+
+**Parameters**
+
+| Name | In | Required | Type | Description |
+| --- | --- | --- | --- | --- |
+| `temporary_item_id` | `path` | yes | `integer` |  |
+| `X-User-Token` | `header` | no | `anyOf` |  |
+| `X-Device-Token` | `header` | no | `anyOf` |  |
+| `X-Client-Version` | `header` | no | `anyOf` |  |
+
+**Request body**
+
+_No request body_
+
+**Expected responses**
+
+#### 200
+
+- Description: Successful Response
+- Content-Type: `application/json`
+- Schema: `TemporaryItemResponse`
+- Required top-level fields: `category_id, created_at, created_by_user_id, id, item_id, name, normalized_name, status, unit_id, updated_at`
+
+```json
+{
+  "id": 0,
+  "item_id": 0,
+  "name": "name",
+  "normalized_name": "normalized name",
+  "sku": "string",
+  "unit_id": 0,
+  "unit_name": "string",
+  "unit_symbol": "string",
+  "category_id": 0,
+  "category_name": "string",
+  "description": "string",
+  "hashtags": [
+    "string"
+  ],
+  "status": "status",
+  "resolution_note": "string",
+  "resolved_item_id": 0,
+  "resolution_type": "string",
+  "created_by_user_id": "00000000-0000-0000-0000-000000000000",
+  "resolved_by_user_id": "00000000-0000-0000-0000-000000000000",
+  "created_at": "2026-01-01T00:00:00Z",
+  "resolved_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "backing_item_is_active": true
+}
+```
+
+#### 422
+
+- Description: Validation Error
+- Content-Type: `application/json`
+- Schema: `HTTPValidationError`
+
+```json
+{
+  "detail": [
+    {
+      "loc": [
+        "..."
+      ],
+      "msg": "message",
+      "type": "error type",
+      "input": {},
+      "ctx": {}
+    }
+  ]
+}
+```
+
+---
+
+### DELETE /api/v1/temporary-items/{temporary_item_id}
+
+- Summary: Delete Temporary Item
+- Operation ID: `delete_temporary_item_api_v1_temporary_items__temporary_item_id__delete`
+- Description: Удалить временный ТМЦ (мягкое удаление).
+
+**Parameters**
+
+| Name | In | Required | Type | Description |
+| --- | --- | --- | --- | --- |
+| `temporary_item_id` | `path` | yes | `integer` |  |
+| `X-User-Token` | `header` | no | `anyOf` |  |
+| `X-Device-Token` | `header` | no | `anyOf` |  |
+| `X-Client-Version` | `header` | no | `anyOf` |  |
+
+**Request body**
+
+_No request body_
+
+**Expected responses**
+
+#### 200
+
+- Description: Successful Response
+- Content-Type: `application/json`
+- Schema: `TemporaryItemResponse`
+- Required top-level fields: `category_id, created_at, created_by_user_id, id, item_id, name, normalized_name, status, unit_id, updated_at`
+
+```json
+{
+  "id": 0,
+  "item_id": 0,
+  "name": "name",
+  "normalized_name": "normalized name",
+  "sku": "string",
+  "unit_id": 0,
+  "unit_name": "string",
+  "unit_symbol": "string",
+  "category_id": 0,
+  "category_name": "string",
+  "description": "string",
+  "hashtags": [
+    "string"
+  ],
+  "status": "status",
+  "resolution_note": "string",
+  "resolved_item_id": 0,
+  "resolution_type": "string",
+  "created_by_user_id": "00000000-0000-0000-0000-000000000000",
+  "resolved_by_user_id": "00000000-0000-0000-0000-000000000000",
+  "created_at": "2026-01-01T00:00:00Z",
+  "resolved_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "backing_item_is_active": true
+}
+```
+
+#### 422
+
+- Description: Validation Error
+- Content-Type: `application/json`
+- Schema: `HTTPValidationError`
+
+```json
+{
+  "detail": [
+    {
+      "loc": [
+        "..."
+      ],
+      "msg": "message",
+      "type": "error type",
+      "input": {},
+      "ctx": {}
+    }
+  ]
+}
+```
+
+---
+
+### POST /api/v1/temporary-items/{temporary_item_id}/approve-as-item
+
+- Summary: Approve Temporary Item
+- Operation ID: `approve_temporary_item_api_v1_temporary_items__temporary_item_id__approve_as_item_post`
+
+**Parameters**
+
+| Name | In | Required | Type | Description |
+| --- | --- | --- | --- | --- |
+| `temporary_item_id` | `path` | yes | `integer` |  |
+| `X-User-Token` | `header` | no | `anyOf` |  |
+| `X-Device-Token` | `header` | no | `anyOf` |  |
+| `X-Client-Version` | `header` | no | `anyOf` |  |
+
+**Request body**
+
+_No request body_
+
+**Expected responses**
+
+#### 200
+
+- Description: Successful Response
+- Content-Type: `application/json`
+- Schema: `TemporaryItemResponse`
+- Required top-level fields: `category_id, created_at, created_by_user_id, id, item_id, name, normalized_name, status, unit_id, updated_at`
+
+```json
+{
+  "id": 0,
+  "item_id": 0,
+  "name": "name",
+  "normalized_name": "normalized name",
+  "sku": "string",
+  "unit_id": 0,
+  "unit_name": "string",
+  "unit_symbol": "string",
+  "category_id": 0,
+  "category_name": "string",
+  "description": "string",
+  "hashtags": [
+    "string"
+  ],
+  "status": "status",
+  "resolution_note": "string",
+  "resolved_item_id": 0,
+  "resolution_type": "string",
+  "created_by_user_id": "00000000-0000-0000-0000-000000000000",
+  "resolved_by_user_id": "00000000-0000-0000-0000-000000000000",
+  "created_at": "2026-01-01T00:00:00Z",
+  "resolved_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "backing_item_is_active": true
+}
+```
+
+#### 422
+
+- Description: Validation Error
+- Content-Type: `application/json`
+- Schema: `HTTPValidationError`
+
+```json
+{
+  "detail": [
+    {
+      "loc": [
+        "..."
+      ],
+      "msg": "message",
+      "type": "error type",
+      "input": {},
+      "ctx": {}
+    }
+  ]
+}
+```
+
+---
+
+### POST /api/v1/temporary-items/{temporary_item_id}/merge
+
+- Summary: Merge Temporary Item
+- Operation ID: `merge_temporary_item_api_v1_temporary_items__temporary_item_id__merge_post`
+
+**Parameters**
+
+| Name | In | Required | Type | Description |
+| --- | --- | --- | --- | --- |
+| `temporary_item_id` | `path` | yes | `integer` |  |
+| `X-User-Token` | `header` | no | `anyOf` |  |
+| `X-Device-Token` | `header` | no | `anyOf` |  |
+| `X-Client-Version` | `header` | no | `anyOf` |  |
+
+**Request body**
+
+- Required: yes
+- Content-Type: `application/json`
+- Schema: `TemporaryItemMergeRequest`
+- Required top-level fields: `target_item_id`
+
+```json
+{
+  "target_item_id": 0,
+  "comment": "string"
+}
+```
+
+**Expected responses**
+
+#### 200
+
+- Description: Successful Response
+- Content-Type: `application/json`
+- Schema: `TemporaryItemResponse`
+- Required top-level fields: `category_id, created_at, created_by_user_id, id, item_id, name, normalized_name, status, unit_id, updated_at`
+
+```json
+{
+  "id": 0,
+  "item_id": 0,
+  "name": "name",
+  "normalized_name": "normalized name",
+  "sku": "string",
+  "unit_id": 0,
+  "unit_name": "string",
+  "unit_symbol": "string",
+  "category_id": 0,
+  "category_name": "string",
+  "description": "string",
+  "hashtags": [
+    "string"
+  ],
+  "status": "status",
+  "resolution_note": "string",
+  "resolved_item_id": 0,
+  "resolution_type": "string",
+  "created_by_user_id": "00000000-0000-0000-0000-000000000000",
+  "resolved_by_user_id": "00000000-0000-0000-0000-000000000000",
+  "created_at": "2026-01-01T00:00:00Z",
+  "resolved_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "backing_item_is_active": true
+}
+```
+
+#### 422
+
+- Description: Validation Error
+- Content-Type: `application/json`
+- Schema: `HTTPValidationError`
+
+```json
+{
+  "detail": [
+    {
+      "loc": [
+        "..."
+      ],
+      "msg": "message",
+      "type": "error type",
+      "input": {},
+      "ctx": {}
+    }
+  ]
+}
+```
+
+---
+
+### GET /api/v1/temporary-items/{temporary_item_id}/operations
+
+- Summary: List Temporary Item Operations
+- Operation ID: `list_temporary_item_operations_api_v1_temporary_items__temporary_item_id__operations_get`
+
+**Parameters**
+
+| Name | In | Required | Type | Description |
+| --- | --- | --- | --- | --- |
+| `temporary_item_id` | `path` | yes | `integer` |  |
+| `page` | `query` | no | `integer` |  |
+| `page_size` | `query` | no | `integer` |  |
+| `X-User-Token` | `header` | no | `anyOf` |  |
+| `X-Device-Token` | `header` | no | `anyOf` |  |
+| `X-Client-Version` | `header` | no | `anyOf` |  |
+
+**Request body**
+
+_No request body_
+
+**Expected responses**
+
+#### 200
+
+- Description: Successful Response
+- Content-Type: `application/json`
+- Schema: `OperationListResponse`
+- Required top-level fields: `items, page, page_size, total_count`
+
+```json
+{
+  "items": [
+    {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "site_id": 0,
+      "operation_type": "RECEIVE",
+      "status": "draft",
+      "effective_at": "...",
+      "source_site_id": "...",
+      "destination_site_id": "...",
+      "issued_to_user_id": "...",
+      "issued_to_name": "...",
+      "recipient_id": "...",
+      "recipient_name_snapshot": "...",
+      "acceptance_required": true,
+      "acceptance_state": "not_required",
+      "acceptance_resolved_at": "...",
+      "acceptance_resolved_by_user_id": "...",
+      "created_by_user_id": "00000000-0000-0000-0000-000000000000",
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z",
+      "submitted_at": "...",
+      "submitted_by_user_id": "...",
+      "cancelled_at": "...",
+      "cancelled_by_user_id": "...",
+      "notes": "...",
+      "lines": [
+        "..."
+      ]
     }
   ],
   "total_count": 0,
@@ -6726,12 +7550,72 @@ _No request body_
       "type": "string",
       "title": "Site Name"
     },
-    "item_id": {
+    "inventory_subject_id": {
       "type": "integer",
-      "title": "Item Id"
+      "title": "Inventory Subject Id"
+    },
+    "subject_type": {
+      "type": "string",
+      "title": "Subject Type"
+    },
+    "item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Item Id",
+      "description": "[deprecated] Use inventory_subject_id to resolve item info via subject"
+    },
+    "temporary_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Temporary Item Id"
+    },
+    "resolved_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Id"
+    },
+    "resolved_item_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Name"
+    },
+    "display_name": {
+      "type": "string",
+      "title": "Display Name"
     },
     "item_name": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Item Name"
     },
     "sku": {
@@ -6746,19 +7630,47 @@ _No request body_
       "title": "Sku"
     },
     "unit_id": {
-      "type": "integer",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Unit Id"
     },
     "unit_symbol": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Unit Symbol"
     },
     "category_id": {
-      "type": "integer",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Category Id"
     },
     "category_name": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Category Name"
     },
     "qty": {
@@ -6775,12 +7687,9 @@ _No request body_
   "required": [
     "site_id",
     "site_name",
-    "item_id",
-    "item_name",
-    "unit_id",
-    "unit_symbol",
-    "category_id",
-    "category_name",
+    "inventory_subject_id",
+    "subject_type",
+    "display_name",
     "qty",
     "updated_at"
   ],
@@ -7397,6 +8306,49 @@ _No request body_
     "units"
   ],
   "title": "CatalogUnitsResponse"
+}
+```
+
+### CategoryBulkCreateRequest
+
+```json
+{
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/components/schemas/CategoryCreateRequest"
+      },
+      "type": "array",
+      "minItems": 1,
+      "title": "Items"
+    }
+  },
+  "type": "object",
+  "required": [
+    "items"
+  ],
+  "title": "CategoryBulkCreateRequest"
+}
+```
+
+### CategoryBulkCreateResponse
+
+```json
+{
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/components/schemas/CategoryResponse"
+      },
+      "type": "array",
+      "title": "Items"
+    }
+  },
+  "type": "object",
+  "required": [
+    "items"
+  ],
+  "title": "CategoryBulkCreateResponse"
 }
 ```
 
@@ -8965,12 +9917,72 @@ _No request body_
       "type": "string",
       "title": "Recipient Type"
     },
-    "item_id": {
+    "inventory_subject_id": {
       "type": "integer",
-      "title": "Item Id"
+      "title": "Inventory Subject Id"
+    },
+    "subject_type": {
+      "type": "string",
+      "title": "Subject Type"
+    },
+    "item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Item Id",
+      "description": "[deprecated] Use inventory_subject_id to resolve item info via subject"
+    },
+    "temporary_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Temporary Item Id"
+    },
+    "resolved_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Id"
+    },
+    "resolved_item_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Name"
+    },
+    "display_name": {
+      "type": "string",
+      "title": "Display Name"
     },
     "item_name": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Item Name"
     },
     "sku": {
@@ -9000,8 +10012,9 @@ _No request body_
     "recipient_id",
     "recipient_name",
     "recipient_type",
-    "item_id",
-    "item_name",
+    "inventory_subject_id",
+    "subject_type",
+    "display_name",
     "qty",
     "updated_at"
   ],
@@ -9276,12 +10289,72 @@ _No request body_
       "type": "string",
       "title": "Site Name"
     },
-    "item_id": {
+    "inventory_subject_id": {
       "type": "integer",
-      "title": "Item Id"
+      "title": "Inventory Subject Id"
+    },
+    "subject_type": {
+      "type": "string",
+      "title": "Subject Type"
+    },
+    "item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Item Id",
+      "description": "[deprecated] Use inventory_subject_id to resolve item info via subject"
+    },
+    "temporary_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Temporary Item Id"
+    },
+    "resolved_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Id"
+    },
+    "resolved_item_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Name"
+    },
+    "display_name": {
+      "type": "string",
+      "title": "Display Name"
     },
     "item_name": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Item Name"
     },
     "sku": {
@@ -9296,19 +10369,47 @@ _No request body_
       "title": "Sku"
     },
     "unit_id": {
-      "type": "integer",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Unit Id"
     },
     "unit_symbol": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Unit Symbol"
     },
     "category_id": {
-      "type": "integer",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Category Id"
     },
     "category_name": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Category Name"
     },
     "incoming_qty": {
@@ -9343,12 +10444,9 @@ _No request body_
   "required": [
     "site_id",
     "site_name",
-    "item_id",
-    "item_name",
-    "unit_id",
-    "unit_symbol",
-    "category_id",
-    "category_name",
+    "inventory_subject_id",
+    "subject_type",
+    "display_name",
     "incoming_qty",
     "outgoing_qty",
     "net_qty"
@@ -9754,12 +10852,72 @@ _No request body_
       ],
       "title": "Source Site Name"
     },
-    "item_id": {
+    "inventory_subject_id": {
       "type": "integer",
-      "title": "Item Id"
+      "title": "Inventory Subject Id"
+    },
+    "subject_type": {
+      "type": "string",
+      "title": "Subject Type"
+    },
+    "item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Item Id",
+      "description": "[deprecated] Use inventory_subject_id to resolve item info via subject"
+    },
+    "temporary_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Temporary Item Id"
+    },
+    "resolved_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Id"
+    },
+    "resolved_item_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Name"
+    },
+    "display_name": {
+      "type": "string",
+      "title": "Display Name"
     },
     "item_name": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Item Name"
     },
     "sku": {
@@ -9790,8 +10948,9 @@ _No request body_
     "operation_line_id",
     "site_id",
     "site_name",
-    "item_id",
-    "item_name",
+    "inventory_subject_id",
+    "subject_type",
+    "display_name",
     "qty",
     "updated_at"
   ],
@@ -10029,6 +11188,18 @@ _No request body_
         }
       ],
       "title": "Notes"
+    },
+    "client_request_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 100
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Client Request Id"
     }
   },
   "type": "object",
@@ -10072,8 +11243,25 @@ _No request body_
       "title": "Line Number"
     },
     "item_id": {
-      "type": "integer",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Item Id"
+    },
+    "temporary_item": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/TemporaryItemInlineCreate"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "qty": {
       "type": "integer",
@@ -10105,7 +11293,6 @@ _No request body_
   "type": "object",
   "required": [
     "line_number",
-    "item_id",
     "qty"
   ],
   "title": "OperationLineCreate",
@@ -10126,9 +11313,138 @@ _No request body_
       "type": "integer",
       "title": "Line Number"
     },
+    "inventory_subject_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Inventory Subject Id"
+    },
+    "subject_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Subject Type"
+    },
     "item_id": {
-      "type": "integer",
-      "title": "Item Id"
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Item Id",
+      "description": "[deprecated] Use inventory_subject_id to resolve item info via subject"
+    },
+    "temporary_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Temporary Item Id"
+    },
+    "temporary_item_status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Temporary Item Status"
+    },
+    "resolved_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Id"
+    },
+    "resolved_item_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Name"
+    },
+    "item_name_snapshot": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Item Name Snapshot"
+    },
+    "item_sku_snapshot": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Item Sku Snapshot"
+    },
+    "unit_name_snapshot": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Unit Name Snapshot"
+    },
+    "unit_symbol_snapshot": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Unit Symbol Snapshot"
+    },
+    "category_name_snapshot": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Category Name Snapshot"
     },
     "qty": {
       "type": "integer",
@@ -10167,13 +11483,17 @@ _No request body_
         }
       ],
       "title": "Comment"
+    },
+    "is_draft_temporary": {
+      "type": "boolean",
+      "title": "Is Draft Temporary",
+      "default": false
     }
   },
   "type": "object",
   "required": [
     "id",
     "line_number",
-    "item_id",
     "qty"
   ],
   "title": "OperationLineResponse"
@@ -10670,12 +11990,72 @@ _No request body_
       ],
       "title": "Source Site Id"
     },
-    "item_id": {
+    "inventory_subject_id": {
       "type": "integer",
-      "title": "Item Id"
+      "title": "Inventory Subject Id"
+    },
+    "subject_type": {
+      "type": "string",
+      "title": "Subject Type"
+    },
+    "item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Item Id",
+      "description": "[deprecated] Use inventory_subject_id to resolve item info via subject"
+    },
+    "temporary_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Temporary Item Id"
+    },
+    "resolved_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Id"
+    },
+    "resolved_item_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Name"
+    },
+    "display_name": {
+      "type": "string",
+      "title": "Display Name"
     },
     "item_name": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "title": "Item Name"
     },
     "sku": {
@@ -10706,8 +12086,9 @@ _No request body_
     "operation_line_id",
     "destination_site_id",
     "destination_site_name",
-    "item_id",
-    "item_name",
+    "inventory_subject_id",
+    "subject_type",
+    "display_name",
     "qty",
     "updated_at"
   ],
@@ -11563,6 +12944,63 @@ _No request body_
       "type": "string",
       "title": "Site Name"
     },
+    "inventory_subject_id": {
+      "type": "integer",
+      "title": "Inventory Subject Id"
+    },
+    "subject_type": {
+      "type": "string",
+      "title": "Subject Type"
+    },
+    "item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Item Id",
+      "description": "[deprecated] Use inventory_subject_id to resolve item info via subject"
+    },
+    "temporary_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Temporary Item Id"
+    },
+    "resolved_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Id"
+    },
+    "resolved_item_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Name"
+    },
+    "display_name": {
+      "type": "string",
+      "title": "Display Name"
+    },
     "items_count": {
       "type": "integer",
       "title": "Items Count"
@@ -11593,11 +13031,407 @@ _No request body_
   "required": [
     "site_id",
     "site_name",
+    "inventory_subject_id",
+    "subject_type",
+    "display_name",
     "items_count",
     "positive_items_count",
     "total_quantity"
   ],
   "title": "StockSummaryRow"
+}
+```
+
+### TemporaryItemInlineCreate
+
+```json
+{
+  "properties": {
+    "client_key": {
+      "type": "string",
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Client Key"
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Name"
+    },
+    "sku": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 100
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Sku"
+    },
+    "unit_id": {
+      "type": "integer",
+      "title": "Unit Id"
+    },
+    "category_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Category Id"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 2000
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Description"
+    },
+    "hashtags": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Hashtags"
+    }
+  },
+  "type": "object",
+  "required": [
+    "client_key",
+    "name",
+    "unit_id"
+  ],
+  "title": "TemporaryItemInlineCreate"
+}
+```
+
+### TemporaryItemListResponse
+
+```json
+{
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/components/schemas/TemporaryItemResponse"
+      },
+      "type": "array",
+      "title": "Items"
+    },
+    "total_count": {
+      "type": "integer",
+      "title": "Total Count"
+    },
+    "page": {
+      "type": "integer",
+      "title": "Page"
+    },
+    "page_size": {
+      "type": "integer",
+      "title": "Page Size"
+    }
+  },
+  "type": "object",
+  "required": [
+    "items",
+    "total_count",
+    "page",
+    "page_size"
+  ],
+  "title": "TemporaryItemListResponse"
+}
+```
+
+### TemporaryItemMergeRequest
+
+```json
+{
+  "properties": {
+    "target_item_id": {
+      "type": "integer",
+      "title": "Target Item Id"
+    },
+    "comment": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 1000
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Comment"
+    }
+  },
+  "type": "object",
+  "required": [
+    "target_item_id"
+  ],
+  "title": "TemporaryItemMergeRequest"
+}
+```
+
+### TemporaryItemResponse
+
+```json
+{
+  "properties": {
+    "id": {
+      "type": "integer",
+      "title": "Id"
+    },
+    "item_id": {
+      "type": "integer",
+      "title": "Item Id"
+    },
+    "name": {
+      "type": "string",
+      "title": "Name"
+    },
+    "normalized_name": {
+      "type": "string",
+      "title": "Normalized Name"
+    },
+    "sku": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Sku"
+    },
+    "unit_id": {
+      "type": "integer",
+      "title": "Unit Id"
+    },
+    "unit_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Unit Name"
+    },
+    "unit_symbol": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Unit Symbol"
+    },
+    "category_id": {
+      "type": "integer",
+      "title": "Category Id"
+    },
+    "category_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Category Name"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Description"
+    },
+    "hashtags": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Hashtags"
+    },
+    "status": {
+      "type": "string",
+      "title": "Status"
+    },
+    "resolution_note": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolution Note"
+    },
+    "resolved_item_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved Item Id"
+    },
+    "resolution_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolution Type"
+    },
+    "created_by_user_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Created By User Id"
+    },
+    "resolved_by_user_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved By User Id"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+    },
+    "resolved_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Resolved At"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Updated At"
+    },
+    "backing_item_is_active": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Backing Item Is Active"
+    }
+  },
+  "type": "object",
+  "required": [
+    "id",
+    "item_id",
+    "name",
+    "normalized_name",
+    "unit_id",
+    "category_id",
+    "status",
+    "created_by_user_id",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "TemporaryItemResponse"
+}
+```
+
+### UnitBulkCreateRequest
+
+```json
+{
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/components/schemas/UnitCreateRequest"
+      },
+      "type": "array",
+      "minItems": 1,
+      "title": "Items"
+    }
+  },
+  "type": "object",
+  "required": [
+    "items"
+  ],
+  "title": "UnitBulkCreateRequest"
+}
+```
+
+### UnitBulkCreateResponse
+
+```json
+{
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/components/schemas/UnitResponse"
+      },
+      "type": "array",
+      "title": "Items"
+    }
+  },
+  "type": "object",
+  "required": [
+    "items"
+  ],
+  "title": "UnitBulkCreateResponse"
 }
 ```
 

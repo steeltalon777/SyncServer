@@ -47,11 +47,13 @@ Base prefix: `/api/v1`
 - `GET /catalog/admin/units` - list units
 - `GET /catalog/admin/units/{unit_id}` - get unit by ID
 - `POST /catalog/admin/units` - create unit
+- `POST /catalog/admin/units/bulk` - create units in one atomic request
 - `PATCH /catalog/admin/units/{unit_id}` - update unit
 - `DELETE /catalog/admin/units/{unit_id}` - delete unit
 - `GET /catalog/admin/categories` - list categories
 - `GET /catalog/admin/categories/{category_id}` - get category by ID
 - `POST /catalog/admin/categories` - create category
+- `POST /catalog/admin/categories/bulk` - create categories in one atomic request
 - `PATCH /catalog/admin/categories/{category_id}` - update category
 - `DELETE /catalog/admin/categories/{category_id}` - delete category
 - `GET /catalog/admin/items` - list items
