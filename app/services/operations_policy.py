@@ -10,18 +10,23 @@ from app.services.uow import UnitOfWork
 class OperationsPolicy:
     """Centralized access rules for operations and acceptance workflows."""
 
-    READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
     WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
     TEMPORARY_ITEM_CREATE_ROLES = {"chief_storekeeper", "storekeeper"}
 
     @staticmethod
+    async def _resolve_all_site_ids(uow: UnitOfWork) -> list[int]:
+        sites, _ = await uow.sites.list_sites(
+            filter=SiteFilter(is_active=None),
+            user_site_ids=None,
+            page=1,
+            page_size=1000,
+        )
+        return [site.id for site in sites]
+
+    @staticmethod
     def require_read_site(identity: Identity, site_id: int) -> None:
-        if identity.has_global_business_access:
-            return
-        if identity.role not in OperationsPolicy.READ_ROLES:
+        if identity.user is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read operations permission required")
-        if not identity.has_site_access(site_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user has no view access to site")
 
     @staticmethod
     def require_operate_site(identity: Identity, site_id: int) -> None:
@@ -62,8 +67,10 @@ class OperationsPolicy:
             )
 
     @staticmethod
-    def require_operation_submit_permission(identity: Identity) -> None:
+    def require_operation_submit_permission(identity: Identity, site_id: int | None = None) -> None:
         if identity.has_global_business_access:
+            return
+        if identity.role == "storekeeper" and site_id is not None and identity.can_operate_at_site(site_id):
             return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -117,9 +124,7 @@ class OperationsPolicy:
 
     @staticmethod
     def require_assets_read_access(identity: Identity) -> None:
-        if identity.has_global_business_access:
-            return
-        if identity.role not in OperationsPolicy.READ_ROLES:
+        if identity.user is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read assets permission required")
 
     @staticmethod
@@ -133,28 +138,26 @@ class OperationsPolicy:
 
     @staticmethod
     async def resolve_readable_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-        if identity.has_global_business_access:
-            sites, _ = await uow.sites.list_sites(
-                filter=SiteFilter(is_active=None),
-                user_site_ids=None,
-                page=1,
-                page_size=1000,
-            )
-            return [site.id for site in sites]
-        if identity.role not in OperationsPolicy.READ_ROLES:
+        if identity.user is None:
             return []
-        return identity.get_accessible_site_ids()
+        return await OperationsPolicy._resolve_all_site_ids(uow)
 
     @staticmethod
     async def resolve_visible_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
+        if identity.user is None:
+            return []
+        return await OperationsPolicy._resolve_all_site_ids(uow)
+
+    @staticmethod
+    async def resolve_acceptance_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
         if identity.has_global_business_access:
-            sites, _ = await uow.sites.list_sites(
-                filter=SiteFilter(is_active=None),
-                user_site_ids=None,
-                page=1,
-                page_size=1000,
-            )
-            return [site.id for site in sites]
+            return await OperationsPolicy._resolve_all_site_ids(uow)
+        if identity.role != "storekeeper":
+            return []
 
         scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
-        return [scope.site_id for scope in scopes if scope.is_active and scope.can_view]
+        return [
+            scope.site_id
+            for scope in scopes
+            if scope.is_active and scope.can_view and scope.can_operate
+        ]

@@ -24,23 +24,15 @@ from fastapi.responses import HTMLResponse, Response
 router = APIRouter(prefix="/documents")
 logger = logging.getLogger(__name__)
 
-READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
 
 
 def _require_read_site(identity: Identity, site_id: int) -> None:
     """Проверить права на чтение документов площадки."""
-    if identity.has_global_business_access:
-        return
-    if identity.role not in READ_ROLES:
+    if identity.user is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="read documents permission required",
-        )
-    if not identity.has_site_access(site_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="user has no view access to site",
         )
 
 
@@ -192,13 +184,10 @@ async def list_documents(
     identity: Identity = Depends(require_user_identity),
 ) -> DocumentListResponse:
     """Получить список документов с фильтрацией."""
-    # Если указана площадка, проверяем права на неё
     if site_id is not None:
         _require_read_site(identity, site_id)
-    elif not identity.has_global_business_access:
-        # Если площадка не указана и нет глобальных прав, возвращаем только доступные площадки
-        # Для упрощения возвращаем пустой список - в реальности нужно получить доступные площадки
-        return DocumentListResponse(items=[], total=0, offset=offset, limit=limit)
+    else:
+        _require_read_site(identity, 0)
 
     # Создаём фильтр
     filter_obj = DocumentFilter(

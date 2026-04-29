@@ -185,8 +185,8 @@ async def test_get_lost_asset_detail(
     assert data["site_id"] == seed["source_site_id"]
     assert data["source_site_id"] is None
 
-    # Проверяем, что пользователь без доступа к сайту не может получить детали
-    # Создаём новый сайт и пользователя с доступом только к нему
+    # Любой залогиненный пользователь может просматривать потерянные активы,
+    # даже если операционный доступ выдан на другой склад.
     async with session_factory() as session:
         other_site = Site(code=f"OTHER-{uuid4().hex[:6]}", name=f"Other Site")
         session.add(other_site)
@@ -218,11 +218,12 @@ async def test_get_lost_asset_detail(
         await session.commit()
         other_token = str(other_user.user_token)
 
-    forbidden = await client.get(
+    visible_to_other_user = await client.get(
         f"/api/v1/lost-assets/{lost_line_id}",
         headers={"X-User-Token": other_token},
     )
-    assert forbidden.status_code == 403
+    assert visible_to_other_user.status_code == 200
+    assert visible_to_other_user.json()["operation_line_id"] == lost_line_id
 
     # Проверяем 404 для несуществующего operation_line_id
     not_found = await client.get(

@@ -52,6 +52,42 @@ def test_storekeeper_can_create_operation_on_scoped_site() -> None:
     OperationsPolicy.require_operate_site(identity, 10)
 
 
+def test_storekeeper_can_read_operation_on_any_site() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+
+    OperationsPolicy.require_read_site(identity, 999)
+
+
+@pytest.mark.asyncio
+async def test_operation_read_site_ids_include_all_sites_regardless_of_scope() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+
+    class SitesRepo:
+        async def list_sites(self, **kwargs):
+            return [SimpleNamespace(id=10), SimpleNamespace(id=999)], 2
+
+    uow = SimpleNamespace(sites=SitesRepo())
+
+    site_ids = await OperationsPolicy.resolve_readable_site_ids(uow, identity)
+
+    assert site_ids == [10, 999]
+
+
+@pytest.mark.asyncio
+async def test_asset_visible_site_ids_include_all_sites_regardless_of_scope() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+
+    class SitesRepo:
+        async def list_sites(self, **kwargs):
+            return [SimpleNamespace(id=10), SimpleNamespace(id=999)], 2
+
+    uow = SimpleNamespace(sites=SitesRepo())
+
+    site_ids = await OperationsPolicy.resolve_visible_site_ids(uow, identity)
+
+    assert site_ids == [10, 999]
+
+
 def test_chief_storekeeper_has_global_operational_access() -> None:
     identity = _identity(role="chief_storekeeper")
 
@@ -127,6 +163,42 @@ def test_observer_cannot_accept_even_with_view_scope() -> None:
         OperationsPolicy.require_acceptance_site(identity, 20)
 
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_acceptance_site_ids_use_operate_scopes_only() -> None:
+    identity = _identity(
+        role="storekeeper",
+        scopes=[
+            _scope(10, can_view=True, can_operate=True),
+            _scope(20, can_view=True, can_operate=False),
+        ],
+    )
+
+    class ScopesRepo:
+        async def list_user_scopes(self, user_id):
+            return identity.scopes
+
+    uow = SimpleNamespace(user_access_scopes=ScopesRepo())
+
+    site_ids = await OperationsPolicy.resolve_acceptance_site_ids(uow, identity)
+
+    assert site_ids == [10]
+
+
+@pytest.mark.asyncio
+async def test_chief_acceptance_site_ids_include_all_sites() -> None:
+    identity = _identity(role="chief_storekeeper")
+
+    class SitesRepo:
+        async def list_sites(self, **kwargs):
+            return [SimpleNamespace(id=10), SimpleNamespace(id=20)], 2
+
+    uow = SimpleNamespace(sites=SitesRepo())
+
+    site_ids = await OperationsPolicy.resolve_acceptance_site_ids(uow, identity)
+
+    assert site_ids == [10, 20]
 
 
 def test_root_can_accept_without_site_scope() -> None:

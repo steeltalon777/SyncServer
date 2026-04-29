@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationInfo, field_serializer, field_validator, model_validator
 
 from app.schemas.common import ORMBaseModel
 from app.schemas.temporary_item import TemporaryItemInlineCreate
@@ -30,12 +30,12 @@ class OperationLineCreate(BaseModel):
     line_number: int = Field(ge=1)
     item_id: int | None = None
     temporary_item: TemporaryItemInlineCreate | None = None
-    qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
+    qty: Decimal = Field(validation_alias=AliasChoices("qty", "quantity"), max_digits=18, decimal_places=3)
     batch: str | None = None
     comment: str | None = None
 
     @property
-    def quantity(self) -> int:
+    def quantity(self) -> Decimal:
         return self.qty
 
     @property
@@ -44,7 +44,7 @@ class OperationLineCreate(BaseModel):
 
     @field_validator("qty")
     @classmethod
-    def validate_qty_not_zero(cls, value: int) -> int:
+    def validate_qty_not_zero(cls, value: Decimal) -> Decimal:
         if value == 0:
             raise ValueError("qty must not be zero")
         return value
@@ -169,15 +169,23 @@ class OperationLineResponse(ORMBaseModel):
     unit_name_snapshot: str | None = None
     unit_symbol_snapshot: str | None = None
     category_name_snapshot: str | None = None
-    qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
+    qty: Decimal = Field(validation_alias=AliasChoices("qty", "quantity"), max_digits=18, decimal_places=3)
     accepted_qty: Decimal = Decimal("0")
     lost_qty: Decimal = Decimal("0")
     batch: str | None = None
     comment: str | None = Field(default=None, validation_alias=AliasChoices("comment", "notes"))
     is_draft_temporary: bool = False
 
+    @field_serializer("qty")
+    def serialize_qty(self, value: Decimal) -> str:
+        text = format(value.normalize(), "f")
+        if "." not in text:
+            return text
+        stripped = text.rstrip("0").rstrip(".")
+        return stripped or "0"
+
     @property
-    def quantity(self) -> int:
+    def quantity(self) -> Decimal:
         return self.qty
 
     @property

@@ -7,9 +7,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.routes_balances import _resolve_visible_site_ids
+from app.core.identity import Identity
 from app.core.db import get_db
 from app.models.site import Site
 from app.models.user import User
+from app.models.user_access_scope import UserAccessScope
 from main import create_app
 
 app = create_app(enable_startup_migrations=False)
@@ -86,6 +89,43 @@ async def test_balances_endpoint(
     assert data["total_count"] >= 0
     assert data["page"] == 1
     assert data["page_size"] == 100
+
+
+@pytest.mark.asyncio
+async def test_balance_read_site_ids_include_all_sites_regardless_of_scope() -> None:
+    user = User(
+        username=f"storekeeper-{uuid4().hex[:6]}",
+        email=f"storekeeper-{uuid4().hex[:6]}@example.com",
+        full_name="Storekeeper",
+        is_active=True,
+        is_root=False,
+        role="storekeeper",
+        default_site_id=None,
+    )
+    identity = Identity.from_user_and_device(
+        user=user,
+        device=None,
+        scopes=[
+            UserAccessScope(
+                user_id=uuid4(),
+                site_id=10,
+                can_view=True,
+                can_operate=True,
+                can_manage_catalog=False,
+                is_active=True,
+            )
+        ],
+    )
+
+    class SitesRepo:
+        async def list_sites(self, **kwargs):
+            return [Site(id=10, code="A", name="A"), Site(id=999, code="B", name="B")], 2
+
+    uow = type("FakeUow", (), {"sites": SitesRepo()})()
+
+    site_ids = await _resolve_visible_site_ids(uow, identity)
+
+    assert site_ids == [10, 999]
 
 
 @pytest.mark.asyncio

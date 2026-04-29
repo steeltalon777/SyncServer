@@ -597,9 +597,12 @@ class MachineService:
         return operation.created_by_user_id == identity.user_id
 
     @staticmethod
-    def _can_submit(identity: Identity) -> bool:
+    def _can_submit(identity: Identity, operation=None) -> bool:
         if identity.has_global_business_access:
             return True
+        if identity.role == "storekeeper" and operation is not None:
+            site_id = operation.site_id
+            return identity.can_operate_at_site(site_id)
         return False
 
     @staticmethod
@@ -1009,7 +1012,7 @@ class MachineService:
                     errors.append({"input_path": input_path, "code": "invalid_status", "message": "only draft operations can be submitted"})
                     summary["error"] += 1
                     continue
-                if not MachineService._can_submit(identity):
+                if not MachineService._can_submit(identity, operation=operation):
                     records.append(
                         {
                             "input_path": input_path,

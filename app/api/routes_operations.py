@@ -4,8 +4,6 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-
 from app.api.deps import get_request_id, get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.asset_register import OperationAcceptLinesRequest
@@ -24,6 +22,7 @@ from app.schemas.operation import (
 from app.services.operations_policy import OperationsPolicy
 from app.services.operations_service import OperationsService
 from app.services.uow import UnitOfWork
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 router = APIRouter(prefix="/operations")
 logger = logging.getLogger(__name__)
@@ -213,7 +212,7 @@ async def submit_operation(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
         OperationsPolicy.require_operate_site(identity, operation.site_id)
-        OperationsPolicy.require_operation_submit_permission(identity)
+        OperationsPolicy.require_operation_submit_permission(identity, site_id=operation.site_id)
         if operation.operation_type == "MOVE":
             OperationsPolicy.require_move_access(identity, operation.source_site_id, operation.destination_site_id)
 

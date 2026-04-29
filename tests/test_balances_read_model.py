@@ -67,6 +67,7 @@ async def _seed_balances_fixture(
             name=f"Whole Milk {suffix}",
             category_id=milk_category.id,
             unit_id=unit.id,
+            hashtags=[f"dairy-{suffix}", "fresh"],
             is_active=True,
         )
         tool_item = Item(
@@ -100,6 +101,7 @@ async def _seed_balances_fixture(
             "site_name": site.name,
             "unit_symbol": unit.symbol,
             "category_name": milk_category.name,
+            "hashtag": f"dairy-{suffix}",
         }
 
 
@@ -132,3 +134,16 @@ async def test_balances_read_model_returns_ui_ready_rows_and_filters(
     assert row["unit_symbol"] == seed["unit_symbol"]
     assert row["category_name"] == seed["category_name"]
     assert row["qty"] == "7"
+
+    hashtag_response = await client.get(
+        "/api/v1/balances",
+        headers={"X-User-Token": seed["token"]},
+        params={
+            "search": f"#{seed['hashtag']}",
+            "page": 1,
+            "page_size": 20,
+        },
+    )
+
+    assert hashtag_response.status_code == 200
+    assert hashtag_response.json()["total_count"] == 1

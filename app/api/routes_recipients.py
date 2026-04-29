@@ -16,14 +16,11 @@ from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/recipients")
 
-READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
 
 
 def _require_read(identity: Identity) -> None:
-    if identity.has_global_business_access:
-        return
-    if identity.role not in READ_ROLES:
+    if identity.user is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read recipients permission required")
 
 

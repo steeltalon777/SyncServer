@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -47,6 +47,41 @@ async def _validate_default_site(uow: UnitOfWork, default_site_id: int | None) -
             status_code=status.HTTP_404_NOT_FOUND,
             detail="default site not found",
         )
+
+
+async def _build_visible_sites_payload(uow: UnitOfWork, user: User) -> list[dict]:
+    is_global = _has_global_business_access(user)
+    sites, _ = await uow.sites.list_sites(
+        filter=SiteFilter(is_active=True),
+        user_site_ids=None,
+        page=1,
+        page_size=1000,
+    )
+
+    scope_by_site = {}
+    if not is_global:
+        scopes = list(await uow.user_access_scopes.list_user_scopes(user.id))
+        scope_by_site = {scope.site_id: scope for scope in scopes if scope.is_active}
+
+    site_payload = []
+    for site in sites:
+        scope = scope_by_site.get(site.id)
+        site_payload.append(
+            {
+                "site_id": site.id,
+                "code": site.code,
+                "name": site.name,
+                "is_active": site.is_active,
+                "permissions": {
+                    "can_view": True,
+                    "can_operate": True if is_global else bool(scope and scope.can_view and scope.can_operate),
+                    "can_manage_catalog": True
+                    if is_global
+                    else bool(scope and scope.can_view and scope.can_operate and scope.can_manage_catalog),
+                },
+            }
+        )
+    return site_payload
 
 
 @router.post("/sync-user")
@@ -163,61 +198,11 @@ async def get_user_sites(
     user = identity.user
 
     async with uow:
-        if _has_global_business_access(user):
-            sites, _ = await uow.sites.list_sites(
-                filter=SiteFilter(is_active=True),
-                user_site_ids=None,
-                page=1,
-                page_size=1000,
-            )
-            return {
-                "is_root": user.is_root,
-                "available_sites": [
-                    {
-                        "site_id": site.id,
-                        "code": site.code,
-                        "name": site.name,
-                        "is_active": site.is_active,
-                        "permissions": {
-                            "can_view": True,
-                            "can_operate": True,
-                            "can_manage_catalog": True,
-                        },
-                    }
-                    for site in sites
-                ],
-            }
-
-        scopes = list(await uow.user_access_scopes.list_user_scopes(user.id))
-        scope_by_site = {scope.site_id: scope for scope in scopes if scope.is_active and scope.can_view}
-        site_ids = list(scope_by_site.keys())
-
-        if not site_ids:
-            return {"is_root": False, "available_sites": []}
-
-        sites, _ = await uow.sites.list_sites(
-            filter=SiteFilter(is_active=True),
-            user_site_ids=site_ids,
-            page=1,
-            page_size=1000,
-        )
+        available_sites = await _build_visible_sites_payload(uow, user)
 
         return {
-            "is_root": False,
-            "available_sites": [
-                {
-                    "site_id": site.id,
-                    "code": site.code,
-                    "name": site.name,
-                    "is_active": site.is_active,
-                    "permissions": {
-                        "can_view": scope_by_site[site.id].can_view,
-                        "can_operate": scope_by_site[site.id].can_operate,
-                        "can_manage_catalog": scope_by_site[site.id].can_manage_catalog,
-                    },
-                }
-                for site in sites
-            ],
+            "is_root": user.is_root,
+            "available_sites": available_sites,
         }
 
 
@@ -232,55 +217,8 @@ async def get_auth_context(
     async with uow:
         access_service = AccessService(uow)
 
-        if _has_global_business_access(user):
-            sites, _ = await uow.sites.list_sites(
-                filter=SiteFilter(is_active=True),
-                user_site_ids=None,
-                page=1,
-                page_size=1000,
-            )
-            available_sites = [
-                {
-                    "site_id": site.id,
-                    "code": site.code,
-                    "name": site.name,
-                    "is_active": site.is_active,
-                    "permissions": {
-                        "can_view": True,
-                        "can_operate": True,
-                        "can_manage_catalog": True,
-                    },
-                }
-                for site in sites
-            ]
-            accessible_site_ids = [site["site_id"] for site in available_sites]
-        else:
-            scopes = list(await uow.user_access_scopes.list_user_scopes(user.id))
-            scope_by_site = {scope.site_id: scope for scope in scopes if scope.is_active and scope.can_view}
-            accessible_site_ids = list(scope_by_site.keys())
-            if accessible_site_ids:
-                sites, _ = await uow.sites.list_sites(
-                    filter=SiteFilter(is_active=True),
-                    user_site_ids=accessible_site_ids,
-                    page=1,
-                    page_size=1000,
-                )
-            else:
-                sites = []
-            available_sites = [
-                {
-                    "site_id": site.id,
-                    "code": site.code,
-                    "name": site.name,
-                    "is_active": site.is_active,
-                    "permissions": {
-                        "can_view": scope_by_site[site.id].can_view,
-                        "can_operate": scope_by_site[site.id].can_operate,
-                        "can_manage_catalog": scope_by_site[site.id].can_manage_catalog,
-                    },
-                }
-                for site in sites
-            ]
+        available_sites = await _build_visible_sites_payload(uow, user)
+        accessible_site_ids = [site["site_id"] for site in available_sites]
 
         default_site = None
         if user.default_site_id in accessible_site_ids:
@@ -296,11 +234,13 @@ async def get_auth_context(
                 user_id=user.id,
                 site_id=default_site["site_id"],
             )
+            permissions_summary["can_read_operations"] = True
+            permissions_summary["can_read_balances"] = True
         else:
             permissions_summary = {
-                "can_read_operations": False,
+                "can_read_operations": True,
                 "can_create_operations": False,
-                "can_read_balances": False,
+                "can_read_balances": True,
                 "can_manage_catalog": False,
                 "can_manage_root_admin": user.is_root,
                 "is_root": user.is_root,

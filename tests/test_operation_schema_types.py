@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from app.schemas.operation import OperationCreate
 
 
-def _base_payload(operation_type: str, qty: int) -> dict:
+def _base_payload(operation_type: str, qty: int | str) -> dict:
     payload = {
         "operation_type": operation_type,
         "site_id": 1,
@@ -41,6 +41,12 @@ def test_non_adjustment_operations_require_positive_qty() -> None:
 def test_adjustment_allows_negative_qty() -> None:
     model = OperationCreate.model_validate(_base_payload("ADJUSTMENT", -5))
     assert model.lines[0].qty == -5
+
+
+def test_operation_create_accepts_decimal_qty() -> None:
+    model = OperationCreate.model_validate(_base_payload("RECEIVE", "1.250"))
+
+    assert str(model.lines[0].qty) == "1.250"
 
 
 def test_all_operations_reject_zero_qty() -> None:

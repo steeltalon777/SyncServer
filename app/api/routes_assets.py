@@ -40,7 +40,7 @@ async def list_pending_acceptance(
     async with uow:
         visible_site_ids = await OperationsPolicy.resolve_visible_site_ids(uow, identity)
         if site_id is not None and site_id not in visible_site_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="no access to requested site")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="requested site not found")
 
         rows, total_count = await uow.asset_registers.list_pending(
             user_site_ids=visible_site_ids,
@@ -81,7 +81,7 @@ async def list_lost_assets(
     async with uow:
         visible_site_ids = await OperationsPolicy.resolve_visible_site_ids(uow, identity)
         if site_id is not None and site_id not in visible_site_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="no access to requested site")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="requested site not found")
 
         rows, total_count = await uow.asset_registers.list_lost(
             user_site_ids=visible_site_ids,
@@ -118,10 +118,9 @@ async def get_lost_asset(
         row = await uow.asset_registers.get_lost_row(operation_line_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lost asset not found")
-        # Проверить доступ к site_id
         visible_site_ids = await OperationsPolicy.resolve_visible_site_ids(uow, identity)
         if row["site_id"] not in visible_site_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this lost asset")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lost asset not found")
         return LostAssetRow.model_validate(row)
 
 

@@ -27,7 +27,6 @@ from app.services.uow import UnitOfWork
 router = APIRouter(prefix="/catalog")
 logger = logging.getLogger(__name__)
 
-ALLOWED_CATALOG_READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 DEFAULT_CATEGORY_READ_INCLUDES = {
     "parent",
     "parent_chain_summary",
@@ -37,36 +36,25 @@ SUPPORTED_CATEGORY_READ_INCLUDES = set(DEFAULT_CATEGORY_READ_INCLUDES)
 
 
 async def _resolve_accessible_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if identity.has_global_business_access:
-        sites, _ = await uow.sites.list_sites(
-            filter=SiteFilter(is_active=True),
-            user_site_ids=None,
-            page=1,
-            page_size=1000,
-        )
-        return [site.id for site in sites]
+    if identity.user is None:
+        return []
 
-    scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
-    return [scope.site_id for scope in scopes if scope.is_active and scope.can_view]
+    sites, _ = await uow.sites.list_sites(
+        filter=SiteFilter(is_active=True),
+        user_site_ids=None,
+        page=1,
+        page_size=1000,
+    )
+    return [site.id for site in sites]
 
 
 def _require_catalog_read_access(identity: Identity, accessible_site_ids: list[int], site_id: int | None = None) -> None:
-    if identity.has_global_business_access:
-        return
-    if identity.role not in ALLOWED_CATALOG_READ_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="catalog read access denied",
-        )
-    if not accessible_site_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="catalog read access denied",
-        )
+    if identity.user is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="catalog read access denied")
     if site_id is not None and site_id not in accessible_site_ids:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="no access to requested site",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="requested site not found",
         )
 
 
@@ -157,14 +145,25 @@ async def list_sites(
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogSitesResponse:
     async with uow:
-        if identity.has_global_business_access:
-            sites, _ = await uow.sites.list_sites(
-                filter=SiteFilter(is_active=is_active),
-                user_site_ids=None,
-                page=1,
-                page_size=1000,
-            )
-            site_payload = [
+        _require_catalog_read_access(identity, [])
+        sites, _ = await uow.sites.list_sites(
+            filter=SiteFilter(is_active=is_active),
+            user_site_ids=None,
+            page=1,
+            page_size=1000,
+        )
+        scope_by_site_id = {}
+        if not identity.has_global_business_access:
+            scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
+            scope_by_site_id = {
+                scope.site_id: scope
+                for scope in scopes
+                if scope.is_active
+            }
+        site_payload = []
+        for site in sites:
+            scope = scope_by_site_id.get(site.id)
+            site_payload.append(
                 {
                     "site_id": site.id,
                     "code": site.code,
@@ -172,49 +171,15 @@ async def list_sites(
                     "is_active": site.is_active,
                     "permissions": {
                         "can_view": True,
-                        "can_operate": True,
-                        "can_manage_catalog": True,
+                        "can_operate": True
+                        if identity.has_global_business_access
+                        else bool(scope and scope.can_view and scope.can_operate),
+                        "can_manage_catalog": True
+                        if identity.has_global_business_access
+                        else bool(scope and scope.can_view and scope.can_operate and scope.can_manage_catalog),
                     },
                 }
-                for site in sites
-            ]
-        else:
-            if identity.role not in ALLOWED_CATALOG_READ_ROLES:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="catalog read access denied",
-                )
-
-            scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
-            scope_by_site_id = {
-                scope.site_id: scope
-                for scope in scopes
-                if scope.is_active and scope.can_view
-            }
-            site_ids = list(scope_by_site_id.keys())
-            if not site_ids:
-                site_payload = []
-            else:
-                sites, _ = await uow.sites.list_sites(
-                    filter=SiteFilter(is_active=is_active),
-                    user_site_ids=site_ids,
-                    page=1,
-                    page_size=1000,
-                )
-                site_payload = [
-                    {
-                        "site_id": site.id,
-                        "code": site.code,
-                        "name": site.name,
-                        "is_active": site.is_active,
-                        "permissions": {
-                            "can_view": scope_by_site_id[site.id].can_view,
-                            "can_operate": scope_by_site_id[site.id].can_operate,
-                            "can_manage_catalog": scope_by_site_id[site.id].can_manage_catalog,
-                        },
-                    }
-                    for site in sites
-                ]
+            )
 
     logger.info("request_id=%s catalog_sites returned=%s", get_request_id(request), len(site_payload))
     return CatalogSitesResponse(sites=site_payload, server_time=datetime.now(UTC))

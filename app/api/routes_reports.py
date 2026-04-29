@@ -21,13 +21,8 @@ from app.services.uow import UnitOfWork
 router = APIRouter(prefix="/reports")
 logger = logging.getLogger(__name__)
 
-READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
-
-
 def _require_read_access(identity: Identity) -> None:
-    if identity.has_global_business_access:
-        return
-    if identity.role not in READ_ROLES:
+    if identity.user is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="read reports permission required",
@@ -35,17 +30,16 @@ def _require_read_access(identity: Identity) -> None:
 
 
 async def _resolve_visible_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if identity.has_global_business_access:
-        sites, _ = await uow.sites.list_sites(
-            filter=SiteFilter(is_active=None),
-            user_site_ids=None,
-            page=1,
-            page_size=1000,
-        )
-        return [site.id for site in sites]
+    if identity.user is None:
+        return []
 
-    scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
-    return [scope.site_id for scope in scopes if scope.is_active and scope.can_view]
+    sites, _ = await uow.sites.list_sites(
+        filter=SiteFilter(is_active=None),
+        user_site_ids=None,
+        page=1,
+        page_size=1000,
+    )
+    return [site.id for site in sites]
 
 
 @router.get("/item-movement", response_model=ItemMovementReportResponse)
@@ -73,8 +67,8 @@ async def list_item_movement_report(
         visible_site_ids = await _resolve_visible_site_ids(uow, identity)
         if site_id is not None and site_id not in visible_site_ids:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="user does not have access to requested site",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="requested site not found",
             )
 
         filter_data = ItemMovementFilter(
@@ -127,8 +121,8 @@ async def list_stock_summary_report(
         visible_site_ids = await _resolve_visible_site_ids(uow, identity)
         if site_id is not None and site_id not in visible_site_ids:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="user does not have access to requested site",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="requested site not found",
             )
 
         filter_data = StockSummaryFilter(

@@ -8,7 +8,7 @@ from app.models.item import Item
 from app.models.site import Site
 from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -122,12 +122,17 @@ class BalancesRepo:
             stmt = stmt.where(Item.category_id == filter.category_id)
 
         if filter.search:
-            term = f"%{filter.search.strip()}%"
+            search_value = filter.search.strip()
+            term = f"%{search_value.lstrip('#')}%"
             stmt = stmt.where(
                 or_(
                     Item.name.ilike(term),
                     Item.sku.ilike(term),
                     Category.name.ilike(term),
+                    cast(Item.hashtags, String).ilike(term),
+                    TemporaryItem.name.ilike(term),
+                    TemporaryItem.sku.ilike(term),
+                    cast(TemporaryItem.hashtags, String).ilike(term),
                     Site.name.ilike(term),
                 )
             )

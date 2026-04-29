@@ -330,12 +330,12 @@ async def test_permission_checks(
     test_document: Document,
     test_operation_with_lines: Operation,
 ):
-    """Test that users without proper site access are denied."""
+    """Read-only document access is global, while generation still requires operate rights."""
     response = await client.get(
         f"/api/v1/documents/{test_document.id}",
         headers=auth_headers_user_no_access,
     )
-    assert response.status_code in [403, 404]
+    assert response.status_code == 200
 
     response = await client.post(
         "/api/v1/documents/generate",

@@ -293,7 +293,7 @@ async def test_item_movement_report_aggregates_submitted_operations_for_period(
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_stock_summary_report_respects_visible_sites_scope(
+async def test_stock_summary_report_is_visible_across_all_sites_for_authenticated_user(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -307,17 +307,16 @@ async def test_stock_summary_report_respects_visible_sites_scope(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["total_count"] == 2
+    assert body["total_count"] == 3
 
     rows = body["items"]
-    assert len(rows) == 2
-    assert all(row["site_name"] == seed["site_main_name"] for row in rows)
+    assert len(rows) == 3
     assert all(row["subject_type"] == "catalog_item" for row in rows)
     assert all(row["items_count"] == 1 for row in rows)
     assert all(row["positive_items_count"] == 1 for row in rows)
-    assert sum(Decimal(row["total_quantity"]) for row in rows) == Decimal("5")
+    assert sum(Decimal(row["total_quantity"]) for row in rows) == Decimal("13")
 
     display_names = {row["display_name"] for row in rows}
     assert seed["tracked_item_name"] in display_names
     assert seed["helper_item_name"] in display_names
-    assert seed["reserve_item_name"] not in display_names
+    assert seed["reserve_item_name"] in display_names
