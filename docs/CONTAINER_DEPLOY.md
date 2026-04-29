@@ -6,9 +6,9 @@ The web process no longer runs Alembic during application startup.
 
 This separation is intentional:
 
-- Alembic initializes logging through [`fileConfig()`](../alembic/env.py:19) inside the same process.
-- When that happens during FastAPI / Uvicorn startup, it can override the normal Uvicorn logging setup.
-- Running migrations in a separate container step keeps the web process focused on serving HTTP traffic and preserves normal access logs.
+- Alembic logging is configured through the same `.env`-driven policy as the web app.
+- Running migrations in a separate container step keeps migration output separate from HTTP traffic.
+- The web process keeps HTTP access logs controlled by `LOG_HTTP_ACCESS_ENABLED`.
 
 ## Recommended order for container deployment
 
@@ -119,6 +119,6 @@ docker compose run --rm --entrypoint python migrate -m alembic stamp head
 
 ## Result for logging
 
-Because the web container now starts only [`main:app`](../main.py) and does not invoke [`ensure_database_ready()`](../app/core/migrations.py:76) during startup, Alembic logging initialization no longer runs inside the Uvicorn process.
+Because the web container now starts only [`main:app`](../main.py) and does not invoke [`ensure_database_ready()`](../app/core/migrations.py:76) during startup, Alembic output no longer mixes with normal API serving logs.
 
-That restores the normal Uvicorn HTTP/access logging behavior while keeping Alembic available as a separate operational step.
+HTTP access logs can be enabled or disabled with `LOG_HTTP_ACCESS_ENABLED`, while Alembic verbosity is controlled separately by `LOG_ALEMBIC_ENABLED` and `LOG_ALEMBIC_LEVEL`.

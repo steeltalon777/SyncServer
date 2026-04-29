@@ -16,7 +16,16 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     DATABASE_URL_TEST: str | None = None
     APP_ENV: str = "dev"
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = Field(default="WARNING", description="Application logger level")
+    LOG_APP_ENABLED: bool = Field(default=True, description="Enable application loggers")
+    LOG_HTTP_ACCESS_ENABLED: bool = Field(default=True, description="Enable per-request Uvicorn access logs")
+    LOG_HTTP_ACCESS_LEVEL: str = Field(default="INFO", description="Uvicorn access logger level")
+    LOG_UVICORN_LEVEL: str = Field(default="INFO", description="Uvicorn server logger level")
+    LOG_ALEMBIC_ENABLED: bool = Field(default=True, description="Enable Alembic logger")
+    LOG_ALEMBIC_LEVEL: str = Field(default="WARNING", description="Alembic logger level")
+    LOG_SQLALCHEMY_LEVEL: str = Field(default="WARNING", description="SQLAlchemy engine logger level")
+    LOG_SQLALCHEMY_ECHO: bool = Field(default=False, description="Enable SQLAlchemy engine echo output")
+    LOG_FORMAT: str = "%(levelname)s [%(name)s] %(message)s"
     DEFAULT_PAGE_SIZE: int = Field(default=100, ge=1, le=5000)
     ALLOWED_ORIGINS: str = ""
     MAX_PUSH_EVENTS: int = Field(default=500, ge=1, le=5000)

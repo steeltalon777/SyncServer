@@ -206,11 +206,13 @@ class CatalogAdminService:
         unit_id = payload.unit_id if payload.unit_id is not None else item.unit_id
         await self._validate_unit_exists(uow, unit_id)
 
-        if payload.sku is not None and payload.sku != item.sku:
-            existing = await uow.catalog.get_item_by_sku(payload.sku)
-            if existing is not None and existing.id != item.id:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="item sku already exists")
-            item.sku = payload.sku
+        if "sku" in payload.model_fields_set:
+            new_sku = payload.sku  # может быть None (сброс) или str
+            if new_sku is not None and new_sku != item.sku:
+                existing = await uow.catalog.get_item_by_sku(new_sku)
+                if existing is not None and existing.id != item.id:
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="item sku already exists")
+            item.sku = new_sku
 
         if payload.name is not None:
             item.name = payload.name

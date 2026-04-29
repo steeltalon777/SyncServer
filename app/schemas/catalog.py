@@ -215,6 +215,13 @@ class ItemCreateRequest(BaseModel):
             return None
         return value
 
+    @field_validator("sku", mode="before")
+    @classmethod
+    def normalize_sku(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
 
 class ItemUpdateRequest(BaseModel):
     sku: str | None = Field(default=None, max_length=100)
@@ -228,6 +235,13 @@ class ItemUpdateRequest(BaseModel):
     @field_validator("category_id", mode="before")
     @classmethod
     def normalize_category_id(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @field_validator("sku", mode="before")
+    @classmethod
+    def normalize_sku(cls, value: object) -> object:
         if isinstance(value, str) and value.strip() == "":
             return None
         return value

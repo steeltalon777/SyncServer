@@ -23,9 +23,10 @@ from app.api.routes_sync import router as sync_router
 from app.api.routes_temporary_items import router as temporary_items_router
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.logging import configure_logging
 
 settings = get_settings()
-logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
+configure_logging(settings)
 logger = logging.getLogger(__name__)
 
 def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
@@ -54,12 +55,7 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
         request_id = request.headers.get("X-Request-Id") or str(uuid4())
         request.state.request_id = request_id
 
-        try:
-            response = await call_next(request)
-        except Exception:
-            logger.exception("request_id=%s unhandled_error path=%s", request_id, request.url.path)
-            return JSONResponse(status_code=500, content={"detail": "internal server error"})
-
+        response = await call_next(request)
         response.headers["X-Request-Id"] = request_id
         return response
 
