@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import time
+from io import BytesIO
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
+from xml.sax.saxutils import escape
 
 # Опциональные зависимости для рендеринга
 try:  # pragma: no cover
@@ -17,6 +19,28 @@ try:  # pragma: no cover
     from weasyprint import HTML as WeasyHTML
 except Exception:  # pragma: no cover
     WeasyHTML = None  # type: ignore[assignment]
+
+try:  # pragma: no cover
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+except Exception:  # pragma: no cover
+    colors = None  # type: ignore[assignment]
+    A4 = None  # type: ignore[assignment]
+    ParagraphStyle = None  # type: ignore[assignment]
+    getSampleStyleSheet = None  # type: ignore[assignment]
+    mm = None  # type: ignore[assignment]
+    pdfmetrics = None  # type: ignore[assignment]
+    TTFont = None  # type: ignore[assignment]
+    Paragraph = None  # type: ignore[assignment]
+    SimpleDocTemplate = None  # type: ignore[assignment]
+    Spacer = None  # type: ignore[assignment]
+    Table = None  # type: ignore[assignment]
+    TableStyle = None  # type: ignore[assignment]
 
 
 class DocumentRenderer:
@@ -70,7 +94,14 @@ class DocumentRenderer:
             payload=payload,
         )
 
-        pdf = cls._html_to_pdf(html)
+        try:
+            pdf = cls._html_to_pdf(html)
+        except RuntimeError:
+            pdf = cls._payload_to_pdf(
+                document_id=document_id,
+                document_number=document_number,
+                payload=payload,
+            )
         cls._cache_set(cache_key, pdf)
         return pdf
 
@@ -170,6 +201,192 @@ class DocumentRenderer:
             raise RuntimeError("PDF rendering backend is unavailable")
 
         return WeasyHTML(string=html).write_pdf()
+
+    @classmethod
+    def _payload_to_pdf(
+        cls,
+        *,
+        document_id: str,
+        document_number: str | None,
+        payload: dict[str, Any],
+    ) -> bytes:
+        if (
+            SimpleDocTemplate is None
+            or Table is None
+            or TableStyle is None
+            or Paragraph is None
+            or Spacer is None
+            or getSampleStyleSheet is None
+            or ParagraphStyle is None
+            or colors is None
+            or A4 is None
+            or mm is None
+        ):
+            raise RuntimeError("PDF rendering backend is unavailable")
+
+        font_name = cls._register_pdf_font()
+        styles = getSampleStyleSheet()
+        styles.add(ParagraphStyle(
+            name="WarehouseTitle",
+            parent=styles["Title"],
+            fontName=font_name,
+            fontSize=16,
+            leading=20,
+            spaceAfter=8,
+        ))
+        styles.add(ParagraphStyle(
+            name="WarehouseNormal",
+            parent=styles["Normal"],
+            fontName=font_name,
+            fontSize=9,
+            leading=12,
+        ))
+        styles.add(ParagraphStyle(
+            name="WarehouseSmall",
+            parent=styles["Normal"],
+            fontName=font_name,
+            fontSize=7,
+            leading=9,
+            textColor=colors.HexColor("#666666"),
+        ))
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            leftMargin=14 * mm,
+            rightMargin=14 * mm,
+            topMargin=18 * mm,
+            bottomMargin=18 * mm,
+        )
+
+        story: list[Any] = [
+            Paragraph(
+                cls._pdf_text(
+                    payload.get("organization", {}).get("full_name")
+                    or payload.get("organization", {}).get("legal_name")
+                ),
+                styles["WarehouseNormal"],
+            ),
+            Paragraph(
+                cls._pdf_text(payload.get("document_heading") or payload.get("document_title")),
+                styles["WarehouseTitle"],
+            ),
+            Paragraph(
+                cls._pdf_text(
+                    f"№ {document_number or ''} от {cls._datetime_format(payload.get('generated_at'))}"
+                ),
+                styles["WarehouseNormal"],
+            ),
+            Spacer(1, 6 * mm),
+        ]
+
+        details = [
+            ["Тип операции", payload.get("operation_type_label")],
+            ["Склад отправки", payload.get("source_label")],
+            ["Склад назначения / принимающее лицо", payload.get("destination_label")],
+            ["Кладовщик, который выдал", payload.get("warehouse_keeper")],
+            ["Операция", f"ID: {payload.get('operation_id')}\nДата: {cls._datetime_format(payload.get('operation_effective_at'))}"],
+        ]
+        if payload.get("operation_notes"):
+            details.append(["Комментарий", payload.get("operation_notes")])
+        story.append(cls._pdf_table(details, styles["WarehouseNormal"], col_widths=[52 * mm, 124 * mm]))
+        story.append(Spacer(1, 7 * mm))
+
+        is_acceptance = payload.get("document_title") == "Акт приёмки"
+        header = ["№", "Позиция", "Артикул", "Количество", "Ед."]
+        if is_acceptance:
+            header = ["№", "Позиция", "По накладной", "Принято", "Утеряно", "Ед."]
+
+        rows = [header]
+        for line in payload.get("lines") or []:
+            if is_acceptance:
+                rows.append([
+                    line.get("line_number"),
+                    line.get("item_name"),
+                    cls._number_format(line.get("quantity"), 3),
+                    cls._number_format(line.get("accepted_qty") or 0, 3),
+                    cls._number_format(line.get("lost_qty") or 0, 3),
+                    line.get("unit_symbol") or line.get("unit_name"),
+                ])
+            else:
+                rows.append([
+                    line.get("line_number"),
+                    line.get("item_name"),
+                    line.get("item_sku"),
+                    cls._number_format(line.get("quantity"), 3),
+                    line.get("unit_symbol") or line.get("unit_name"),
+                ])
+
+        story.append(cls._pdf_table(rows, styles["WarehouseNormal"]))
+        story.extend([
+            Spacer(1, 16 * mm),
+            cls._pdf_table(
+                [
+                    ["Выдал", "Принял"],
+                    [payload.get("warehouse_keeper") or "", ""],
+                ],
+                styles["WarehouseNormal"],
+                col_widths=[88 * mm, 88 * mm],
+            ),
+            Spacer(1, 8 * mm),
+            Paragraph(cls._pdf_text(f"Документ сформирован системой SyncServer. ID документа: {document_id}"), styles["WarehouseSmall"]),
+        ])
+
+        doc.build(story)
+        return buffer.getvalue()
+
+    @staticmethod
+    def _register_pdf_font() -> str:
+        if pdfmetrics is None or TTFont is None:
+            return "Helvetica"
+
+        font_candidates = [
+            Path("C:/Windows/Fonts/arial.ttf"),
+            Path("C:/Windows/Fonts/ARIAL.TTF"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            Path("/usr/local/share/fonts/dejavu/DejaVuSans.ttf"),
+        ]
+        for font_path in font_candidates:
+            if not font_path.exists():
+                continue
+            try:
+                pdfmetrics.registerFont(TTFont("WarehousePdfFont", str(font_path)))
+                return "WarehousePdfFont"
+            except Exception:
+                continue
+        return "Helvetica"
+
+    @classmethod
+    def _pdf_table(
+        cls,
+        rows: list[list[Any]],
+        style,
+        *,
+        col_widths: list[Any] | None = None,
+    ):
+        table_rows = [
+            [Paragraph(cls._pdf_text(cell).replace("\n", "<br/>"), style) for cell in row]
+            for row in rows
+        ]
+        table = Table(table_rows, colWidths=col_widths, repeatRows=1)
+        table.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), style.fontName),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eeeeee")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        return table
+
+    @staticmethod
+    def _pdf_text(value: Any) -> str:
+        if value is None:
+            return ""
+        return escape(str(value))
 
     @classmethod
     def _cache_key(

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import inspect
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from app.core.catalog_defaults import (
@@ -14,14 +15,23 @@ from app.models.item import Item
 from app.models.unit import Unit
 from app.schemas.catalog import (
     CategoryBulkCreateRequest,
+    CategoryMergeRequest,
     CategoryCreateRequest,
+    CategoryMergeResponse,
     CategoryUpdateRequest,
+    ItemMergeRequest,
+    ItemMergeResponse,
     ItemCreateRequest,
+    ItemSplitRequest,
+    ItemSplitResponse,
     ItemUpdateRequest,
+    SplitSiteQuantity,
     UnitBulkCreateRequest,
     UnitCreateRequest,
     UnitUpdateRequest,
 )
+from app.services.hashtag_utils import normalize_hashtags
+from app.services.operations_service import OperationsService
 from fastapi import HTTPException, status
 
 from app.services.uow import UnitOfWork
@@ -36,6 +46,213 @@ def _normalize_text(value: str | None) -> str | None:
 
 
 class CatalogAdminService:
+    async def _transfer_qty_between_subjects(
+        self,
+        uow: UnitOfWork,
+        *,
+        site_id: int,
+        qty: Decimal,
+        source_inventory_subject_id: int,
+        source_item_id: int,
+        target_inventory_subject_id: int,
+        target_item_id: int,
+        user_id: UUID,
+        note: str,
+    ) -> None:
+        write_off_op = await uow.operations.create_operation(
+            site_id=site_id,
+            operation_type="ADJUSTMENT",
+            created_by_user_id=user_id,
+            notes=note,
+            effective_at=datetime.now(UTC),
+        )
+        await uow.operations.create_operation_line(
+            operation_id=write_off_op.id,
+            line_number=1,
+            inventory_subject_id=source_inventory_subject_id,
+            item_id=source_item_id,
+            qty=-qty,
+            comment=note,
+        )
+        await OperationsService.submit_operation(uow=uow, operation_id=write_off_op.id, user_id=user_id)
+
+        receipt_op = await uow.operations.create_operation(
+            site_id=site_id,
+            operation_type="ADJUSTMENT",
+            created_by_user_id=user_id,
+            notes=note,
+            effective_at=datetime.now(UTC),
+        )
+        await uow.operations.create_operation_line(
+            operation_id=receipt_op.id,
+            line_number=1,
+            inventory_subject_id=target_inventory_subject_id,
+            item_id=target_item_id,
+            qty=qty,
+            comment=note,
+        )
+        await OperationsService.submit_operation(uow=uow, operation_id=receipt_op.id, user_id=user_id)
+
+    async def merge_categories(self, uow: UnitOfWork, payload: CategoryMergeRequest, user_id: UUID) -> CategoryMergeResponse:
+        if payload.source_category_id == payload.target_category_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="source and target categories must differ")
+
+        source = await uow.catalog.get_category_for_update(payload.source_category_id)
+        target = await uow.catalog.get_category_for_update(payload.target_category_id)
+        if source is None or source.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source category not found")
+        if target is None or target.deleted_at is not None or not target.is_active:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="target category not found")
+        if not source.is_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="source category is inactive")
+
+        await self._validate_no_category_cycle(uow, category_id=source.id, new_parent_id=target.id)
+        if await uow.catalog.has_child_name_conflicts(source.id, target.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="child category name conflict under target parent",
+            )
+
+        moved_child_categories_count = await uow.catalog.move_child_categories(source.id, target.id)
+        moved_items_count = await uow.catalog.move_items_between_categories(source.id, target.id)
+
+        source.is_active = False
+        await uow.catalog.soft_delete_category(source.id, user_id)
+
+        return CategoryMergeResponse(
+            source_category_id=source.id,
+            target_category_id=target.id,
+            moved_items_count=moved_items_count,
+            moved_child_categories_count=moved_child_categories_count,
+            status="merged",
+            target_category=target,
+        )
+
+    async def merge_items(self, uow: UnitOfWork, payload: ItemMergeRequest, user_id: UUID) -> ItemMergeResponse:
+        if payload.source_item_id == payload.target_item_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="source and target items must differ")
+
+        source = await uow.catalog.get_item_for_update(payload.source_item_id)
+        target = await uow.catalog.get_item_for_update(payload.target_item_id)
+        if source is None or source.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source item not found")
+        if target is None or target.deleted_at is not None or not target.is_active:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="target item not found")
+        if not source.is_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="source item is inactive")
+
+        source_subject = await uow.inventory_subjects.get_by_item_id(source.id)
+        if source_subject is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="source item has no inventory subject")
+
+        has_active = await uow.asset_registers.has_active_registers(int(source_subject.id))
+        if has_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="source item has active asset registers")
+
+        target_subject = await uow.catalog.get_or_create_inventory_subject_for_item(target.id)
+        source_balances = await uow.balances.get_all_by_inventory_subject(int(source_subject.id))
+
+        for balance_row in source_balances:
+            qty = Decimal(str(balance_row.qty))
+            if qty <= 0:
+                continue
+            note = payload.comment or f"[catalog-merge] source_item={source.id} target_item={target.id}"
+            await self._transfer_qty_between_subjects(
+                uow,
+                site_id=int(balance_row.site_id),
+                qty=qty,
+                source_inventory_subject_id=int(source_subject.id),
+                source_item_id=source.id,
+                target_inventory_subject_id=int(target_subject.id),
+                target_item_id=target.id,
+                user_id=user_id,
+                note=note,
+            )
+
+        await uow.catalog.archive_inventory_subject(int(source_subject.id))
+        source.is_active = False
+        await uow.catalog.soft_delete_item(source.id, user_id)
+
+        return ItemMergeResponse(
+            source_item_id=source.id,
+            target_item_id=target.id,
+            status="merged",
+            target_item=target,
+        )
+
+    async def split_item(self, uow: UnitOfWork, payload: ItemSplitRequest, user_id: UUID) -> ItemSplitResponse:
+        source = await uow.catalog.get_item_for_update(payload.source_item_id)
+        if source is None or source.deleted_at is not None or not source.is_active:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source item not found")
+        if payload.target_item.unit_id != source.unit_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="target unit_id must match source unit_id")
+
+        source_subject = await uow.inventory_subjects.get_by_item_id(source.id)
+        if source_subject is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="source item has no inventory subject")
+
+        has_active = await uow.asset_registers.has_active_registers(int(source_subject.id))
+        if has_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="source item has active asset registers")
+
+        await self._validate_unit_exists(uow, payload.target_item.unit_id)
+        category = await self._resolve_item_category(uow, payload.target_item.category_id)
+        await self._ensure_item_sku_unique(uow, payload.target_item.sku)
+
+        balances = await uow.catalog.get_balances_for_item_subject(int(source_subject.id))
+        available_by_site: dict[int, Decimal] = {row["site_id"]: Decimal(str(row["qty"])) for row in balances}
+
+        requested_by_site: dict[int, Decimal] = {}
+        for row in payload.site_quantities:
+            qty = Decimal(str(row.qty))
+            if qty <= 0:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="all split quantities must be > 0")
+            requested_by_site[row.site_id] = requested_by_site.get(row.site_id, Decimal("0")) + qty
+
+        for site_id, qty in requested_by_site.items():
+            available = available_by_site.get(site_id, Decimal("0"))
+            if available <= 0:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"no positive balance on site {site_id}")
+            if qty > available:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"requested qty exceeds balance on site {site_id}")
+
+        target_item = await uow.catalog.create_item_from_split(
+            {
+                "sku": payload.target_item.sku,
+                "name": payload.target_item.name,
+                "normalized_name": _normalize_text(payload.target_item.name),
+                "category_id": category.id,
+                "unit_id": payload.target_item.unit_id,
+                "description": payload.target_item.description,
+                "source_ref": f"split_from_item:{source.id}",
+            }
+        )
+        target_subject = await uow.catalog.get_or_create_inventory_subject_for_item(target_item.id)
+
+        transferred_balances: list[SplitSiteQuantity] = []
+        for site_id, qty in requested_by_site.items():
+            note = payload.comment or f"[catalog-split] source_item={source.id} target_item={target_item.id}"
+            await self._transfer_qty_between_subjects(
+                uow,
+                site_id=site_id,
+                qty=qty,
+                source_inventory_subject_id=int(source_subject.id),
+                source_item_id=source.id,
+                target_inventory_subject_id=int(target_subject.id),
+                target_item_id=target_item.id,
+                user_id=user_id,
+                note=note,
+            )
+            transferred_balances.append(SplitSiteQuantity(site_id=site_id, qty=qty))
+
+        return ItemSplitResponse(
+            source_item_id=source.id,
+            target_item_id=target_item.id,
+            status="split",
+            transferred_balances=transferred_balances,
+            target_item=target_item,
+        )
+
     async def create_unit(self, uow: UnitOfWork, payload: UnitCreateRequest) -> Unit:
         await self._ensure_unit_unique(uow, name=payload.name, symbol=payload.symbol)
 
@@ -97,6 +314,11 @@ class CatalogAdminService:
     async def create_category(self, uow: UnitOfWork, payload: CategoryCreateRequest) -> Category:
         if payload.code == UNCATEGORIZED_CATEGORY_CODE:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="reserved category code")
+
+        if payload.code is not None:
+            existing = await uow.catalog.list_categories_by_code(payload.code)
+            if existing:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="category code already exists")
 
         if payload.parent_id is not None:
             parent = await uow.catalog.get_category_by_id(payload.parent_id)
@@ -188,7 +410,7 @@ class CatalogAdminService:
             category_id=category.id,
             unit_id=payload.unit_id,
             description=payload.description,
-            hashtags=payload.hashtags,
+            hashtags=normalize_hashtags(payload.hashtags),
             is_active=payload.is_active,
         )
         return await uow.catalog.create_item(item)
@@ -224,7 +446,7 @@ class CatalogAdminService:
         if "description" in payload.model_fields_set:
             item.description = payload.description
         if "hashtags" in payload.model_fields_set:
-            item.hashtags = payload.hashtags
+            item.hashtags = normalize_hashtags(payload.hashtags)
         if payload.is_active is not None:
             item.is_active = payload.is_active
 
@@ -321,8 +543,31 @@ class CatalogAdminService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
         if category.deleted_at is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="category already deleted")
+        if category.code == UNCATEGORIZED_CATEGORY_CODE:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="system category cannot be deleted")
         if category.is_active:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot delete active category")
+
+        target_category: Category | None = None
+        if category.parent_id is not None:
+            target_category = await uow.catalog.get_category_for_update(category.parent_id)
+            if target_category is None or target_category.deleted_at is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="target parent category not found")
+        else:
+            target_category = await self._get_or_create_uncategorized_category(uow)
+
+        if target_category.id == category.id:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="target category cannot equal source category")
+
+        if await uow.catalog.has_child_name_conflicts(category.id, target_category.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="child category name conflict under target parent",
+            )
+
+        await uow.catalog.move_child_categories(category.id, target_category.id)
+        await uow.catalog.move_items_between_categories(category.id, target_category.id)
+
         try:
             await uow.catalog.soft_delete_category(category_id, user_id)
         except ValueError as exc:

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.models.category import Category
+from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
 from app.models.unit import Unit
 
@@ -58,6 +60,7 @@ class CatalogRepo:
                 Item.unit_id.label("unit_id"),
                 Unit.symbol.label("unit_symbol"),
                 Item.description.label("description"),
+                Item.hashtags.label("hashtags"),
                 Item.is_active.label("is_active"),
                 Item.updated_at.label("updated_at"),
             )
@@ -74,12 +77,14 @@ class CatalogRepo:
             stmt = stmt.where(Item.category_id == category_id)
 
         if search:
-            term = f"%{search.strip()}%"
+            search_value = search.strip()
+            term = f"%{search_value.lstrip('#')}%"
             stmt = stmt.where(
                 or_(
                     Item.name.ilike(term),
                     Item.sku.ilike(term),
                     Item.description.ilike(term),
+                    cast(Item.hashtags, String).ilike(term),
                 )
             )
 
@@ -320,6 +325,12 @@ class CatalogRepo:
         result = await self.session.execute(select(Category).where(Category.id == category_id))
         return result.scalar_one_or_none()
 
+    async def get_category_for_update(self, category_id: int) -> Category | None:
+        result = await self.session.execute(
+            select(Category).where(Category.id == category_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def get_category_by_parent_and_name(self, parent_id: int | None, name: str) -> Category | None:
         stmt = select(Category).where(Category.parent_id == parent_id, Category.name == name)
         result = await self.session.execute(stmt)
@@ -356,6 +367,12 @@ class CatalogRepo:
         result = await self.session.execute(select(Item).where(Item.id == item_id))
         return result.scalar_one_or_none()
 
+    async def get_item_for_update(self, item_id: int) -> Item | None:
+        result = await self.session.execute(
+            select(Item).where(Item.id == item_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def get_item_by_sku(self, sku: str) -> Item | None:
         result = await self.session.execute(select(Item).where(Item.sku == sku))
         return result.scalar_one_or_none()
@@ -364,6 +381,109 @@ class CatalogRepo:
         await self.session.flush()
         await self.session.refresh(item)
         return item
+
+    async def get_or_create_inventory_subject_for_item(self, item_id: int) -> InventorySubject:
+        result = await self.session.execute(
+            select(InventorySubject).where(InventorySubject.item_id == item_id)
+        )
+        subject = result.scalar_one_or_none()
+        if subject is not None:
+            if subject.archived_at is not None:
+                subject.archived_at = None
+                await self.session.flush()
+            return subject
+
+        subject = InventorySubject(subject_type="catalog_item", item_id=item_id)
+        self.session.add(subject)
+        await self.session.flush()
+        return subject
+
+    async def archive_inventory_subject(self, subject_id: int) -> None:
+        result = await self.session.execute(
+            select(InventorySubject).where(InventorySubject.id == subject_id).with_for_update()
+        )
+        subject = result.scalar_one_or_none()
+        if subject is None:
+            return
+        subject.archived_at = datetime.now()
+        await self.session.flush()
+
+    async def move_items_between_categories(self, source_category_id: int, target_category_id: int) -> int:
+        result = await self.session.execute(
+            select(Item).where(Item.category_id == source_category_id, Item.deleted_at.is_(None)).with_for_update()
+        )
+        items = list(result.scalars().all())
+        for item in items:
+            item.category_id = target_category_id
+        await self.session.flush()
+        return len(items)
+
+    async def move_child_categories(self, source_category_id: int, target_category_id: int) -> int:
+        result = await self.session.execute(
+            select(Category)
+            .where(Category.parent_id == source_category_id, Category.deleted_at.is_(None))
+            .with_for_update()
+        )
+        children = list(result.scalars().all())
+        for child in children:
+            child.parent_id = target_category_id
+        await self.session.flush()
+        return len(children)
+
+    async def has_child_name_conflicts(self, source_category_id: int, target_category_id: int) -> bool:
+        source_children = (
+            await self.session.execute(
+                select(Category.name).where(
+                    Category.parent_id == source_category_id,
+                    Category.deleted_at.is_(None),
+                )
+            )
+        ).scalars().all()
+        if not source_children:
+            return False
+
+        target_children = (
+            await self.session.execute(
+                select(Category.name).where(
+                    Category.parent_id == target_category_id,
+                    Category.deleted_at.is_(None),
+                )
+            )
+        ).scalars().all()
+        target_set = set(target_children)
+        return any(name in target_set for name in source_children)
+
+    async def create_item_from_split(self, payload: dict) -> Item:
+        item = Item(
+            sku=payload.get("sku"),
+            name=payload["name"],
+            normalized_name=payload.get("normalized_name"),
+            category_id=payload["category_id"],
+            unit_id=payload["unit_id"],
+            description=payload.get("description"),
+            is_active=True,
+            source_system="catalog_split",
+            source_ref=payload.get("source_ref"),
+        )
+        self.session.add(item)
+        await self.session.flush()
+        await self.session.refresh(item)
+        return item
+
+    async def get_balances_for_item_subject(self, subject_id: int) -> list[dict]:
+        from app.models.balance import Balance
+
+        rows = (
+            await self.session.execute(
+                select(Balance.site_id, Balance.qty)
+                .where(Balance.inventory_subject_id == subject_id)
+                .with_for_update()
+            )
+        ).all()
+        return [
+            {"site_id": int(row.site_id), "qty": Decimal(str(row.qty))}
+            for row in rows
+        ]
 
     def build_category_tree(self, categories: list[Category]) -> list[dict]:
         nodes: dict[int, dict] = {}
@@ -444,24 +564,6 @@ class CatalogRepo:
             raise ValueError(f"Category {category_id} already deleted")
         if category.is_active:
             raise ValueError(f"Cannot delete active category {category_id}")
-        # Check for active child categories
-        stmt = select(Category).where(
-            Category.parent_id == category_id,
-            Category.deleted_at.is_(None),
-            Category.is_active.is_(True),
-        )
-        result = await self.session.execute(stmt)
-        if result.scalars().first():
-            raise ValueError(f"Cannot delete category {category_id} with active subcategories")
-        # Check for active items in this category
-        stmt = select(Item).where(
-            Item.category_id == category_id,
-            Item.deleted_at.is_(None),
-            Item.is_active.is_(True),
-        )
-        result = await self.session.execute(stmt)
-        if result.scalars().first():
-            raise ValueError(f"Cannot delete category {category_id} with active items")
         category.deleted_at = datetime.now()
         category.deleted_by_user_id = user_id
         await self.session.flush()

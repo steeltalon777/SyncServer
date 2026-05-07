@@ -8,11 +8,17 @@ from app.core.identity import Identity
 from app.schemas.catalog import (
     CategoryBulkCreateRequest,
     CategoryBulkCreateResponse,
+    CategoryMergeRequest,
+    CategoryMergeResponse,
     CategoryCreateRequest,
     CategoryListResponse,
     CategoryResponse,
     CategoryUpdateRequest,
     ItemCreateRequest,
+    ItemMergeRequest,
+    ItemMergeResponse,
+    ItemSplitRequest,
+    ItemSplitResponse,
     ItemListResponse,
     ItemResponse,
     ItemUpdateRequest,
@@ -181,6 +187,29 @@ async def update_category(
     return CategoryResponse.model_validate(category)
 
 
+@router.post("/categories/merge", response_model=CategoryMergeResponse)
+async def merge_categories(
+    payload: CategoryMergeRequest,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
+) -> CategoryMergeResponse:
+    service = CatalogAdminService()
+    async with uow:
+        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        result = await service.merge_categories(uow, payload, identity.user_id)
+
+    logger.info(
+        "request_id=%s merge_categories source_category_id=%s target_category_id=%s user_id=%s",
+        get_request_id(request),
+        result.source_category_id,
+        result.target_category_id,
+        identity.user_id,
+    )
+    return result
+
+
 @router.post("/items", response_model=ItemResponse)
 async def create_item(
     payload: ItemCreateRequest,
@@ -214,6 +243,52 @@ async def update_item(
 
     logger.info("request_id=%s update_item item_id=%s user_id=%s", get_request_id(request), item.id, identity.user_id)
     return ItemResponse.model_validate(item)
+
+
+@router.post("/items/merge", response_model=ItemMergeResponse)
+async def merge_items(
+    payload: ItemMergeRequest,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
+) -> ItemMergeResponse:
+    service = CatalogAdminService()
+    async with uow:
+        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        result = await service.merge_items(uow, payload, identity.user_id)
+
+    logger.info(
+        "request_id=%s merge_items source_item_id=%s target_item_id=%s user_id=%s",
+        get_request_id(request),
+        result.source_item_id,
+        result.target_item_id,
+        identity.user_id,
+    )
+    return result
+
+
+@router.post("/items/split", response_model=ItemSplitResponse)
+async def split_item(
+    payload: ItemSplitRequest,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
+) -> ItemSplitResponse:
+    service = CatalogAdminService()
+    async with uow:
+        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        result = await service.split_item(uow, payload, identity.user_id)
+
+    logger.info(
+        "request_id=%s split_item source_item_id=%s target_item_id=%s user_id=%s",
+        get_request_id(request),
+        result.source_item_id,
+        result.target_item_id,
+        identity.user_id,
+    )
+    return result
 
 
 @router.get("/units/{unit_id}", response_model=UnitResponse)

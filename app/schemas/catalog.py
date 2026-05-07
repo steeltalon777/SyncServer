@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from app.schemas.common import ORMBaseModel
@@ -99,6 +100,7 @@ class CatalogBrowseItemDto(ORMBaseModel):
     unit_id: int
     unit_symbol: str
     description: str | None = None
+    hashtags: list[str] | None = None
     is_active: bool
     updated_at: datetime
 
@@ -318,6 +320,62 @@ class ItemListResponse(ORMBaseModel):
     total_count: int
     page: int
     page_size: int
+
+
+class ItemMergeRequest(BaseModel):
+    source_item_id: int
+    target_item_id: int
+    comment: str | None = None
+
+
+class ItemMergeResponse(ORMBaseModel):
+    source_item_id: int
+    target_item_id: int
+    status: str
+    target_item: ItemResponse
+
+
+class CategoryMergeRequest(BaseModel):
+    source_category_id: int
+    target_category_id: int
+    comment: str | None = None
+
+
+class CategoryMergeResponse(ORMBaseModel):
+    source_category_id: int
+    target_category_id: int
+    moved_items_count: int
+    moved_child_categories_count: int
+    status: str
+    target_category: CategoryResponse
+
+
+class SplitSiteQuantity(BaseModel):
+    site_id: int
+    qty: Decimal
+
+
+class ItemSplitTargetCreate(BaseModel):
+    sku: str | None = Field(default=None, max_length=100)
+    name: str = Field(min_length=1, max_length=255)
+    category_id: int
+    unit_id: int
+    description: str | None = None
+
+
+class ItemSplitRequest(BaseModel):
+    source_item_id: int
+    target_item: ItemSplitTargetCreate
+    site_quantities: list[SplitSiteQuantity] = Field(min_length=1)
+    comment: str | None = None
+
+
+class ItemSplitResponse(ORMBaseModel):
+    source_item_id: int
+    target_item_id: int
+    status: str
+    transferred_balances: list[SplitSiteQuantity]
+    target_item: ItemResponse
 
 
 CategoryTreeNode.model_rebuild()

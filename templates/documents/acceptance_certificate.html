@@ -27,18 +27,18 @@
             font-weight: 700;
             margin: 0 0 6px;
         }
-        .number {
-            font-size: 13px;
-        }
         .organization {
             text-align: right;
             font-size: 14px;
             font-weight: 700;
             white-space: nowrap;
         }
-        .details {
+        .details,
+        .lines {
             width: 100%;
             border-collapse: collapse;
+        }
+        .details {
             margin-bottom: 18px;
         }
         .details td {
@@ -51,11 +51,6 @@
             background: #f2f2f2;
             font-weight: 700;
         }
-        .lines {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-        }
         .lines th,
         .lines td {
             border: 1px solid #111;
@@ -65,10 +60,9 @@
         .lines th {
             background: #ececec;
             text-align: left;
-            font-weight: 700;
         }
-        .lines .num,
-        .lines .qty {
+        .num,
+        .qty {
             text-align: right;
             white-space: nowrap;
         }
@@ -94,7 +88,7 @@
     <header class="document-header">
         <div>
             <h1 class="title">{{ payload.document_heading|default(payload.document_title) }}</h1>
-            <div class="number">№ {{ document.document_number|default('') }} от {{ payload.generated_at|datetime_format(payload.localization.date_format) }}</div>
+            <div>№ {{ document.document_number|default('') }} от {{ payload.generated_at|datetime_format(payload.localization.date_format) }}</div>
         </div>
         <div class="organization">{{ payload.organization.full_name|default(payload.organization.legal_name) }}</div>
     </header>
@@ -123,12 +117,6 @@
                 Дата операции: {{ payload.operation_effective_at|datetime_format(payload.localization.date_format) }}
             </td>
         </tr>
-        {% if payload.operation_notes %}
-        <tr>
-            <td class="label">Комментарий</td>
-            <td>{{ payload.operation_notes }}</td>
-        </tr>
-        {% endif %}
     </table>
 
     <table class="lines">
@@ -136,8 +124,9 @@
             <tr>
                 <th class="num">№</th>
                 <th>Позиция</th>
-                <th>Артикул</th>
-                <th class="qty">Количество</th>
+                <th class="qty">По накладной</th>
+                <th class="qty">Принято</th>
+                <th class="qty">Утеряно</th>
                 <th>Ед. изм.</th>
             </tr>
         </thead>
@@ -146,8 +135,9 @@
             <tr>
                 <td class="num">{{ line.line_number }}</td>
                 <td>{{ line.item_name }}</td>
-                <td>{{ line.item_sku }}</td>
                 <td class="qty">{{ line.quantity|number_format(3) }}</td>
+                <td class="qty">{{ line.accepted_qty|default(0, true)|number_format(3) }}</td>
+                <td class="qty">{{ line.lost_qty|default(0, true)|number_format(3) }}</td>
                 <td>{{ line.unit_symbol or line.unit_name }}</td>
             </tr>
             {% endfor %}
@@ -156,7 +146,7 @@
 
     <section class="signatures">
         <div class="signature-line">
-            <strong>Выдал:</strong><br>
+            <strong>Передал:</strong><br>
             {{ payload.warehouse_keeper|default('') }}
         </div>
         <div class="signature-line">

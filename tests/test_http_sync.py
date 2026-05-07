@@ -1,11 +1,14 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 from app.core.db import get_db
 from app.models.category import Category
 from app.models.device import Device
+from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
+from app.models.balance import Balance
 from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user import User
@@ -358,6 +361,29 @@ async def test_catalog_admin_bulk_create_categories(client: AsyncClient, session
 
 
 @pytest.mark.asyncio
+async def test_catalog_admin_bulk_create_categories_duplicate_code_fails(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    root_user = await _seed_root_user(session_factory)
+    headers = {"X-User-Token": str(root_user.user_token)}
+
+    create_resp = await client.post(
+        "/api/v1/catalog/admin/categories",
+        json={"name": "Beverages", "code": "BEV"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 200
+
+    response = await client.post(
+        "/api/v1/catalog/admin/categories/bulk",
+        json={"items": [{"name": "Drinks", "code": "BEV"}]},
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert "code already exists" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_catalog_admin_bulk_create_units_duplicate_in_payload_fails(client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]) -> None:
     root_user = await _seed_root_user(session_factory)
     headers = {"X-User-Token": str(root_user.user_token)}
@@ -395,3 +421,86 @@ async def test_catalog_admin_category_cycle_validation(client: AsyncClient, sess
     )
     assert cycle_resp.status_code == 400
     assert cycle_resp.json()["detail"] == "category cycle detected"
+
+
+@pytest.mark.asyncio
+async def test_catalog_admin_category_merge_flow(client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    root_user = await _seed_root_user(session_factory)
+    headers = {"X-User-Token": str(root_user.user_token)}
+
+    target_resp = await client.post("/api/v1/catalog/admin/categories", json={"name": "Target"}, headers=headers)
+    assert target_resp.status_code == 200
+    target_id = target_resp.json()["id"]
+
+    source_resp = await client.post("/api/v1/catalog/admin/categories", json={"name": "Source"}, headers=headers)
+    assert source_resp.status_code == 200
+    source_id = source_resp.json()["id"]
+
+    merge_resp = await client.post(
+        "/api/v1/catalog/admin/categories/merge",
+        json={"source_category_id": source_id, "target_category_id": target_id, "comment": "dup"},
+        headers=headers,
+    )
+    assert merge_resp.status_code == 200
+    body = merge_resp.json()
+    assert body["status"] == "merged"
+    assert body["source_category_id"] == source_id
+    assert body["target_category_id"] == target_id
+
+
+@pytest.mark.asyncio
+async def test_catalog_admin_item_split_and_merge_flow(client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    root_user = await _seed_root_user(session_factory)
+    headers = {"X-User-Token": str(root_user.user_token)}
+
+    unit_resp = await client.post("/api/v1/catalog/admin/units", json={"name": "Meter", "symbol": "m"}, headers=headers)
+    assert unit_resp.status_code == 200
+    unit_id = unit_resp.json()["id"]
+
+    category_resp = await client.post("/api/v1/catalog/admin/categories", json={"name": "Cable"}, headers=headers)
+    assert category_resp.status_code == 200
+    category_id = category_resp.json()["id"]
+
+    source_item_resp = await client.post(
+        "/api/v1/catalog/admin/items",
+        json={"name": "Cable VVG", "sku": "CABLE-BASE", "category_id": category_id, "unit_id": unit_id},
+        headers=headers,
+    )
+    assert source_item_resp.status_code == 200
+    source_item_id = source_item_resp.json()["id"]
+
+    async with session_factory() as session:
+        subject = InventorySubject(subject_type="catalog_item", item_id=source_item_id)
+        session.add(subject)
+        await session.flush()
+        session.add(Balance(site_id=1, inventory_subject_id=subject.id, item_id=source_item_id, qty=Decimal("100")))
+        await session.commit()
+
+    split_resp = await client.post(
+        "/api/v1/catalog/admin/items/split",
+        json={
+            "source_item_id": source_item_id,
+            "target_item": {
+                "sku": "CABLE-3X15",
+                "name": "Cable VVG 3x1.5",
+                "category_id": category_id,
+                "unit_id": unit_id,
+                "description": "split",
+            },
+            "site_quantities": [{"site_id": 1, "qty": "40.000"}],
+            "comment": "split test",
+        },
+        headers=headers,
+    )
+    assert split_resp.status_code == 200
+    split_body = split_resp.json()
+    assert split_body["status"] == "split"
+    target_item_id = split_body["target_item_id"]
+
+    merge_resp = await client.post(
+        "/api/v1/catalog/admin/items/merge",
+        json={"source_item_id": source_item_id, "target_item_id": target_item_id, "comment": "merge back"},
+        headers=headers,
+    )
+    assert merge_resp.status_code == 200
+    assert merge_resp.json()["status"] == "merged"

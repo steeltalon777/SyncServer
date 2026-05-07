@@ -62,6 +62,7 @@ class TemporaryItem(Base):
         Index("ix_temporary_items_status", "status"),
         Index("ix_temporary_items_created_by_user_id", "created_by_user_id"),
         Index("ix_temporary_items_normalized_name", "normalized_name"),
+        Index("idx_temporary_items_hashtags", "hashtags", postgresql_using="gin"),
     )
 
     # Статусы временных ТМЦ

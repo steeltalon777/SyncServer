@@ -41,6 +41,12 @@ async def test_generate_from_operation_success(
     # Проверяем payload
     payload = document.payload
     assert payload["document_title"] == "Товарная накладная"
+    assert payload["document_heading"] == 'Товарная накладная ООО АС "Горизонт"'
+    assert payload["organization"]["short_name"] == 'ООО АС "Горизонт"'
+    assert (
+        payload["organization"]["full_name"]
+        == 'Общество с ограниченной ответственностью Автоматизированные системы "Горизонт"'
+    )
     assert payload["operation_id"] == str(operation.id)
     assert "lines" in payload
     assert len(payload["lines"]) == len(operation.lines)

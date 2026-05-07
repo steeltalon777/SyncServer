@@ -6,6 +6,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from app.models.item import Item
+from app.services.hashtag_utils import normalize_hashtags
 from app.services.operations_service import OperationsService
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
@@ -161,7 +162,7 @@ class TemporaryItemsResolutionService:
             category_id=temp_item.category_id,
             unit_id=temp_item.unit_id,
             description=temp_item.description,
-            hashtags=temp_item.hashtags,
+            hashtags=normalize_hashtags(temp_item.hashtags),
             is_active=True,
             source_system="temporary_item_resolution",
             source_ref=f"approve_as_item:{temporary_item_id}",

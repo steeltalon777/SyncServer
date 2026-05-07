@@ -12,6 +12,7 @@ from app.repos.recipients_repo import normalize_recipient_name
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
 from app.services.document_service import DocumentService
+from app.services.hashtag_utils import normalize_hashtags
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
@@ -435,7 +436,7 @@ class OperationsService:
                     "unit_id": payload.unit_id,
                     "category_id": category_id_value,
                     "description": payload.description,
-                    "hashtags": payload.hashtags,
+                    "hashtags": normalize_hashtags(payload.hashtags),
                 }
 
                 await uow.operations.create_operation_line(
@@ -657,7 +658,7 @@ class OperationsService:
                 category_id=category_id_value,
                 unit_id=unit_id_value,
                 description=payload.get("description"),
-                hashtags=payload.get("hashtags"),
+                hashtags=normalize_hashtags(payload.get("hashtags")),
                 is_active=False,
                 source_system="temporary_item",
                 source_ref=client_key,
@@ -673,7 +674,7 @@ class OperationsService:
                 unit_id=unit_id_value,
                 category_id=category_id_value,
                 description=payload.get("description"),
-                hashtags=payload.get("hashtags"),
+                hashtags=normalize_hashtags(payload.get("hashtags")),
                 created_by_user_id=user_id,
             )
 
@@ -864,7 +865,7 @@ class OperationsService:
         try:
             # Определяем тип документа на основе типа операции
             document_type_map = {
-                "RECEIVE": "acceptance_certificate",
+                "RECEIVE": "waybill",
                 "MOVE": "waybill",
                 "ISSUE": "waybill",
                 "ISSUE_RETURN": "waybill",
@@ -1027,7 +1028,34 @@ class OperationsService:
             acceptance_state=next_state,
             resolved_by_user_id=user_id if next_state == "resolved" else None,
         )
-        return {"operation": await uow.operations.get_operation_by_id(operation_id)}
+        accepted_operation = await uow.operations.get_operation_by_id(operation_id)
+        document_created = None
+        if next_state == "resolved":
+            try:
+                result = await DocumentService.generate_from_operation(
+                    uow=uow,
+                    operation_id=operation_id,
+                    document_type="acceptance_certificate",
+                    auto_finalize=True,
+                    created_by_user_id=user_id,
+                )
+                document_created = result["document"]
+                logger.info(
+                    "Auto-generated acceptance certificate id=%s for operation id=%s",
+                    document_created.id,
+                    operation_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to auto-generate acceptance certificate for operation id=%s: %s",
+                    operation_id,
+                    str(exc),
+                )
+
+        response = {"operation": accepted_operation}
+        if document_created:
+            response["document"] = document_created
+        return response
 
     @staticmethod
     async def resolve_lost_asset(

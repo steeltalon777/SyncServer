@@ -301,3 +301,99 @@ class TestCatalogAdminSoftDelete:
         item_from_repo = await uow.catalog.get_item_by_id(item.id)
         assert item_from_repo is not None
         assert item_from_repo.deleted_at is not None
+
+
+class TestCategoryDeleteReparenting:
+    @pytest.mark.asyncio
+    async def test_delete_nested_category_reparents_children_and_items(self, uow, admin_user):
+        service = CatalogAdminService()
+
+        parent = await service.create_category(uow, CategoryCreateRequest(name="Parent"))
+        source = await service.create_category(uow, CategoryCreateRequest(name="Source", parent_id=parent.id))
+        child = await service.create_category(uow, CategoryCreateRequest(name="Child", parent_id=source.id))
+        unit = await service.create_unit(uow, UnitCreateRequest(name="шт", symbol="sht"))
+        item = await service.create_item(
+            uow,
+            ItemCreateRequest(name="Item A", unit_id=unit.id, category_id=source.id),
+        )
+
+        await service.update_category(uow, source.id, CategoryUpdateRequest(is_active=False))
+        await service.delete_category(uow, source.id, admin_user.id)
+
+        reloaded_source = await uow.catalog.get_category_by_id(source.id)
+        reloaded_child = await uow.catalog.get_category_by_id(child.id)
+        reloaded_item = await uow.catalog.get_item_by_id(item.id)
+
+        assert reloaded_source is not None
+        assert reloaded_source.deleted_at is not None
+        assert reloaded_child is not None
+        assert reloaded_child.parent_id == parent.id
+        assert reloaded_item is not None
+        assert reloaded_item.category_id == parent.id
+
+    @pytest.mark.asyncio
+    async def test_delete_root_category_moves_children_and_items_to_uncategorized(self, uow, admin_user):
+        service = CatalogAdminService()
+
+        root = await service.create_category(uow, CategoryCreateRequest(name="Root"))
+        child = await service.create_category(uow, CategoryCreateRequest(name="Child", parent_id=root.id))
+        unit = await service.create_unit(uow, UnitCreateRequest(name="kg", symbol="kg"))
+        item = await service.create_item(
+            uow,
+            ItemCreateRequest(name="Item Root", unit_id=unit.id, category_id=root.id),
+        )
+
+        await service.update_category(uow, root.id, CategoryUpdateRequest(is_active=False))
+        await service.delete_category(uow, root.id, admin_user.id)
+
+        uncategorized = await service._get_or_create_uncategorized_category(uow)
+        reloaded_child = await uow.catalog.get_category_by_id(child.id)
+        reloaded_item = await uow.catalog.get_item_by_id(item.id)
+
+        assert reloaded_child is not None
+        assert reloaded_child.parent_id == uncategorized.id
+        assert reloaded_item is not None
+        assert reloaded_item.category_id == uncategorized.id
+
+    @pytest.mark.asyncio
+    async def test_cannot_delete_uncategorized_category(self, uow, admin_user):
+        service = CatalogAdminService()
+
+        uncategorized = await service._get_or_create_uncategorized_category(uow)
+
+        with pytest.raises(Exception) as exc_info:
+            await service.delete_category(uow, uncategorized.id, admin_user.id)
+
+        assert "system category cannot be deleted" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_delete_fails_on_child_name_conflict_without_partial_changes(self, uow, admin_user):
+        service = CatalogAdminService()
+
+        parent = await service.create_category(uow, CategoryCreateRequest(name="Parent"))
+        source = await service.create_category(uow, CategoryCreateRequest(name="Source", parent_id=parent.id))
+        child = await service.create_category(uow, CategoryCreateRequest(name="Conflict", parent_id=source.id))
+        _existing = await service.create_category(uow, CategoryCreateRequest(name="Conflict", parent_id=parent.id))
+        unit = await service.create_unit(uow, UnitCreateRequest(name="pcs", symbol="pcs"))
+        item = await service.create_item(
+            uow,
+            ItemCreateRequest(name="Item C", unit_id=unit.id, category_id=source.id),
+        )
+
+        await service.update_category(uow, source.id, CategoryUpdateRequest(is_active=False))
+
+        with pytest.raises(Exception) as exc_info:
+            await service.delete_category(uow, source.id, admin_user.id)
+
+        assert "child category name conflict under target parent" in str(exc_info.value)
+
+        reloaded_source = await uow.catalog.get_category_by_id(source.id)
+        reloaded_child = await uow.catalog.get_category_by_id(child.id)
+        reloaded_item = await uow.catalog.get_item_by_id(item.id)
+
+        assert reloaded_source is not None
+        assert reloaded_source.deleted_at is None
+        assert reloaded_child is not None
+        assert reloaded_child.parent_id == source.id
+        assert reloaded_item is not None
+        assert reloaded_item.category_id == source.id

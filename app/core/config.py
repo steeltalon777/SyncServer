@@ -34,6 +34,26 @@ class Settings(BaseSettings):
     DEFAULT_BALANCES_PAGE_SIZE: int = Field(default=100, ge=1, le=200, description="Default page size for balances")
     DEFAULT_ADMIN_PAGE_SIZE: int = Field(default=50, ge=1, le=100, description="Default page size for admin endpoints")
     MAX_OPERATION_LINES: int = Field(default=100, ge=1, le=500, description="Maximum lines per operation")
+    ORGANIZATION_FULL_NAME: str = Field(
+        default="",
+        description="Global full legal organization name",
+    )
+    ORGANIZATION_SHORT_NAME: str = Field(
+        default='ООО АС "Горизонт"',
+        description="Global short organization name",
+    )
+    DOCUMENT_ORGANIZATION_FULL_NAME: str | None = Field(
+        default=None,
+        description="Deprecated fallback; use ORGANIZATION_FULL_NAME",
+    )
+    DOCUMENT_ORGANIZATION_SHORT_NAME: str | None = Field(
+        default=None,
+        description="Deprecated fallback; use ORGANIZATION_SHORT_NAME",
+    )
+    DOCUMENT_ORGANIZATION_NAME: str | None = Field(
+        default=None,
+        description="Deprecated fallback; use ORGANIZATION_FULL_NAME",
+    )
 
     # Health check settings
     HEALTH_CHECK_TIMEOUT: float = Field(default=5.0, ge=0.5, le=30.0, description="Timeout for health checks in seconds")

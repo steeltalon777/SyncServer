@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -89,12 +89,14 @@ class TemporaryItemsRepo:
         if created_before is not None:
             stmt = stmt.where(TemporaryItem.created_at <= created_before)
         if search:
-            term = f"%{search.strip()}%"
+            search_value = search.strip()
+            term = f"%{search_value.lstrip('#')}%"
             stmt = stmt.where(
                 or_(
                     TemporaryItem.name.ilike(term),
                     TemporaryItem.sku.ilike(term),
                     TemporaryItem.description.ilike(term),
+                    cast(TemporaryItem.hashtags, String).ilike(term),
                 )
             )
 

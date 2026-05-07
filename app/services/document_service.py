@@ -7,10 +7,9 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from app.core.config import get_settings
 from fastapi import HTTPException, status
 
-from app.repos.sites_repo import SitesRepo
-from app.repos.users_repo import UsersRepo
 from app.schemas.document import DocumentGenerateRequest, DocumentType
 from app.services.uow import UnitOfWork
 
@@ -60,6 +59,62 @@ def _generate_document_number(
 
 class DocumentService:
     """Сервис для формирования документов из операций."""
+
+    @staticmethod
+    def _person_label(user) -> str | None:
+        if user is None:
+            return None
+        full_name = str(getattr(user, "full_name", "") or "").strip()
+        username = str(getattr(user, "username", "") or "").strip()
+        return full_name or username or str(getattr(user, "id", "") or "").strip() or None
+
+    @staticmethod
+    def _site_info(site) -> dict[str, Any] | None:
+        if site is None:
+            return None
+        return {
+            "site_id": site.id,
+            "site_code": site.code,
+            "site_name": site.name,
+            "description": site.description,
+        }
+
+    @staticmethod
+    def _document_party_labels(operation, site, destination_site) -> tuple[str, str]:
+        source_label = site.name if site is not None else "—"
+
+        if operation.operation_type == "MOVE":
+            destination_label = destination_site.name if destination_site is not None else "—"
+        elif operation.operation_type in {"ISSUE", "ISSUE_RETURN", "EXPENSE"}:
+            destination_label = (
+                operation.recipient_name_snapshot
+                or operation.issued_to_name
+                or "—"
+            )
+        else:
+            destination_label = site.name if site is not None else "—"
+
+        return source_label, destination_label
+
+    @staticmethod
+    def _organization_settings() -> dict[str, str]:
+        settings = get_settings()
+        full_name = (
+            settings.ORGANIZATION_FULL_NAME
+            or settings.DOCUMENT_ORGANIZATION_FULL_NAME
+            or settings.DOCUMENT_ORGANIZATION_NAME
+            or 'Общество с ограниченной ответственностью Автоматизированные системы "Горизонт"'
+        )
+        short_name = (
+            settings.ORGANIZATION_SHORT_NAME
+            or settings.DOCUMENT_ORGANIZATION_SHORT_NAME
+            or full_name
+        )
+        return {
+            "full_name": full_name,
+            "short_name": short_name,
+            "legal_name": full_name,
+        }
 
     @staticmethod
     async def generate_from_operation(
@@ -216,10 +271,12 @@ class DocumentService:
         """
         # Заголовок документа
         document_title = DocumentService._get_document_title(document_type)
+        organization = DocumentService._organization_settings()
 
         # Данные площадки (отправитель)
         sender_organization = {
-            "legal_name": site.name,
+            "legal_name": organization["full_name"],
+            "short_name": organization["short_name"],
             "address": site.description,
             "tax_id": None,
             "contacts": None,
@@ -236,7 +293,8 @@ class DocumentService:
         receiver_info = None
         if destination_site:
             receiver_organization = {
-                "legal_name": destination_site.name,
+                "legal_name": organization["full_name"],
+                "short_name": organization["short_name"],
                 "address": destination_site.description,
                 "tax_id": None,
                 "contacts": None,
@@ -285,8 +343,8 @@ class DocumentService:
             }
             # Для приёмки — добавляем принятые/потерянные количества
             if operation.acceptance_state in ("in_progress", "resolved"):
-                line_data["accepted_qty"] = float(line.accepted_qty) if line.accepted_qty else None
-                line_data["lost_qty"] = float(line.lost_qty) if line.lost_qty else None
+                line_data["accepted_qty"] = float(line.accepted_qty or 0)
+                line_data["lost_qty"] = float(line.lost_qty or 0)
             lines.append(line_data)
 
         # Получатель (для ISSUE/ISSUE_RETURN)
@@ -306,11 +364,15 @@ class DocumentService:
             }
 
         # Подписи с ролями
+        warehouse_keeper_label = (
+            DocumentService._person_label(submitted_by_user)
+            or DocumentService._person_label(created_by_user)
+        )
         signatures = {
-            "created_by": created_by_info["full_name"] if created_by_info else None,
-            "submitted_by": submitted_by_info["full_name"] if submitted_by_info else None,
+            "created_by": DocumentService._person_label(created_by_user),
+            "submitted_by": DocumentService._person_label(submitted_by_user),
             "roles": {
-                "handed_over": submitted_by_info["full_name"] if submitted_by_info else None,
+                "handed_over": warehouse_keeper_label,
                 "accepted_by": None,
                 "chief_accountant": "________________",
             },
@@ -344,11 +406,19 @@ class DocumentService:
             },
         }
         localization = localization_map.get(language_normalized, localization_map["ru"])
+        source_label, destination_label = DocumentService._document_party_labels(
+            operation,
+            site,
+            destination_site,
+        )
 
         payload = {
             "document_title": document_title,
+            "document_heading": f"{document_title} {organization['short_name']}",
+            "organization": organization,
             "operation_id": str(operation.id),
             "operation_type": operation.operation_type,
+            "operation_type_label": DocumentService._get_operation_type_label(operation.operation_type),
             "operation_status": operation.status,
             "operation_notes": operation.notes,
             "operation_created_at": operation.created_at.isoformat() if operation.created_at else None,
@@ -357,8 +427,13 @@ class DocumentService:
             "operation_acceptance_state": operation.acceptance_state,
             "sender": sender_info,
             "receiver": receiver_info,
+            "source_site": DocumentService._site_info(site),
+            "destination_site": DocumentService._site_info(destination_site),
+            "source_label": source_label,
+            "destination_label": destination_label,
             "recipient": recipient_info,
             "issued_to": issued_to_info,
+            "warehouse_keeper": warehouse_keeper_label,
             "basis": basis,
             "lines": lines,
             "total_lines": len(lines),
@@ -382,3 +457,16 @@ class DocumentService:
             "invoice": "Счёт",
         }
         return titles.get(document_type, "Документ")
+
+    @staticmethod
+    def _get_operation_type_label(operation_type: str) -> str:
+        labels = {
+            "RECEIVE": "Поступление",
+            "EXPENSE": "Расход",
+            "WRITE_OFF": "Списание",
+            "MOVE": "Перемещение",
+            "ADJUSTMENT": "Корректировка",
+            "ISSUE": "Выдача",
+            "ISSUE_RETURN": "Возврат выдачи",
+        }
+        return labels.get(operation_type, operation_type)
