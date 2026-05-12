@@ -1,50 +1,54 @@
-# Virtual Environment
-.venv/
-venv/
-ENV/
-env/
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Environment variables
-.env
-!.env.example
-
-# Logs
-*.log
-logs/
-
-# Database
-*.db
-*.sqlite3
-
-# Uploads
-uploads/
-media/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Distribution
-dist/
-build/
-*.egg-info/
-.env
+# Generated repo maps
 repo_map.txt
+repo_map.json
 
-# Docker
-*.pid
-docker-compose.override.yml
+# Generated OpenAPI / probe artifacts
+*_openapi*.json
+*_probe_results.json
+*_results.json
+
+# Local runtime outputs
+*_out.txt
+*_run.txt
+*_summary.txt
+*_recheck.txt
+
+# Alembic local outputs
+alembic_current.txt
+alembic_heads.txt
+alembic_upgrade.txt
+
+
+
+# AI tooling
+.opencode/
+.playwright-mcp/
+
+# OS junk
+Thumbs.db
+Desktop.ini
+# Python caches
+**/__pycache__/
+
+# JetBrains
+.idea/
+
+# Local logs
+api_crud_test.log
+syncserver_stdout.log
+syncserver_stderr.log
+# Local environment
+.env
+
+# Generated repo maps
+repo_map.txt
+repo_map.json
+repo_map_*.md
+repo_map_*.txt
+repo_map_*.json
+
+# Generated temporary docs/maps
+docs/entry_points.txt
+docs/env_map.txt
+docs/tree_repo.txt
+docs/tree_services.txt

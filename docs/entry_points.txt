@@ -1,4 +1,0 @@
-Potential entry points and routing files:
-- main.py
-- scripts/bootstrap_root.py
-- tools/update_ai_maps.py

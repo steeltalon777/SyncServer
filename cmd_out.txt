@@ -1,2 +1,0 @@
-C:\Program Files\Python313\python.exe
-C:\Users\steel\AppData\Local\Microsoft\WindowsApps\python.exe
