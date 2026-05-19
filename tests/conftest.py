@@ -504,3 +504,7 @@ def pytest_configure(config: Any) -> None:
         "markers",
         "stand_db: прямое обращение к stand database (отдельный guard)"
     )
+    config.addinivalue_line(
+        "markers",
+        "fast: быстрые тесты для CI (подмножество unit, <10 секунд)"
+    )

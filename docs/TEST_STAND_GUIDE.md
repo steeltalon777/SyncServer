@@ -22,8 +22,47 @@ Stand-тесты — это интеграционные и e2e тесты, ко
 docker-compose up -d
 
 # Убедитесь, что сервер доступен
-curl http://localhost:8000/api/health
+curl http://localhost:8000/api/v1/health
 ```
+
+### 0. Инициализация БД и bootstrap
+
+Перед первым запуском стенда выполните миграции и bootstrap seed data:
+
+```bash
+# 1. Применить миграции Alembic
+python -m alembic upgrade head
+
+# 2. Запустить bootstrap (root user, Django device, uncategorized category)
+python scripts/bootstrap_root.py
+
+# Результат:
+#   SYNC_ROOT_USER_TOKEN=<uuid>
+#   SYNC_DEVICE_TOKEN=<uuid>
+```
+
+**Идемпотентность:** повторный запуск `bootstrap_root.py` НЕ меняет существующие токены. Это безопасно для повторных запусков.
+
+**Ротация токенов при компрометации:**
+
+```bash
+# Только root token
+python scripts/rotate_tokens.py --root
+
+# Только Django device token
+python scripts/rotate_tokens.py --django-device
+
+# Оба сразу
+python scripts/rotate_tokens.py --root --django-device
+```
+
+Ротация — явная операция. Bootstrap по умолчанию никогда не меняет существующие токены.
+
+**Переменные окружения для Django:**
+- `SYNC_ROOT_USER_TOKEN` — токен root-пользователя
+- `SYNC_DEVICE_TOKEN` — токен Django device
+
+**Внимание:** bootstrap работает с базой данных, указанной в `DATABASE_URL`. Убедитесь, что это тестовая/dev БД, а не production. При использовании флага `--run-migrations` скрипт выполнит `alembic upgrade head` перед созданием данных.
 
 ### 2. Настройка переменных окружения
 
@@ -76,8 +115,8 @@ Stand-тесты запускаются только если пользоват
 
 ### Уровень 3: Stand identity probe
 После проверки env выполняется preflight probe стенда:
-1. Проверяется доступность health endpoint (`/api/health`)
-2. Проверяется доступность readiness endpoint (`/api/health/ready`)
+1. Проверяется доступность health endpoint (`/api/v1/health`)
+2. Проверяется доступность readiness endpoint (`/api/v1/ready`)
 3. Проверяется, что аутентификация через root token работает
 
 Если probe не проходит, pytest завершается с ошибкой до запуска тестов.
@@ -132,7 +171,7 @@ import pytest
 @pytest.mark.stand
 def test_something(stand_client, stand_run_id):
     # Используем stand_client для HTTP запросов
-    response = stand_client.get("/api/health")
+    response = stand_client.get("/api/v1/health")
     assert response.status_code == 200
     
     # Используем stand_run_id для изоляции данных
@@ -179,12 +218,12 @@ echo "SYNC_TEST_ROOT_TOKEN=${SYNC_TEST_ROOT_TOKEN:0:10}..."
 
 1. Убедитесь, что стенд запущен и доступен:
    ```bash
-   curl $SYNC_TEST_BASE_URL/api/health
+   curl $SYNC_TEST_BASE_URL/api/v1/health
    ```
 
 2. Проверьте, что root token корректен:
    ```bash
-   curl -H "Authorization: Bearer $SYNC_TEST_ROOT_TOKEN" $SYNC_TEST_BASE_URL/api/health
+   curl -H "X-User-Token: $SYNC_TEST_ROOT_TOKEN" $SYNC_TEST_BASE_URL/api/v1/health
    ```
 
 3. Проверьте, что health и readiness endpoints возвращают 200.

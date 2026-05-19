@@ -129,8 +129,7 @@ async def test_delete_temporary_item_success(
     chief = seed["chief"]
     temporary_item = seed["temporary_item"]
 
-    # Аутентификация chief
-    auth_headers = {"X-User-Id": str(chief.id)}
+    auth_headers = {"X-User-Token": str(chief.user_token)}
 
     # DELETE запрос
     resp = await client.delete(
@@ -183,7 +182,7 @@ async def test_delete_temporary_item_with_non_zero_balance_fails(
         session.add(balance)
         await session.commit()
 
-    auth_headers = {"X-User-Id": str(chief.id)}
+    auth_headers = {"X-User-Token": str(chief.user_token)}
     resp = await client.delete(
         f"/temporary-items/{temporary_item.id}",
         headers=auth_headers,
@@ -239,7 +238,7 @@ async def test_delete_temporary_item_with_active_registers_fails(
         session.add(pending)
         await session.commit()
 
-    auth_headers = {"X-User-Id": str(chief.id)}
+    auth_headers = {"X-User-Token": str(chief.user_token)}
     resp = await client.delete(
         f"/temporary-items/{temporary_item.id}",
         headers=auth_headers,
@@ -256,7 +255,7 @@ async def test_delete_temporary_item_not_found(
     """Попытка удалить несуществующий временный ТМЦ."""
     seed = await _seed(session_factory)
     chief = seed["chief"]
-    auth_headers = {"X-User-Id": str(chief.id)}
+    auth_headers = {"X-User-Token": str(chief.user_token)}
     resp = await client.delete("/temporary-items/999999", headers=auth_headers)
     assert resp.status_code == 404
 
@@ -280,7 +279,7 @@ async def test_delete_temporary_item_already_resolved(
         db_item.resolved_by_user_id = chief.id
         await session.commit()
 
-    auth_headers = {"X-User-Id": str(chief.id)}
+    auth_headers = {"X-User-Token": str(chief.user_token)}
     resp = await client.delete(
         f"/temporary-items/{temporary_item.id}",
         headers=auth_headers,
@@ -322,7 +321,7 @@ async def test_delete_temporary_item_no_permission(
         # Не даём scope
         await session.commit()
 
-    auth_headers = {"X-User-Id": str(user.id)}
+    auth_headers = {"X-User-Token": str(user.user_token)}
     resp = await client.delete(
         f"/temporary-items/{temporary_item.id}",
         headers=auth_headers,

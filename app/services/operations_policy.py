@@ -71,6 +71,17 @@ class OperationsPolicy:
         )
 
     @staticmethod
+    def require_operation_delete_permission(identity: Identity, operation) -> None:
+        if identity.has_global_business_access:
+            return
+        if operation.created_by_user_id == identity.user_id:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only chief_storekeeper, root, or the operation creator may delete cancelled operations",
+        )
+
+    @staticmethod
     def require_operation_cancel_permission(identity: Identity, operation) -> None:
         if identity.has_global_business_access:
             return

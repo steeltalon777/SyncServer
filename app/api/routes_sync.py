@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 
 from app.api.deps import (
@@ -43,7 +43,6 @@ async def ping(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_device_identity),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
 ) -> PingResponse:
     await enforce_rate_limit(request=request, device_id=payload.device_id, route_name="ping")
 
@@ -71,7 +70,6 @@ async def push(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_device_identity),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
 ) -> PushResponse:
     if len(payload.events) > settings.MAX_PUSH_EVENTS:
         raise HTTPException(
@@ -122,7 +120,6 @@ async def pull(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_device_identity),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
 ) -> PullResponse:
     limit = payload.limit if "limit" in payload.model_fields_set else settings.DEFAULT_PULL_LIMIT
 
@@ -169,7 +166,6 @@ async def bootstrap_sync(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
 ) -> BootstrapSyncResponse:
     """Endpoint начальной загрузки для Django-клиента.
 

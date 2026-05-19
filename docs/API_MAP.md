@@ -1,5 +1,11 @@
 # API MAP
 
+> **STALE** — This file was generated from a prior OpenAPI state and has not been
+> regenerated after the auth contract cleanup. It may contain references to
+> `X-Client-Version`, `X-Site-Id`, `Authorization: Bearer`, and other headers
+> that are no longer part of the active auth model. Regenerate from the current
+> OpenAPI schema when a generation script is available.
+
 Generated from FastAPI OpenAPI schema on 2026-04-24 07:19:25Z.
 
 Source of truth: mounted routers in `main.py` and schemas registered in FastAPI OpenAPI.

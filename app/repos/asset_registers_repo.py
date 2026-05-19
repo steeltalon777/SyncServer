@@ -447,6 +447,25 @@ class AssetRegistersRepo:
             return None
         return dict(result._mapping)
 
+    async def has_active_lost_for_item(self, item_id: int) -> bool:
+        """Check if a permanent catalog item has active (qty > 0) lost asset balances."""
+        inv_subject_stmt = select(InventorySubject).where(
+            InventorySubject.subject_type == "catalog_item",
+            InventorySubject.item_id == item_id,
+        )
+        inv_subject = (await self.session.execute(inv_subject_stmt)).scalar_one_or_none()
+        if inv_subject is None:
+            return False
+
+        lost_stmt = select(func.count()).select_from(
+            select(LostAssetBalance)
+            .where(LostAssetBalance.inventory_subject_id == inv_subject.id)
+            .where(LostAssetBalance.qty > 0)
+            .subquery()
+        )
+        lost_count = int((await self.session.execute(lost_stmt)).scalar_one() or 0)
+        return lost_count > 0
+
     async def create_acceptance_action(
         self,
         *,

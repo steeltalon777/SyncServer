@@ -133,3 +133,34 @@ def test_root_can_accept_without_site_scope() -> None:
     identity = _identity(role="storekeeper", is_root=True)
 
     OperationsPolicy.require_acceptance_site(identity, 999)
+
+
+def test_root_can_delete_any_cancelled_operation() -> None:
+    identity = _identity(role="storekeeper", is_root=True)
+    op = _operation(uuid4(), status="cancelled")
+
+    OperationsPolicy.require_operation_delete_permission(identity, op)
+
+
+def test_chief_storekeeper_can_delete_any_cancelled_operation() -> None:
+    identity = _identity(role="chief_storekeeper")
+    op = _operation(uuid4(), status="cancelled")
+
+    OperationsPolicy.require_operation_delete_permission(identity, op)
+
+
+def test_storekeeper_can_delete_own_cancelled_operation() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+    op = _operation(identity.user_id, status="cancelled")
+
+    OperationsPolicy.require_operation_delete_permission(identity, op)
+
+
+def test_storekeeper_cannot_delete_other_cancelled_operation() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+    op = _operation(uuid4(), status="cancelled")
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_operation_delete_permission(identity, op)
+
+    assert exc.value.status_code == 403

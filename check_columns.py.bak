@@ -1,0 +1,31 @@
+import asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+async def main():
+    engine = create_async_engine("postgresql+asyncpg://appuser:917354862St!@127.0.0.1:5434/sync_db")
+    async with engine.connect() as conn:
+        r = await conn.execute(text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name='operations' "
+            "ORDER BY ordinal_position"
+        ))
+        print("public.operations columns:", [row[0] for row in r])
+        
+        r2 = await conn.execute(text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name='operations' AND column_name='deleted_at'"
+        ))
+        print("deleted_at exists:", [row[0] for row in r2])
+        
+        r3 = await conn.execute(text("SELECT version_num FROM alembic_version"))
+        print("alembic_version:", [row[0] for row in r3])
+        
+        r4 = await conn.execute(text(
+            "SELECT table_schema, table_name FROM information_schema.columns "
+            "WHERE column_name='deleted_at' ORDER BY table_schema, table_name"
+        ))
+        print("deleted_at in schemas:", [(row[0], row[1]) for row in r4])
+    await engine.dispose()
+
+asyncio.run(main())

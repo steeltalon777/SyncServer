@@ -1100,6 +1100,23 @@ class OperationsService:
         return {"status": "ok"}
 
     @staticmethod
+    async def delete_operation(
+        uow: UnitOfWork,
+        operation_id: UUID,
+        user_id: UUID,
+    ) -> None:
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        OperationsWorkflowPolicy.require_exists(operation)
+        OperationsWorkflowPolicy.require_cancelled_for_delete(operation)
+
+        await uow.operations.soft_delete_operation(
+            operation_id=operation_id,
+            deleted_by_user_id=user_id,
+        )
+
+        logger.info("deleted operation=%s by user=%s", operation_id, user_id)
+
+    @staticmethod
     async def cancel_operation(
         uow: UnitOfWork,
         operation_id: UUID,

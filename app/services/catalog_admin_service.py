@@ -193,10 +193,18 @@ class CatalogAdminService:
         )
         return await uow.catalog.create_item(item)
 
+    async def _assert_item_not_frozen(self, uow: UnitOfWork, item_id: int) -> None:
+        if await uow.asset_registers.has_active_lost_for_item(item_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="item is frozen by active lost asset balance",
+            )
+
     async def update_item(self, uow: UnitOfWork, item_id: int, payload: ItemUpdateRequest) -> Item:
         item = await uow.catalog.get_item_by_id(item_id)
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
+        await self._assert_item_not_frozen(uow, item_id)
 
         if "category_id" in payload.model_fields_set:
             category = await self._resolve_item_category(uow, payload.category_id)
@@ -330,6 +338,7 @@ class CatalogAdminService:
         item = await uow.catalog.get_item_by_id(item_id)
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
+        await self._assert_item_not_frozen(uow, item_id)
         if item.deleted_at is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="item already deleted")
         if item.is_active:

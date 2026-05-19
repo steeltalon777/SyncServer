@@ -54,6 +54,14 @@ class OperationsWorkflowPolicy:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="operation is already fully accepted")
 
     @staticmethod
+    def require_cancelled_for_delete(operation) -> None:
+        if operation.status != "cancelled":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"only cancelled operations can be deleted, current status: {operation.status}",
+            )
+
+    @staticmethod
     def require_not_cancelled_for_cancel(operation) -> None:
         if operation.status == "cancelled":
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="operation is already cancelled")

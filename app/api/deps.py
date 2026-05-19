@@ -91,17 +91,13 @@ async def require_identity(
     identity_service: IdentityService = Depends(get_identity_service),
     x_user_token: str | None = Header(default=None, alias="X-User-Token"),
     x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
-    request: Request = None,  # injected by FastAPI automatically
+    request: Request = None,
 ) -> Identity:
-    """
-    Require at least one valid token (user or device).
-    """
+    """Require at least one valid token (user or device)."""
     return await identity_service.resolve_identity(
         user_token=x_user_token,
         device_token=x_device_token,
         client_ip=get_client_ip(request) if request else None,
-        client_version=x_client_version,
     )
 
 
@@ -109,18 +105,14 @@ async def require_user_identity(
     identity_service: IdentityService = Depends(get_identity_service),
     x_user_token: str | None = Header(default=None, alias="X-User-Token"),
     x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
     request: Request = None,
 ) -> Identity:
-    """
-    Require valid X-User-Token. X-Device-Token is optional for audit context.
-    """
+    """Require valid X-User-Token. X-Device-Token is optional for audit context."""
     return await identity_service.resolve_identity(
         user_token=x_user_token,
         device_token=x_device_token,
         require_user=True,
         client_ip=get_client_ip(request) if request else None,
-        client_version=x_client_version,
     )
 
 
@@ -128,18 +120,14 @@ async def require_device_identity(
     identity_service: IdentityService = Depends(get_identity_service),
     x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
     x_user_token: str | None = Header(default=None, alias="X-User-Token"),
-    x_client_version: str | None = Header(default=None, alias="X-Client-Version"),
     request: Request = None,
 ) -> Identity:
-    """
-    Require valid X-Device-Token. X-User-Token is optional.
-    """
+    """Require valid X-Device-Token. X-User-Token is optional."""
     return await identity_service.resolve_identity(
         user_token=x_user_token,
         device_token=x_device_token,
         require_device=True,
         client_ip=get_client_ip(request) if request else None,
-        client_version=x_client_version,
     )
 
 

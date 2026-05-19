@@ -9,7 +9,6 @@ Primary user auth:
 
 Optional device context (auth endpoints):
 - `X-Device-Token: <uuid>`
-- `X-Device-Id: <int>`
 
 Device sync auth:
 - `X-Device-Token: <uuid>`
@@ -112,11 +111,12 @@ Admin:
 - `DELETE /catalog/admin/items/{item_id}` - delete item
 - `POST /catalog/admin/items` fallback: missing/null/unknown/inactive category resolves to `__UNCATEGORIZED__`
 - `PATCH /catalog/admin/items/{item_id}` category semantics: omitted keeps current category, `null` moves to `__UNCATEGORIZED__`
+- **Freeze rule**: `PATCH` and `DELETE` on an item return `409 Conflict` with detail `"item is frozen by active lost asset balance"` when the item has positive `lost_asset_balances.qty`. This is a server-side invariant — UI disabling is UX convenience only. The item becomes editable again after all positive lost quantities are resolved to zero (found, write-off, or return-to-source).
 
 Bulk catalog admin creation:
 - endpoints accept JSON body `{ "items": [...] }`
 - behavior is atomic: if one row conflicts or fails validation, the whole request is rolled back
-- auth rules are the same as single create: `root` may omit `X-Site-Id`; `chief_storekeeper` must send `X-Site-Id` with catalog-management access; `storekeeper` and `observer` are denied
+- auth rules: `root` and `chief_storekeeper` may access catalog admin; `storekeeper` and `observer` are denied
 - category bulk create supports `parent_id` references to already existing categories; `client_key` / `parent_key` tree import is not part of this contract
 
 Bulk units example:

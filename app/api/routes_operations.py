@@ -226,6 +226,30 @@ async def submit_operation(
     return OperationResponse.model_validate(result["operation"])
 
 
+@router.delete("/{operation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_operation(
+    operation_id: UUID,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> None:
+    async with uow:
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        if not operation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
+
+        OperationsPolicy.require_operate_site(identity, operation.site_id)
+        OperationsPolicy.require_operation_delete_permission(identity, operation)
+
+        await OperationsService.delete_operation(
+            uow=uow,
+            operation_id=operation_id,
+            user_id=identity.user_id,
+        )
+
+    logger.info("request_id=%s delete_operation id=%s user=%s", get_request_id(request), operation_id, identity.user_id)
+
+
 @router.post("/{operation_id}/cancel", response_model=OperationResponse)
 async def cancel_operation(
     operation_id: UUID,

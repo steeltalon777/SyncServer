@@ -23,23 +23,15 @@ from app.schemas.catalog import (
     UnitResponse,
     UnitUpdateRequest,
 )
-from app.services.access_guard import AccessGuard
-from app.services.access_service import AccessService
 from app.services.catalog_admin_service import CatalogAdminService
 from app.services.uow import UnitOfWork
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 router = APIRouter(prefix="/catalog/admin")
 logger = logging.getLogger(__name__)
 
 
-async def _require_catalog_admin(
-    uow: UnitOfWork,
-    identity: Identity,
-    site_id_int: int | None,
-) -> None:
-    access_service = AccessService(uow)
-
+async def _require_catalog_admin(identity: Identity) -> None:
     if identity.is_root:
         return
 
@@ -49,18 +41,6 @@ async def _require_catalog_admin(
             detail="catalog admin access denied",
         )
 
-    if site_id_int is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Site-Id is required for chief_storekeeper catalog admin actions",
-        )
-
-    await AccessGuard.require_catalog_admin_access(
-        access_service=access_service,
-        user_id=identity.user_id,
-        site_id=site_id_int,
-    )
-
 
 @router.post("/units", response_model=UnitResponse)
 async def create_unit(
@@ -68,11 +48,10 @@ async def create_unit(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> UnitResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         unit = await service.create_unit(uow, payload)
 
     logger.info("request_id=%s create_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, identity.user_id)
@@ -85,11 +64,10 @@ async def bulk_create_units(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> UnitBulkCreateResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         units = await service.bulk_create_units(uow, payload)
 
     logger.info("request_id=%s bulk_create_units count=%s user_id=%s", get_request_id(request), len(units), identity.user_id)
@@ -103,11 +81,10 @@ async def update_unit(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> UnitResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         unit = await service.update_unit(uow, unit_id, payload)
 
     logger.info("request_id=%s update_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, identity.user_id)
@@ -120,11 +97,10 @@ async def create_category(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> CategoryResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         category = await service.create_category(uow, payload)
 
     logger.info(
@@ -142,11 +118,10 @@ async def bulk_create_categories(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> CategoryBulkCreateResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         categories = await service.bulk_create_categories(uow, payload)
 
     logger.info(
@@ -165,11 +140,10 @@ async def update_category(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> CategoryResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         category = await service.update_category(uow, category_id, payload)
 
     logger.info(
@@ -187,11 +161,10 @@ async def create_item(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> ItemResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         item = await service.create_item(uow, payload)
 
     logger.info("request_id=%s create_item item_id=%s user_id=%s", get_request_id(request), item.id, identity.user_id)
@@ -205,11 +178,10 @@ async def update_item(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> ItemResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         item = await service.update_item(uow, item_id, payload)
 
     logger.info("request_id=%s update_item item_id=%s user_id=%s", get_request_id(request), item.id, identity.user_id)
@@ -222,11 +194,10 @@ async def get_unit(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> UnitResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         unit = await service.get_unit(uow, unit_id)
 
     logger.info("request_id=%s get_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, identity.user_id)
@@ -239,11 +210,10 @@ async def delete_unit(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> None:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         await service.delete_unit(uow, unit_id, identity.user_id)
 
     logger.info("request_id=%s delete_unit unit_id=%s user_id=%s", get_request_id(request), unit_id, identity.user_id)
@@ -254,7 +224,6 @@ async def list_units(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
     include_inactive: bool = False,
     include_deleted: bool = False,
     page: int = Query(1, ge=1),
@@ -262,7 +231,7 @@ async def list_units(
 ) -> UnitListResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         units, total_count = await service.list_units(
             uow,
             include_inactive=include_inactive,
@@ -292,11 +261,10 @@ async def get_category(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> CategoryResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         category = await service.get_category(uow, category_id)
 
     logger.info("request_id=%s get_category category_id=%s user_id=%s", get_request_id(request), category.id, identity.user_id)
@@ -309,11 +277,10 @@ async def delete_category(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> None:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         await service.delete_category(uow, category_id, identity.user_id)
 
     logger.info("request_id=%s delete_category category_id=%s user_id=%s", get_request_id(request), category_id, identity.user_id)
@@ -324,7 +291,6 @@ async def list_categories(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
     include_inactive: bool = False,
     include_deleted: bool = False,
     page: int = Query(1, ge=1),
@@ -332,7 +298,7 @@ async def list_categories(
 ) -> CategoryListResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         categories, total_count = await service.list_categories(
             uow,
             include_inactive=include_inactive,
@@ -362,11 +328,10 @@ async def get_item(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> ItemResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         item = await service.get_item(uow, item_id)
 
     logger.info("request_id=%s get_item item_id=%s user_id=%s", get_request_id(request), item.id, identity.user_id)
@@ -379,11 +344,10 @@ async def delete_item(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
 ) -> None:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         await service.delete_item(uow, item_id, identity.user_id)
 
     logger.info("request_id=%s delete_item item_id=%s user_id=%s", get_request_id(request), item_id, identity.user_id)
@@ -394,7 +358,6 @@ async def list_items(
     request: Request,
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    x_site_id: int | None = Header(default=None, alias="X-Site-Id"),
     include_inactive: bool = False,
     include_deleted: bool = False,
     page: int = Query(1, ge=1),
@@ -402,7 +365,7 @@ async def list_items(
 ) -> ItemListResponse:
     service = CatalogAdminService()
     async with uow:
-        await _require_catalog_admin(uow=uow, identity=identity, site_id_int=x_site_id)
+        await _require_catalog_admin(identity=identity)
         items, total_count = await service.list_items(
             uow,
             include_inactive=include_inactive,

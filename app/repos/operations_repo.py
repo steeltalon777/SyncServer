@@ -60,10 +60,22 @@ class OperationsRepo:
         await self.session.flush()
         return operation
 
+    async def soft_delete_operation(self, operation_id: UUID, deleted_by_user_id: UUID) -> Operation | None:
+        operation = await self.get_operation_by_id(operation_id)
+        if operation is None:
+            return None
+        from datetime import UTC, datetime
+        operation.deleted_at = datetime.now(UTC)
+        operation.deleted_by_user_id = deleted_by_user_id
+        operation.version = int(operation.version) + 1
+        await self.session.flush()
+        return operation
+
     async def get_operation_by_id(self, operation_id: UUID) -> Operation | None:
         stmt = (
             select(Operation)
             .where(Operation.id == operation_id)
+            .where(Operation.deleted_at.is_(None))
             .options(
                 selectinload(Operation.lines)
                 .selectinload(OperationLine.item)
@@ -83,6 +95,7 @@ class OperationsRepo:
             select(Operation)
             .where(Operation.created_by_user_id == created_by_user_id)
             .where(Operation.machine_last_batch_id == client_request_id)
+            .where(Operation.deleted_at.is_(None))
             .options(
                 selectinload(Operation.lines)
                 .selectinload(OperationLine.item)
@@ -213,7 +226,7 @@ class OperationsRepo:
             .selectinload(InventorySubject.temporary_item)
             .selectinload(TemporaryItem.resolved_item),
         )
-        where_clauses = []
+        where_clauses = [Operation.deleted_at.is_(None)]
 
         if user_site_ids:
             where_clauses.append(Operation.site_id.in_(user_site_ids))

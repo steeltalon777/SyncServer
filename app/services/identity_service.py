@@ -36,25 +36,8 @@ class IdentityService:
         require_user: bool = False,
         require_device: bool = False,
         client_ip: str | None = None,
-        client_version: str | None = None,
     ) -> Identity:
-        """
-        Resolve identity from available tokens.
-
-        Args:
-            user_token: Optional X-User-Token value
-            device_token: Optional X-Device-Token value
-            require_user: If True, X-User-Token must be present and valid
-            require_device: If True, X-Device-Token must be present and valid
-            client_ip: Client IP for device last_seen update
-            client_version: Client version for device last_seen update
-
-        Returns:
-            Unified Identity object
-
-        Raises:
-            HTTPException: 401 if tokens missing/invalid, 403 if inactive
-        """
+        """Resolve identity from available tokens."""
         user = None
         device = None
         scopes: list = []
@@ -92,7 +75,6 @@ class IdentityService:
             await self.uow.devices.update_last_seen(
                 device_id=device.id,
                 ip=client_ip,
-                client_version=client_version,
             )
 
         # --- Requirement checks ---

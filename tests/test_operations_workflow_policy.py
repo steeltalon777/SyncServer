@@ -64,6 +64,31 @@ def test_acceptance_requires_unresolved_state() -> None:
     assert exc.value.detail == "operation is already fully accepted"
 
 
+def test_delete_requires_cancelled_status() -> None:
+    operation = _operation(status="draft")
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsWorkflowPolicy.require_cancelled_for_delete(operation)
+
+    assert exc.value.status_code == 409
+    assert "cancelled" in exc.value.detail
+
+
+def test_delete_accepts_cancelled_status() -> None:
+    operation = _operation(status="cancelled")
+
+    OperationsWorkflowPolicy.require_cancelled_for_delete(operation)
+
+
+def test_delete_rejects_submitted_operation() -> None:
+    operation = _operation(status="submitted")
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsWorkflowPolicy.require_cancelled_for_delete(operation)
+
+    assert exc.value.status_code == 409
+
+
 def test_cancel_rejects_already_cancelled_operation() -> None:
     operation = _operation(status="cancelled")
 
