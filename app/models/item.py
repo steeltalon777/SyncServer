@@ -43,6 +43,27 @@ class Item(Base):
     source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     import_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     machine_last_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Review flag and metadata for fast-created catalog items
+    requires_review: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+    review_status: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, server_default=None,
+    )
+    review_created_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True,
+    )
+    review_resolved_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True,
+    )
+    review_resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -70,4 +91,6 @@ class Item(Base):
         Index("ix_items_updated_at", "updated_at"),
         Index("ix_items_deleted_at", "deleted_at"),
         Index("idx_items_hashtags", "hashtags", postgresql_using="gin"),
+        Index("ix_items_requires_review", "requires_review"),
+        Index("ix_items_review_status", "review_status"),
     )

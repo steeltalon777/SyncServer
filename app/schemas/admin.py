@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.common import ORMBaseModel
 
@@ -21,6 +21,13 @@ class SiteCreate(BaseModel):
     is_active: bool = Field(default=True, description="Whether the site is active")
     description: str | None = Field(default=None, max_length=500, description="Optional description")
 
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
 
 class SiteUpdate(BaseModel):
     """Schema for updating a site."""
@@ -29,6 +36,13 @@ class SiteUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     is_active: bool | None = None
     description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 class SiteResponse(ORMBaseModel):
@@ -52,6 +66,13 @@ class DeviceCreate(BaseModel):
     site_id: int | None = Field(default=None, description="Nullable if device is not bound to site")
     is_active: bool = True
 
+    @field_validator("device_code", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
 
 class DeviceUpdate(BaseModel):
     """Schema for updating a device."""
@@ -60,6 +81,13 @@ class DeviceUpdate(BaseModel):
     device_name: str | None = Field(default=None, min_length=1, max_length=255)
     site_id: int | None = None
     is_active: bool | None = None
+
+    @field_validator("device_code", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 class DeviceResponse(ORMBaseModel):
@@ -112,6 +140,13 @@ class UserCreate(BaseModel):
     role: UserRole = "observer"
     default_site_id: int | None = None
 
+    @field_validator("email", "full_name", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
 
 class UserUpdate(BaseModel):
     username: str | None = Field(default=None, min_length=1, max_length=150)
@@ -121,6 +156,13 @@ class UserUpdate(BaseModel):
     is_root: bool | None = None
     role: UserRole | None = None
     default_site_id: int | None = None
+
+    @field_validator("email", "full_name", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 class UserResponse(ORMBaseModel):

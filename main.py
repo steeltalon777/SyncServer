@@ -20,6 +20,7 @@ from app.api.routes_operations import router as operations_router
 from app.api.routes_recipients import router as recipients_router
 from app.api.routes_reports import router as reports_router
 from app.api.routes_sync import router as sync_router
+from app.api.routes_review_items import router as review_items_router
 from app.api.routes_temporary_items import router as temporary_items_router
 from app.core.config import get_settings
 from app.core.db import get_db
@@ -137,6 +138,9 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
 
     # Health endpoints
     app.include_router(health_router, prefix=api_v1_prefix)
+
+    # Review Items API (user token auth)
+    app.include_router(review_items_router, prefix=api_v1_prefix)
 
     # Auth endpoints
     app.include_router(auth_router, prefix=api_v1_prefix)

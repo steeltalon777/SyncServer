@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.common import ORMBaseModel
 
@@ -13,12 +13,26 @@ class RecipientCreate(BaseModel):
     recipient_type: str = Field(default="person", max_length=24)
     personnel_no: str | None = Field(default=None, max_length=64)
 
+    @field_validator("personnel_no", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
 
 class RecipientUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=255)
     recipient_type: str | None = Field(default=None, max_length=24)
     personnel_no: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None
+
+    @field_validator("personnel_no", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 class RecipientMerge(BaseModel):

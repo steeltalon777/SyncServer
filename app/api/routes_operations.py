@@ -55,6 +55,15 @@ async def list_operations(
         if site_id is not None:
             OperationsPolicy.require_read_site(identity, site_id)
 
+        # Non-root cannot explicitly list cancelled operations
+        if status_filter == "cancelled" and not OperationsPolicy.can_view_cancelled_operations(identity):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only root may view cancelled operations",
+            )
+        # Non-root without explicit status filter gets cancelled excluded
+        exclude_cancelled = status_filter is None and not OperationsPolicy.can_view_cancelled_operations(identity)
+
         filter_data = OperationFilter(
             site_id=site_id,
             operation_type=operation_type,
@@ -73,6 +82,7 @@ async def list_operations(
             user_site_ids=readable_site_ids,
             page=page,
             page_size=page_size,
+            exclude_cancelled=exclude_cancelled,
         )
 
     return OperationListResponse(
@@ -95,6 +105,9 @@ async def get_operation(
         if not operation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
         OperationsPolicy.require_read_site(identity, operation.site_id)
+        # Hide cancelled operation detail from non-root users (404 to avoid leaking existence)
+        if operation.status == "cancelled" and not OperationsPolicy.can_view_cancelled_operations(identity):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
     logger.info("request_id=%s get_operation id=%s user=%s", get_request_id(request), operation_id, identity.user_id)
     return OperationResponse.model_validate(operation)

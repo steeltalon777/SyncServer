@@ -215,6 +215,7 @@ class OperationsRepo:
         user_site_ids: list[int],
         page: int = 1,
         page_size: int = 50,
+        exclude_cancelled: bool = False,
     ) -> tuple[list[Operation], int]:
         stmt = select(Operation).options(
             selectinload(Operation.lines)
@@ -258,6 +259,8 @@ class OperationsRepo:
         if filter.search:
             term = f"%{filter.search}%"
             where_clauses.append(or_(Operation.notes.ilike(term)))
+        if exclude_cancelled:
+            where_clauses.append(Operation.status != "cancelled")
 
         stmt = stmt.where(and_(*where_clauses))
         count_stmt = (
@@ -397,6 +400,93 @@ class OperationsRepo:
         )
         operations = list((await self.session.execute(stmt)).scalars().all())
         return operations, total_count
+
+    async def get_operations_by_item_id(
+        self,
+        item_id: int,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Operation], int]:
+        """Return all operations where the given catalog item participated.
+
+        Finds operation lines referencing the item through inventory_subject,
+        then returns the parent operations with their lines loaded.
+        """
+        # Find operation_line ids that reference this item
+        line_ids_subq = (
+            select(OperationLine.id)
+            .join(InventorySubject, OperationLine.inventory_subject_id == InventorySubject.id)
+            .where(InventorySubject.item_id == item_id)
+            .subquery()
+        )
+        # Also find operation_lines where item_id directly matches
+        line_ids_subq2 = (
+            select(OperationLine.id)
+            .where(OperationLine.item_id == item_id)
+            .subquery()
+        )
+
+        op_ids_subq = (
+            select(OperationLine.operation_id)
+            .where(
+                or_(
+                    OperationLine.id.in_(select(line_ids_subq)),
+                    OperationLine.id.in_(select(line_ids_subq2)),
+                )
+            )
+            .distinct()
+            .subquery()
+        )
+
+        count_stmt = select(func.count()).select_from(
+            select(Operation).where(Operation.id.in_(select(op_ids_subq))).subquery()
+        )
+        total_count = int((await self.session.execute(count_stmt)).scalar_one())
+
+        stmt = (
+            select(Operation)
+            .where(Operation.id.in_(select(op_ids_subq)))
+            .options(selectinload(Operation.lines))
+            .order_by(desc(Operation.created_at))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        operations = list((await self.session.execute(stmt)).scalars().all())
+        return operations, total_count
+
+    async def count_operations_by_item_id(
+        self,
+        item_id: int,
+    ) -> int:
+        """Count operations referencing a specific catalog item."""
+        line_ids_subq = (
+            select(OperationLine.id)
+            .join(InventorySubject, OperationLine.inventory_subject_id == InventorySubject.id)
+            .where(InventorySubject.item_id == item_id)
+            .subquery()
+        )
+        line_ids_subq2 = (
+            select(OperationLine.id)
+            .where(OperationLine.item_id == item_id)
+            .subquery()
+        )
+
+        op_ids_subq = (
+            select(OperationLine.operation_id)
+            .where(
+                or_(
+                    OperationLine.id.in_(select(line_ids_subq)),
+                    OperationLine.id.in_(select(line_ids_subq2)),
+                )
+            )
+            .distinct()
+            .subquery()
+        )
+
+        count_stmt = select(func.count()).select_from(
+            select(Operation).where(Operation.id.in_(select(op_ids_subq))).subquery()
+        )
+        return int((await self.session.execute(count_stmt)).scalar_one())
 
     async def delete_operation_lines(self, operation_id: UUID) -> None:
         stmt = select(OperationLine).where(OperationLine.operation_id == operation_id)

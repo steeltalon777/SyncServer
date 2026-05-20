@@ -51,4 +51,4 @@ repo_map_*.json
 docs/entry_points.txt
 docs/env_map.txt
 docs/tree_repo.txt
-docs/tree_services.txt
+docs/tree_services.txtgit add .,

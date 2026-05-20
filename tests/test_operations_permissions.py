@@ -103,8 +103,58 @@ def test_storekeeper_may_cancel_only_own_draft_not_submitted() -> None:
 
     OperationsPolicy.require_operation_cancel_permission(identity, own_draft)
 
+    # storekeeper cannot cancel own submitted — root-only
     with pytest.raises(HTTPException) as exc:
         OperationsPolicy.require_operation_cancel_permission(identity, own_submitted)
+
+    assert exc.value.status_code == 403
+    assert "only root" in exc.value.detail.lower()
+
+
+def test_chief_storekeeper_can_cancel_own_draft_but_not_submitted() -> None:
+    identity = _identity(role="chief_storekeeper")
+    own_draft = _operation(identity.user_id, status="draft")
+    own_submitted = _operation(identity.user_id, status="submitted")
+
+    # chief can cancel own draft (has_global_business_access)
+    OperationsPolicy.require_operation_cancel_permission(identity, own_draft)
+
+    # chief cannot cancel submitted — root-only
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_operation_cancel_permission(identity, own_submitted)
+
+    assert exc.value.status_code == 403
+    assert "only root" in exc.value.detail.lower()
+
+
+def test_root_can_cancel_submitted_draft_and_own_draft() -> None:
+    identity = _identity(role="storekeeper", is_root=True)
+
+    submitted_op = _operation(uuid4(), status="submitted")
+    draft_op = _operation(uuid4(), status="draft")
+    own_draft = _operation(identity.user_id, status="draft")
+
+    # root can cancel submitted
+    OperationsPolicy.require_operation_cancel_permission(identity, submitted_op)
+    # root can cancel any draft
+    OperationsPolicy.require_operation_cancel_permission(identity, draft_op)
+    # root can cancel own draft
+    OperationsPolicy.require_operation_cancel_permission(identity, own_draft)
+
+
+def test_creator_can_cancel_own_draft() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+    own_draft = _operation(identity.user_id, status="draft")
+
+    OperationsPolicy.require_operation_cancel_permission(identity, own_draft)
+
+
+def test_storekeeper_cannot_cancel_other_draft() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+    other_draft = _operation(uuid4(), status="draft")
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_operation_cancel_permission(identity, other_draft)
 
     assert exc.value.status_code == 403
 
@@ -142,25 +192,62 @@ def test_root_can_delete_any_cancelled_operation() -> None:
     OperationsPolicy.require_operation_delete_permission(identity, op)
 
 
-def test_chief_storekeeper_can_delete_any_cancelled_operation() -> None:
+def test_chief_storekeeper_cannot_delete_cancelled_operation() -> None:
     identity = _identity(role="chief_storekeeper")
-    op = _operation(uuid4(), status="cancelled")
-
-    OperationsPolicy.require_operation_delete_permission(identity, op)
-
-
-def test_storekeeper_can_delete_own_cancelled_operation() -> None:
-    identity = _identity(role="storekeeper", scopes=[_scope(10)])
-    op = _operation(identity.user_id, status="cancelled")
-
-    OperationsPolicy.require_operation_delete_permission(identity, op)
-
-
-def test_storekeeper_cannot_delete_other_cancelled_operation() -> None:
-    identity = _identity(role="storekeeper", scopes=[_scope(10)])
     op = _operation(uuid4(), status="cancelled")
 
     with pytest.raises(HTTPException) as exc:
         OperationsPolicy.require_operation_delete_permission(identity, op)
 
     assert exc.value.status_code == 403
+
+
+def test_storekeeper_cannot_delete_cancelled_operation() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+    op = _operation(identity.user_id, status="cancelled")
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_operation_delete_permission(identity, op)
+
+    assert exc.value.status_code == 403
+
+
+def test_cancel_on_already_cancelled_operation_raises_conflict() -> None:
+    identity = _identity(role="root", is_root=True)
+    cancelled_op = _operation(uuid4(), status="cancelled")
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_operation_cancel_permission(identity, cancelled_op)
+
+    assert exc.value.status_code == 409
+
+
+# New: cancelled visibility helpers
+
+def test_can_view_cancelled_root() -> None:
+    identity = _identity(role="root", is_root=True)
+    assert OperationsPolicy.can_view_cancelled_operations(identity) is True
+
+
+def test_can_view_cancelled_non_root() -> None:
+    identity = _identity(role="chief_storekeeper")
+    assert OperationsPolicy.can_view_cancelled_operations(identity) is False
+
+    identity = _identity(role="storekeeper")
+    assert OperationsPolicy.can_view_cancelled_operations(identity) is False
+
+    identity = _identity(role="observer")
+    assert OperationsPolicy.can_view_cancelled_operations(identity) is False
+
+
+def test_require_cancelled_visibility_root_passes() -> None:
+    identity = _identity(role="root", is_root=True)
+    OperationsPolicy.require_cancelled_visibility(identity)
+
+
+def test_require_cancelled_visibility_non_root_raises() -> None:
+    for role in ("chief_storekeeper", "storekeeper", "observer"):
+        identity = _identity(role=role)
+        with pytest.raises(HTTPException) as exc:
+            OperationsPolicy.require_cancelled_visibility(identity)
+        assert exc.value.status_code == 403

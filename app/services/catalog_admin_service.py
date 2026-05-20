@@ -164,7 +164,7 @@ class CatalogAdminService:
 
         return await uow.catalog.update_category(category)
 
-    async def create_item(self, uow: UnitOfWork, payload: ItemCreateRequest) -> Item:
+    async def create_item(self, uow: UnitOfWork, payload: ItemCreateRequest, created_by_user_id: UUID | None = None) -> Item:
         category = await self._resolve_item_category(uow, payload.category_id)
         await self._validate_unit_exists(uow, payload.unit_id)
         await self._ensure_item_sku_unique(uow, payload.sku)
@@ -190,6 +190,9 @@ class CatalogAdminService:
             description=payload.description,
             hashtags=payload.hashtags,
             is_active=payload.is_active,
+            requires_review=payload.requires_review,
+            review_created_by_user_id=created_by_user_id if payload.requires_review else None,
+            review_status="needs_review" if payload.requires_review else None,
         )
         return await uow.catalog.create_item(item)
 
@@ -341,7 +344,7 @@ class CatalogAdminService:
         await self._assert_item_not_frozen(uow, item_id)
         if item.deleted_at is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="item already deleted")
-        if item.is_active:
+        if item.is_active and not item.requires_review:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot delete active item")
         try:
             await uow.catalog.soft_delete_item(item_id, user_id)

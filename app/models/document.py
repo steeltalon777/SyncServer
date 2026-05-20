@@ -27,7 +27,7 @@ class Document(Base):
     )
 
     document_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    document_number: Mapped[str | None] = mapped_column(String(100))
+    document_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(
         String(32),
@@ -42,12 +42,12 @@ class Document(Base):
         nullable=False,
     )
 
-    template_name: Mapped[str | None] = mapped_column(String(100))
-    template_version: Mapped[str | None] = mapped_column(String(32))
-    payload_schema_version: Mapped[str | None] = mapped_column(String(32))
+    template_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    template_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payload_schema_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    payload_hash: Mapped[str | None] = mapped_column(String(64))
+    payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),

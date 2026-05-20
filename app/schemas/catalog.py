@@ -29,6 +29,12 @@ class ItemDto(ORMBaseModel):
     description: str | None = None
     is_active: bool
     hashtags: list[str] | None = None
+    requires_review: bool = False
+    review_status: str | None = None
+    review_created_by_user_id: UUID | None = None
+    review_resolved_by_user_id: UUID | None = None
+    review_resolved_at: datetime | None = None
+    review_note: str | None = None
     updated_at: datetime
 
 
@@ -100,6 +106,8 @@ class CatalogBrowseItemDto(ORMBaseModel):
     unit_symbol: str
     description: str | None = None
     is_active: bool
+    requires_review: bool = False
+    review_status: str | None = None
     updated_at: datetime
 
 
@@ -207,10 +215,11 @@ class ItemCreateRequest(BaseModel):
     description: str | None = None
     hashtags: list[str] | None = None
     is_active: bool = True
+    requires_review: bool = False
 
-    @field_validator("category_id", mode="before")
+    @field_validator("sku", "description", "category_id", mode="before")
     @classmethod
-    def normalize_category_id(cls, value: object) -> object:
+    def normalize_blank_strings(cls, value: object) -> object:
         if isinstance(value, str) and value.strip() == "":
             return None
         return value
@@ -225,9 +234,9 @@ class ItemUpdateRequest(BaseModel):
     hashtags: list[str] | None = None
     is_active: bool | None = None
 
-    @field_validator("category_id", mode="before")
+    @field_validator("sku", "description", "category_id", mode="before")
     @classmethod
-    def normalize_category_id(cls, value: object) -> object:
+    def normalize_blank_strings(cls, value: object) -> object:
         if isinstance(value, str) and value.strip() == "":
             return None
         return value
@@ -242,6 +251,12 @@ class ItemResponse(ORMBaseModel):
     description: str | None = None
     is_active: bool
     hashtags: list[str] | None = None
+    requires_review: bool = False
+    review_status: str | None = None
+    review_created_by_user_id: UUID | None = None
+    review_resolved_by_user_id: UUID | None = None
+    review_resolved_at: datetime | None = None
+    review_note: str | None = None
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
@@ -282,6 +297,7 @@ class ItemFilter(BaseModel):
     is_active: bool | None = None
     category_id: int | None = None
     unit_id: int | None = None
+    requires_review: bool | None = None
     include_deleted: bool = False
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import ORMBaseModel
 
@@ -16,6 +16,13 @@ class TemporaryItemInlineCreate(BaseModel):
     category_id: int | None = None
     description: str | None = Field(default=None, max_length=2000)
     hashtags: list[str] | None = None
+
+    @field_validator("sku", "description", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 class TemporaryItemResponse(ORMBaseModel):

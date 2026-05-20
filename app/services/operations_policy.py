@@ -71,25 +71,53 @@ class OperationsPolicy:
         )
 
     @staticmethod
+    def can_view_cancelled_operations(identity: Identity) -> bool:
+        """Root can see cancelled operations; non-root cannot."""
+        return identity.is_root
+
+    @staticmethod
+    def require_cancelled_visibility(identity: Identity) -> None:
+        """Raise 403 if identity is not root (for explicit cancelled queries)."""
+        if not identity.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only root may view cancelled operations",
+            )
+
+    @staticmethod
     def require_operation_delete_permission(identity: Identity, operation) -> None:
+        # Only root may delete cancelled operations
+        if identity.is_root:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only root may delete cancelled operations",
+        )
+
+    @staticmethod
+    def require_operation_cancel_permission(identity: Identity, operation) -> None:
+        # Already cancelled — workflow policy should prevent this, but guard anyway
+        if operation.status == "cancelled":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="operation is already cancelled",
+            )
+        # Submitted operations: only root may cancel
+        if operation.status == "submitted":
+            if identity.is_root:
+                return
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only root may cancel submitted operations",
+            )
+        # Draft operations: creator, chief_storekeeper, or root
         if identity.has_global_business_access:
             return
         if operation.created_by_user_id == identity.user_id:
             return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="only chief_storekeeper, root, or the operation creator may delete cancelled operations",
-        )
-
-    @staticmethod
-    def require_operation_cancel_permission(identity: Identity, operation) -> None:
-        if identity.has_global_business_access:
-            return
-        if operation.status == "draft" and operation.created_by_user_id == identity.user_id:
-            return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="only chief_storekeeper or root may cancel submitted or other users operations",
+            detail="only the operation creator, chief_storekeeper, or root may cancel this operation",
         )
 
     @staticmethod

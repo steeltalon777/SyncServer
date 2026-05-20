@@ -49,6 +49,13 @@ class OperationLineCreate(BaseModel):
             raise ValueError("qty must not be zero")
         return value
 
+    @field_validator("batch", "comment", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
     @model_validator(mode="after")
     def validate_item_xor_temporary(self) -> "OperationLineCreate":
         if self.item_id is None and self.temporary_item is None:
@@ -112,6 +119,13 @@ class OperationCreate(BaseModel):
             raise ValueError("client_request_id is required when temporary_item lines are used")
         return self
 
+    @field_validator("recipient_name_snapshot", "issued_to_name", "notes", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
     @field_validator("recipient_name_snapshot")
     @classmethod
     def validate_recipient_name_not_blank(cls, value: str | None) -> str | None:
@@ -136,6 +150,13 @@ class OperationUpdate(BaseModel):
         max_length=255,
     )
     lines: list[OperationLineCreate] | None = None
+
+    @field_validator("recipient_name_snapshot", "issued_to_name", "notes", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 class OperationEffectiveAtUpdate(BaseModel):

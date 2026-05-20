@@ -472,10 +472,28 @@ class CatalogRepo:
             raise ValueError(f"Item {item_id} not found")
         if item.deleted_at is not None:
             raise ValueError(f"Item {item_id} already deleted")
-        if item.is_active:
-            raise ValueError(f"Cannot delete active item {item_id}")
-        # Check for non-zero balances (simplified - need to integrate with balance repo)
-        # For now, we'll assume no balance checks
+        if item.is_active and not item.requires_review:
+            raise ValueError(f"Cannot delete active non-review item {item_id}")
+        # Check for non-zero balances
+        from app.models.balance import Balance
+        from app.models.inventory_subject import InventorySubject
+
+        # Find the inventory subject for this item
+        subj_stmt = select(InventorySubject).where(
+            InventorySubject.item_id == item_id,
+            InventorySubject.archived_at.is_(None),
+        )
+        subject = (await self.session.execute(subj_stmt)).scalar_one_or_none()
+        if subject is not None:
+            # Check balances
+            bal_stmt = select(Balance).where(
+                Balance.inventory_subject_id == subject.id,
+            )
+            balances = list((await self.session.execute(bal_stmt)).scalars().all())
+            for bal in balances:
+                if bal.qty != 0:
+                    raise ValueError(f"Item {item_id} has non-zero balance on site {bal.site_id}")
+
         item.deleted_at = datetime.now()
         item.deleted_by_user_id = user_id
         await self.session.flush()
@@ -523,6 +541,7 @@ class CatalogRepo:
         *,
         include_inactive: bool = False,
         include_deleted: bool = False,
+        requires_review: bool | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> tuple[list[Item], int]:
@@ -531,8 +550,56 @@ class CatalogRepo:
             stmt = stmt.where(Item.deleted_at.is_(None))
         if not include_inactive:
             stmt = stmt.where(Item.is_active.is_(True))
+        if requires_review is not None:
+            stmt = stmt.where(Item.requires_review.is_(requires_review))
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
         stmt = stmt.order_by(Item.name).offset((page - 1) * page_size).limit(page_size)
         result = await self.session.execute(stmt)
         return list(result.scalars().all()), int(total_count)
+
+    async def list_review_items_page(
+        self,
+        *,
+        search: str | None = None,
+        review_status: str | None = None,
+        created_by_user_id: UUID | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Item], int]:
+        """List catalog items that require review, with optional filters."""
+        stmt = (
+            select(Item)
+            .where(
+                Item.requires_review.is_(True),
+                Item.deleted_at.is_(None),
+            )
+        )
+        if review_status is not None:
+            stmt = stmt.where(Item.review_status == review_status)
+        elif review_status is None:
+            # Default: exclude resolved items (confirmed/merged/archived)
+            stmt = stmt.where(
+                or_(
+                    Item.review_status.is_(None),
+                    Item.review_status.in_(["needs_review"]),
+                )
+            )
+        if created_by_user_id is not None:
+            stmt = stmt.where(Item.review_created_by_user_id == created_by_user_id)
+        if search:
+            term = f"%{search.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    Item.name.ilike(term),
+                    Item.sku.ilike(term),
+                    Item.description.ilike(term),
+                )
+            )
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total_count = int((await self.session.execute(count_stmt)).scalar_one())
+        stmt = stmt.order_by(Item.created_at.desc(), Item.id.desc())
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+        items = list((await self.session.execute(stmt)).scalars().all())
+        return items, total_count

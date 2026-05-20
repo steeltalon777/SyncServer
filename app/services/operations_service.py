@@ -619,8 +619,13 @@ class OperationsService:
         operation,
         user_id: UUID,
     ) -> None:
-        """Materialize deferred temporary lines: create backing item, temporary item,
-        inventory subject, and set references on operation lines.
+        """Materialize deferred temporary lines: create a permanent catalog Item
+        with requires_review=true, create inventory subject, and set references
+        on operation lines.
+
+        This replaces the old flow that created an inactive backing Item + TemporaryItem
+        + temporary_item InventorySubject. New flow creates a permanent catalog item
+        directly (as per TZ: permanent ТМЦ requiring review).
 
         All changes happen within the current UoW transaction.
         """
@@ -630,7 +635,7 @@ class OperationsService:
         if not deferred_lines:
             return
 
-        # Группируем по client_key (один temporary item на уникальный ключ)
+        # Группируем по client_key (один review-required item на уникальный ключ)
         from collections import OrderedDict
         grouped: OrderedDict[str, list] = OrderedDict()
         for line in deferred_lines:
@@ -643,14 +648,13 @@ class OperationsService:
         materialized_by_key: dict[str, dict[str, object]] = {}
 
         for client_key, lines in grouped.items():
-            # Берём payload из первой линии с этим ключом (они гарантированно одинаковы)
             payload = lines[0].temporary_draft_payload
 
             category_id_value = payload["category_id"]
             unit_id_value = payload["unit_id"]
 
-            # Создаём backing item
-            backing_item = Item(
+            # Create a permanent catalog Item with requires_review=true
+            review_item = Item(
                 sku=payload.get("sku"),
                 name=payload["name"].strip(),
                 normalized_name=OperationsService._normalize_name(payload["name"]),
@@ -658,37 +662,26 @@ class OperationsService:
                 unit_id=unit_id_value,
                 description=payload.get("description"),
                 hashtags=payload.get("hashtags"),
-                is_active=False,
-                source_system="temporary_item",
+                is_active=True,
+                requires_review=True,
+                review_status="needs_review",
+                review_created_by_user_id=user_id,
+                source_system="operation_inline",
                 source_ref=client_key,
             )
-            backing_item = await uow.catalog.create_item(backing_item)
+            review_item = await uow.catalog.create_item(review_item)
 
-            # Создаём temporary item
-            temporary_item = await uow.temporary_items.create(
-                item_id=backing_item.id,
-                name=payload["name"].strip(),
-                normalized_name=OperationsService._normalize_name(payload["name"]),
-                sku=payload.get("sku"),
-                unit_id=unit_id_value,
-                category_id=category_id_value,
-                description=payload.get("description"),
-                hashtags=payload.get("hashtags"),
-                created_by_user_id=user_id,
-            )
-
-            # Создаём inventory subject
-            temporary_subject = await uow.inventory_subjects.get_or_create_for_temporary_item(
-                temporary_item_id=temporary_item.id,
-                item_id=backing_item.id,
+            # Create inventory subject for the catalog item
+            review_subject = await uow.inventory_subjects.get_or_create_for_item(
+                item_id=review_item.id,
             )
 
             materialized_by_key[client_key] = {
-                "item_id": backing_item.id,
-                "inventory_subject_id": temporary_subject.id,
+                "item_id": review_item.id,
+                "inventory_subject_id": review_subject.id,
             }
 
-        # Проставляем ссылки в строках и очищаем draft payload
+        # Set references on lines and clear draft payload
         for line in deferred_lines:
             ck = line.temporary_draft_payload["client_key"]
             refs = materialized_by_key[ck]
@@ -1314,13 +1307,12 @@ class OperationsService:
         operation_id: UUID,
         user_id: UUID,
     ) -> None:
-        """Удалить временные ТМЦ, связанные с операцией.
+        """Soft-delete review-required items associated with the cancelled operation.
 
-        Проходит по всем линиям операции, находит InventorySubject
-        с temporary_item_id и мягко удаляет активные временные ТМЦ.
-        Уже разрешённые (approved/merged/deleted) ТМЦ пропускает.
+        Works with both:
+        - new flow: catalog Item with requires_review=true
+        - legacy flow: TemporaryItem records (for already-existing data)
         """
-        from app.models.temporary_item import TemporaryItem
         from app.services.temporary_items_resolution_service import (
             TemporaryItemsResolutionService,
         )
@@ -1329,35 +1321,62 @@ class OperationsService:
         if operation is None:
             return
 
-        seen_temp_ids: set[int] = set()
+        seen_item_ids: set[int] = set()
 
         for line in operation.lines:
             if line.inventory_subject_id is None:
                 continue
 
             subject = await uow.inventory_subjects.get_by_id(line.inventory_subject_id)
-            if subject is None or subject.temporary_item_id is None:
+            if subject is None:
                 continue
 
-            temp_id = subject.temporary_item_id
-            if temp_id in seen_temp_ids:
-                continue
-            seen_temp_ids.add(temp_id)
+            # New flow: catalog item with requires_review
+            if subject.subject_type == "catalog_item" and subject.item_id is not None:
+                item_id = subject.item_id
+                if item_id in seen_item_ids:
+                    continue
+                seen_item_ids.add(item_id)
 
-            temp_item = await uow.temporary_items.get_by_id(temp_id)
-            if temp_item is None:
-                continue
-            if temp_item.status != TemporaryItem.STATUS_ACTIVE:
+                item = await uow.catalog.get_item_by_id(item_id)
+                if item is None or item.deleted_at is not None:
+                    continue
+                if not item.requires_review:
+                    continue
+                if item.review_status not in (None, "needs_review"):
+                    continue
+
+                # Soft-delete the review-required item
+                try:
+                    await uow.catalog.soft_delete_item(item_id, user_id)
+                except ValueError:
+                    # If deletion is blocked (e.g. non-zero balance), skip
+                    pass
                 continue
 
-            await TemporaryItemsResolutionService.delete_temporary_item(
-                uow,
-                temporary_item_id=temp_id,
-                resolved_by_user_id=user_id,
-                resolution_note=(
-                    f"Auto-deleted on cancel of operation {operation_id}"
-                ),
-            )
+            # Legacy flow: temporary_item_id subject
+            if subject.temporary_item_id is not None:
+                from app.models.temporary_item import TemporaryItem
+
+                temp_id = subject.temporary_item_id
+                if temp_id in seen_item_ids:
+                    continue
+                seen_item_ids.add(temp_id)
+
+                temp_item = await uow.temporary_items.get_by_id(temp_id)
+                if temp_item is None:
+                    continue
+                if temp_item.status != TemporaryItem.STATUS_ACTIVE:
+                    continue
+
+                await TemporaryItemsResolutionService.delete_temporary_item(
+                    uow,
+                    temporary_item_id=temp_id,
+                    resolved_by_user_id=user_id,
+                    resolution_note=(
+                        f"Auto-deleted on cancel of operation {operation_id}"
+                    ),
+                )
 
     @staticmethod
     async def _get_or_create_uncategorized_category(uow: UnitOfWork) -> Category:
