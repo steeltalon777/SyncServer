@@ -279,7 +279,7 @@ class CatalogRepo:
         return chains
 
     async def get_all_categories(self) -> list[Category]:
-        stmt = select(Category).order_by(Category.sort_order, Category.name)
+        stmt = select(Category).where(Category.deleted_at.is_(None)).order_by(Category.sort_order, Category.name)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
