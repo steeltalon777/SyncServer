@@ -322,4 +322,164 @@ class ItemListResponse(ORMBaseModel):
     page_size: int
 
 
+# ─── Batch Catalog API Schemas ──────────────────────────────────────
+
+
+class BatchChangeUnitPayload(BaseModel):
+    """Payload for unit create action."""
+    name: str = Field(min_length=1, max_length=100)
+    symbol: str = Field(min_length=1, max_length=20)
+    sort_order: int | None = None
+    is_active: bool = True
+
+
+class BatchChangeCategoryPayload(BaseModel):
+    """Payload for category create action."""
+    name: str = Field(min_length=1, max_length=255)
+    code: str | None = Field(default=None, max_length=100)
+    parent_id: int | None = None
+    parent_local_id: str | None = None
+    sort_order: int | None = None
+    is_active: bool = True
+
+    def model_post_init(self, __context) -> None:
+        # Ensure only one of parent_id or parent_local_id is set
+        if self.parent_id is not None and self.parent_local_id is not None:
+            raise ValueError("Cannot specify both parent_id and parent_local_id")
+
+
+class BatchChangeItemPayload(BaseModel):
+    """Payload for item create action."""
+    sku: str | None = Field(default=None, max_length=100)
+    name: str = Field(min_length=1, max_length=255)
+    category_id: int | None = None
+    category_local_id: str | None = None
+    unit_id: int | None = None
+    unit_local_id: str | None = None
+    description: str | None = None
+    hashtags: list[str] | None = None
+    is_active: bool = True
+    requires_review: bool = False
+
+    def model_post_init(self, __context) -> None:
+        # Ensure only one of category_id or category_local_id is set
+        if self.category_id is not None and self.category_local_id is not None:
+            raise ValueError("Cannot specify both category_id and category_local_id")
+        # Ensure only one of unit_id or unit_local_id is set
+        if self.unit_id is not None and self.unit_local_id is not None:
+            raise ValueError("Cannot specify both unit_id and unit_local_id")
+
+
+class BatchChangeUpdatePayload(BaseModel):
+    """Payload for update action (common fields)."""
+    sku: str | None = Field(default=None, max_length=100)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    category_id: int | None = None
+    unit_id: int | None = None
+    description: str | None = None
+    hashtags: list[str] | None = None
+    is_active: bool | None = None
+
+
+class BatchChangeBase(BaseModel):
+    """Base schema for a single change in the batch."""
+    local_id: str = Field(min_length=1, max_length=128)
+    entity_type: str  # 'unit', 'category', 'item'
+    action: str  # 'create', 'update', 'deactivate', 'delete'
+    entity_id: int | None = None  # Required for update/deactivate/delete
+
+
+class BatchChangeCreate(BatchChangeBase):
+    """Schema for create action."""
+    action: str = "create"
+    payload: BatchChangeUnitPayload | BatchChangeCategoryPayload | BatchChangeItemPayload
+
+    def model_post_init(self, __context) -> None:
+        if self.entity_id is not None:
+            raise ValueError("entity_id is forbidden for create action")
+
+
+class BatchChangeUpdate(BatchChangeBase):
+    """Schema for update action."""
+    action: str = "update"
+    payload: BatchChangeUpdatePayload
+
+    def model_post_init(self, __context) -> None:
+        if self.entity_id is None:
+            raise ValueError("entity_id is required for update action")
+
+
+class BatchChangeDeactivate(BatchChangeBase):
+    """Schema for deactivate action."""
+    action: str = "deactivate"
+
+    def model_post_init(self, __context) -> None:
+        if self.entity_id is None:
+            raise ValueError("entity_id is required for deactivate action")
+
+
+class BatchChangeDelete(BatchChangeBase):
+    """Schema for delete action."""
+    action: str = "delete"
+
+    def model_post_init(self, __context) -> None:
+        if self.entity_id is None:
+            raise ValueError("entity_id is required for delete action")
+
+
+# Union type for batch changes
+BatchChange = BatchChangeCreate | BatchChangeUpdate | BatchChangeDeactivate | BatchChangeDelete
+
+
+class CatalogBatchRequest(BaseModel):
+    """Request schema for batch catalog endpoint."""
+    client_batch_id: str = Field(min_length=1, max_length=256)
+    mode: str = "atomic"  # Only 'atomic' supported in this TZ
+    changes: list[BatchChange] = Field(min_length=1)
+
+    def model_post_init(self, __context) -> None:
+        if self.mode != "atomic":
+            raise ValueError("Only 'atomic' mode is supported")
+        # Check for duplicate local_ids
+        local_ids = [change.local_id for change in self.changes]
+        if len(local_ids) != len(set(local_ids)):
+            raise ValueError("Duplicate local_id found in batch changes")
+
+
+class BatchChangeResult(BaseModel):
+    """Result for a single change in the batch response."""
+    local_id: str
+    entity_type: str
+    action: str
+    status: str  # 'applied', 'error'
+    entity_id: int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class CatalogBatchResponse(ORMBaseModel):
+    """Response schema for batch catalog endpoint."""
+    client_batch_id: str
+    mode: str
+    status: str  # 'applied', 'failed'
+    summary: dict[str, int]
+    records: list[BatchChangeResult]
+    server_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class CatalogBatchErrorDetail(BaseModel):
+    """Error detail for batch validation error response."""
+    local_id: str
+    entity_type: str
+    action: str
+    code: str
+    message: str
+
+
+class CatalogBatchErrorResponse(BaseModel):
+    """Error response schema for batch catalog endpoint."""
+    detail: str
+    errors: list[CatalogBatchErrorDetail]
+
+
 CategoryTreeNode.model_rebuild()

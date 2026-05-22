@@ -22,6 +22,9 @@ from app.schemas.catalog import (
     UnitListResponse,
     UnitResponse,
     UnitUpdateRequest,
+    CatalogBatchRequest,
+    CatalogBatchResponse,
+    BatchChangeResult,
 )
 from app.services.catalog_admin_service import CatalogAdminService
 from app.services.uow import UnitOfWork
@@ -386,4 +389,46 @@ async def list_items(
         total_count=total_count,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.post("/batch", response_model=CatalogBatchResponse)
+async def apply_catalog_batch(
+    payload: CatalogBatchRequest,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> CatalogBatchResponse:
+    """
+    Apply a mixed batch of catalog changes atomically.
+    
+    All changes in the batch are applied within a single transaction.
+    Any failure rolls back the entire batch.
+    
+    Supported entity types: unit, category, item
+    Supported actions: create, update, deactivate, delete
+    """
+    service = CatalogAdminService()
+    
+    async with uow:
+        await _require_catalog_admin(identity=identity)
+        results, summary = await service.apply_batch(uow=uow, payload=payload, identity=identity)
+    
+    # Determine overall status
+    overall_status = "applied" if summary["error"] == 0 else "failed"
+    
+    logger.info(
+        "request_id=%s apply_catalog_batch status=%s summary=%s user_id=%s",
+        get_request_id(request),
+        overall_status,
+        summary,
+        identity.user_id,
+    )
+    
+    return CatalogBatchResponse(
+        client_batch_id=payload.client_batch_id,
+        mode=payload.mode,
+        status=overall_status,
+        summary=summary,
+        records=results,
     )

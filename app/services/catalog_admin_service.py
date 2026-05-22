@@ -21,6 +21,16 @@ from app.schemas.catalog import (
     UnitBulkCreateRequest,
     UnitCreateRequest,
     UnitUpdateRequest,
+    CatalogBatchRequest,
+    BatchChangeCreate,
+    BatchChangeUpdate,
+    BatchChangeDeactivate,
+    BatchChangeDelete,
+    BatchChangeResult,
+    BatchChangeUnitPayload,
+    BatchChangeCategoryPayload,
+    BatchChangeItemPayload,
+    BatchChangeUpdatePayload,
 )
 from fastapi import HTTPException, status
 
@@ -397,4 +407,458 @@ class CatalogAdminService:
             include_deleted=include_deleted,
             page=page,
             page_size=page_size,
+        )
+
+    # ─── Batch Catalog Operations ──────────────────────────────────────
+
+    async def apply_batch(
+        self,
+        uow: UnitOfWork,
+        payload: CatalogBatchRequest,
+        identity: Identity,
+    ) -> tuple[list[BatchChangeResult], dict[str, int]]:
+        """
+        Apply a mixed batch of catalog changes atomically.
+        
+        All changes are applied within a single UnitOfWork transaction.
+        Any failure rolls back the entire batch.
+        
+        Args:
+            uow: UnitOfWork instance for transactional operations
+            payload: Batch request with changes to apply
+            identity: User identity for permission checks and audit
+            
+        Returns:
+            Tuple of (list of change results, summary counts)
+            
+        Raises:
+            HTTPException: On validation or application failure
+        """
+        # Validate batch structure
+        await self._validate_batch(payload)
+        
+        # Build local_id -> entity_id mapping for created entities
+        local_id_map: dict[str, int] = {}
+        results: list[BatchChangeResult] = []
+        summary: dict[str, int] = {"create": 0, "update": 0, "deactivate": 0, "delete": 0, "error": 0}
+        
+        # Process changes in dependency order:
+        # 1. Units (create/update/deactivate/delete)
+        # 2. Categories (create in topological order, then update/deactivate/delete)
+        # 3. Items (create/update/deactivate/delete)
+        
+        # Separate changes by entity type and action
+        unit_creates = [c for c in payload.changes if c.entity_type == "unit" and c.action == "create"]
+        unit_updates = [c for c in payload.changes if c.entity_type == "unit" and c.action == "update"]
+        unit_deactivates = [c for c in payload.changes if c.entity_type == "unit" and c.action == "deactivate"]
+        unit_deletes = [c for c in payload.changes if c.entity_type == "unit" and c.action == "delete"]
+        
+        category_creates = [c for c in payload.changes if c.entity_type == "category" and c.action == "create"]
+        category_updates = [c for c in payload.changes if c.entity_type == "category" and c.action == "update"]
+        category_deactivates = [c for c in payload.changes if c.entity_type == "category" and c.action == "deactivate"]
+        category_deletes = [c for c in payload.changes if c.entity_type == "category" and c.action == "delete"]
+        
+        item_creates = [c for c in payload.changes if c.entity_type == "item" and c.action == "create"]
+        item_updates = [c for c in payload.changes if c.entity_type == "item" and c.action == "update"]
+        item_deactivates = [c for c in payload.changes if c.entity_type == "item" and c.action == "deactivate"]
+        item_deletes = [c for c in payload.changes if c.entity_type == "item" and c.action == "delete"]
+        
+        # Sort category creates by parent dependencies (topological sort)
+        sorted_category_creates = self._topological_sort_categories(category_creates)
+        
+        # Process units
+        for change in unit_creates + unit_updates + unit_deactivates + unit_deletes:
+            result = await self._apply_unit_change(uow, change, local_id_map, identity.user_id)
+            results.append(result)
+            if result.status == "applied":
+                summary[change.action] += 1
+                if change.action == "create" and result.entity_id:
+                    local_id_map[change.local_id] = result.entity_id
+            else:
+                summary["error"] += 1
+        
+        # Process categories
+        for change in sorted_category_creates + category_updates + category_deactivates + category_deletes:
+            result = await self._apply_category_change(uow, change, local_id_map, identity.user_id)
+            results.append(result)
+            if result.status == "applied":
+                summary[change.action] += 1
+                if change.action == "create" and result.entity_id:
+                    local_id_map[change.local_id] = result.entity_id
+            else:
+                summary["error"] += 1
+        
+        # Process items
+        for change in item_creates + item_updates + item_deactivates + item_deletes:
+            result = await self._apply_item_change(uow, change, local_id_map, identity.user_id)
+            results.append(result)
+            if result.status == "applied":
+                summary[change.action] += 1
+                if change.action == "create" and result.entity_id:
+                    local_id_map[change.local_id] = result.entity_id
+            else:
+                summary["error"] += 1
+        
+        return results, summary
+
+    async def _validate_batch(self, payload: CatalogBatchRequest) -> None:
+        """Validate batch structure and local references."""
+        # Check for duplicate local IDs (already done in schema)
+        local_ids = {change.local_id for change in payload.changes}
+        
+        # Validate local references exist in batch
+        for change in payload.changes:
+            if isinstance(change, BatchChangeCreate):
+                if change.entity_type == "category":
+                    cat_payload = change.payload
+                    if isinstance(cat_payload, BatchChangeCategoryPayload):
+                        if cat_payload.parent_local_id and cat_payload.parent_local_id not in local_ids:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"parent_local_id {cat_payload.parent_local_id} not found in batch"
+                            )
+                elif change.entity_type == "item":
+                    item_payload = change.payload
+                    if isinstance(item_payload, BatchChangeItemPayload):
+                        if item_payload.category_local_id and item_payload.category_local_id not in local_ids:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"category_local_id {item_payload.category_local_id} not found in batch"
+                            )
+                        if item_payload.unit_local_id and item_payload.unit_local_id not in local_ids:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"unit_local_id {item_payload.unit_local_id} not found in batch"
+                            )
+        
+        # Validate no category cycles among new categories
+        category_creates = [c for c in payload.changes if c.entity_type == "category" and c.action == "create"]
+        if category_creates:
+            self._validate_category_graph(category_creates)
+
+    def _validate_category_graph(self, category_creates: list[BatchChangeCreate]) -> None:
+        """Validate category parent graph for cycles and self-parent."""
+        # Build adjacency: local_id -> parent_local_id
+        parent_map: dict[str, str | None] = {}
+        for change in category_creates:
+            payload = change.payload
+            if isinstance(payload, BatchChangeCategoryPayload):
+                parent_map[change.local_id] = payload.parent_local_id
+        
+        # Check for self-parent
+        for local_id, parent_id in parent_map.items():
+            if parent_id == local_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Category {local_id} cannot be its own parent"
+                )
+        
+        # Check for cycles using DFS
+        visited: set[str] = set()
+        rec_stack: set[str] = set()
+        
+        def has_cycle(node: str) -> bool:
+            visited.add(node)
+            rec_stack.add(node)
+            
+            parent = parent_map.get(node)
+            if parent and parent in parent_map:
+                if parent not in visited:
+                    if has_cycle(parent):
+                        return True
+                elif parent in rec_stack:
+                    return True
+            
+            rec_stack.remove(node)
+            return False
+        
+        for local_id in parent_map:
+            if local_id not in visited:
+                if has_cycle(local_id):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Category cycle detected in batch"
+                    )
+
+    def _topological_sort_categories(self, category_creates: list[BatchChangeCreate]) -> list[BatchChangeCreate]:
+        """Sort category creates so parents come before children."""
+        # Build adjacency: parent_local_id -> [child_local_ids]
+        parent_map: dict[str, str | None] = {}
+        for change in category_creates:
+            payload = change.payload
+            if isinstance(payload, BatchChangeCategoryPayload):
+                parent_map[change.local_id] = payload.parent_local_id
+        
+        # Kahn's algorithm
+        in_degree: dict[str, int] = {lid: 0 for lid in parent_map}
+        for lid, parent in parent_map.items():
+            if parent and parent in parent_map:
+                in_degree[lid] = 1
+        
+        # Start with nodes that have no parent (or parent not in batch)
+        queue = [lid for lid, deg in in_degree.items() if deg == 0]
+        result: list[BatchChangeCreate] = []
+        local_id_to_change = {c.local_id: c for c in category_creates}
+        
+        while queue:
+            current = queue.pop(0)
+            result.append(local_id_to_change[current])
+            
+            # Reduce in-degree for children
+            for lid, parent in parent_map.items():
+                if parent == current:
+                    in_degree[lid] -= 1
+                    if in_degree[lid] == 0:
+                        queue.append(lid)
+        
+        return result
+
+    async def _apply_unit_change(
+        self,
+        uow: UnitOfWork,
+        change: BatchChangeCreate | BatchChangeUpdate | BatchChangeDeactivate | BatchChangeDelete,
+        local_id_map: dict[str, int],
+        user_id: UUID,
+    ) -> BatchChangeResult:
+        """Apply a single unit change."""
+        try:
+            if isinstance(change, BatchChangeCreate):
+                payload = change.payload
+                if isinstance(payload, BatchChangeUnitPayload):
+                    unit = await self.create_unit(uow, payload)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="unit",
+                        action="create",
+                        status="applied",
+                        entity_id=unit.id,
+                    )
+            elif isinstance(change, BatchChangeUpdate):
+                payload = change.payload
+                if isinstance(payload, BatchChangeUpdatePayload) and change.entity_id:
+                    unit = await self.update_unit(uow, change.entity_id, payload)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="unit",
+                        action="update",
+                        status="applied",
+                        entity_id=unit.id,
+                    )
+            elif isinstance(change, BatchChangeDeactivate):
+                if change.entity_id:
+                    payload = UnitUpdateRequest(is_active=False)
+                    unit = await self.update_unit(uow, change.entity_id, payload)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="unit",
+                        action="deactivate",
+                        status="applied",
+                        entity_id=unit.id,
+                    )
+            elif isinstance(change, BatchChangeDelete):
+                if change.entity_id:
+                    await self.delete_unit(uow, change.entity_id, user_id)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="unit",
+                        action="delete",
+                        status="applied",
+                        entity_id=change.entity_id,
+                    )
+        except HTTPException as e:
+            return BatchChangeResult(
+                local_id=change.local_id,
+                entity_type="unit",
+                action=change.action,
+                status="error",
+                error_code=e.detail if isinstance(e.detail, str) else "unknown_error",
+                error_message=str(e.detail),
+            )
+        
+        return BatchChangeResult(
+            local_id=change.local_id,
+            entity_type="unit",
+            action=change.action,
+            status="error",
+            error_code="invalid_payload",
+            error_message="Invalid payload for unit change",
+        )
+
+    async def _apply_category_change(
+        self,
+        uow: UnitOfWork,
+        change: BatchChangeCreate | BatchChangeUpdate | BatchChangeDeactivate | BatchChangeDelete,
+        local_id_map: dict[str, int],
+        user_id: UUID,
+    ) -> BatchChangeResult:
+        """Apply a single category change."""
+        try:
+            if isinstance(change, BatchChangeCreate):
+                payload = change.payload
+                if isinstance(payload, BatchChangeCategoryPayload):
+                    # Resolve parent_local_id if present
+                    parent_id = payload.parent_id
+                    if payload.parent_local_id and payload.parent_local_id in local_id_map:
+                        parent_id = local_id_map[payload.parent_local_id]
+                    
+                    create_payload = CategoryCreateRequest(
+                        name=payload.name,
+                        code=payload.code,
+                        parent_id=parent_id,
+                        sort_order=payload.sort_order,
+                        is_active=payload.is_active,
+                    )
+                    category = await self.create_category(uow, create_payload)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="category",
+                        action="create",
+                        status="applied",
+                        entity_id=category.id,
+                    )
+            elif isinstance(change, BatchChangeUpdate):
+                payload = change.payload
+                if isinstance(payload, BatchChangeUpdatePayload) and change.entity_id:
+                    category = await self.update_category(uow, change.entity_id, payload)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="category",
+                        action="update",
+                        status="applied",
+                        entity_id=category.id,
+                    )
+            elif isinstance(change, BatchChangeDeactivate):
+                if change.entity_id:
+                    payload = CategoryUpdateRequest(is_active=False)
+                    category = await self.update_category(uow, change.entity_id, payload)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="category",
+                        action="deactivate",
+                        status="applied",
+                        entity_id=category.id,
+                    )
+            elif isinstance(change, BatchChangeDelete):
+                if change.entity_id:
+                    await self.delete_category(uow, change.entity_id, user_id)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="category",
+                        action="delete",
+                        status="applied",
+                        entity_id=change.entity_id,
+                    )
+        except HTTPException as e:
+            return BatchChangeResult(
+                local_id=change.local_id,
+                entity_type="category",
+                action=change.action,
+                status="error",
+                error_code=e.detail if isinstance(e.detail, str) else "unknown_error",
+                error_message=str(e.detail),
+            )
+        
+        return BatchChangeResult(
+            local_id=change.local_id,
+            entity_type="category",
+            action=change.action,
+            status="error",
+            error_code="invalid_payload",
+            error_message="Invalid payload for category change",
+        )
+
+    async def _apply_item_change(
+        self,
+        uow: UnitOfWork,
+        change: BatchChangeCreate | BatchChangeUpdate | BatchChangeDeactivate | BatchChangeDelete,
+        local_id_map: dict[str, int],
+        user_id: UUID,
+    ) -> BatchChangeResult:
+        """Apply a single item change."""
+        try:
+            if isinstance(change, BatchChangeCreate):
+                payload = change.payload
+                if isinstance(payload, BatchChangeItemPayload):
+                    # Resolve local references
+                    category_id = payload.category_id
+                    if payload.category_local_id and payload.category_local_id in local_id_map:
+                        category_id = local_id_map[payload.category_local_id]
+                    
+                    unit_id = payload.unit_id
+                    if payload.unit_local_id and payload.unit_local_id in local_id_map:
+                        unit_id = local_id_map[payload.unit_local_id]
+                    
+                    if unit_id is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="unit_id or unit_local_id is required for item create"
+                        )
+                    
+                    create_payload = ItemCreateRequest(
+                        sku=payload.sku,
+                        name=payload.name,
+                        category_id=category_id,
+                        unit_id=unit_id,
+                        description=payload.description,
+                        hashtags=payload.hashtags,
+                        is_active=payload.is_active,
+                        requires_review=payload.requires_review,
+                    )
+                    item = await self.create_item(uow, create_payload, user_id)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="item",
+                        action="create",
+                        status="applied",
+                        entity_id=item.id,
+                    )
+            elif isinstance(change, BatchChangeUpdate):
+                payload = change.payload
+                if isinstance(payload, BatchChangeUpdatePayload) and change.entity_id:
+                    item = await self.update_item(uow, change.entity_id, payload)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="item",
+                        action="update",
+                        status="applied",
+                        entity_id=item.id,
+                    )
+            elif isinstance(change, BatchChangeDeactivate):
+                if change.entity_id:
+                    payload = ItemUpdateRequest(is_active=False)
+                    item = await self.update_item(uow, change.entity_id, payload)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="item",
+                        action="deactivate",
+                        status="applied",
+                        entity_id=item.id,
+                    )
+            elif isinstance(change, BatchChangeDelete):
+                if change.entity_id:
+                    await self.delete_item(uow, change.entity_id, user_id)
+                    return BatchChangeResult(
+                        local_id=change.local_id,
+                        entity_type="item",
+                        action="delete",
+                        status="applied",
+                        entity_id=change.entity_id,
+                    )
+        except HTTPException as e:
+            return BatchChangeResult(
+                local_id=change.local_id,
+                entity_type="item",
+                action=change.action,
+                status="error",
+                error_code=e.detail if isinstance(e.detail, str) else "unknown_error",
+                error_message=str(e.detail),
+            )
+        
+        return BatchChangeResult(
+            local_id=change.local_id,
+            entity_type="item",
+            action=change.action,
+            status="error",
+            error_code="invalid_payload",
+            error_message="Invalid payload for item change",
         )
