@@ -21,11 +21,16 @@
 
 ## Git Rules
 
-- Agents may commit completed SyncServer changes after relevant checks/tests pass.
+- Parallel sessions are normal. `git status` may show unrelated modified/untracked files from other agents or the user; this is not a blocker by itself.
+- Agents MUST commit their own completed SyncServer changes after relevant checks/tests pass.
 - Commit only from the `dev` branch.
 - Switching from `dev` to another branch is forbidden by default.
 - If the branch is not `dev`, warn the user and do not commit until the user gives an explicit command.
-- If checks/tests fail, are unavailable, or were not run, do not commit and ask the user what to do.
+- Stage and commit only files intentionally changed for the assigned task, using explicit pathspecs such as `git add -- path/to/file`. Do not use broad `git add .` or `git add -A` for task commits.
+- Git does not auto-track new files by itself; untracked files become tracked only after staging. Keep local/service artifacts ignored and unstaged unless explicitly assigned.
+- Before committing, inspect the staged diff and confirm it contains only task-owned files. Leave unrelated dirty files unstaged.
+- If intended edits overlap with unrelated changes in the same file, stop and report the ownership conflict instead of committing.
+- If checks/tests fail, are unavailable, or were not run, do not commit unless the user explicitly instructs to commit with that limitation documented.
 - Git push is completely forbidden; the user pushes manually.
 
 ## Sensitive Areas
