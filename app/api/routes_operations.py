@@ -23,6 +23,7 @@ from app.schemas.operation import (
 )
 from app.services.operations_policy import OperationsPolicy
 from app.services.operations_service import OperationsService
+from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/operations")
@@ -251,6 +252,7 @@ async def delete_operation(
         if not operation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
+        OperationsWorkflowPolicy.require_cancelled_for_delete(operation)
         OperationsPolicy.require_operate_site(identity, operation.site_id)
         OperationsPolicy.require_operation_delete_permission(identity, operation)
 

@@ -133,7 +133,7 @@ async def test_delete_temporary_item_success(
 
     # DELETE запрос
     resp = await client.delete(
-        f"/temporary-items/{temporary_item.id}",
+        f"/api/v1/temporary-items/{temporary_item.id}",
         headers=auth_headers,
     )
     assert resp.status_code == 200
@@ -156,7 +156,7 @@ async def test_delete_temporary_item_success(
 
         # Inventory subject должен быть архивирован
         subject = await session.get(InventorySubject, seed["subject"].id)
-        assert subject.deleted_at is not None
+        assert subject.archived_at is not None
 
 
 @pytest.mark.asyncio
@@ -184,7 +184,7 @@ async def test_delete_temporary_item_with_non_zero_balance_fails(
 
     auth_headers = {"X-User-Token": str(chief.user_token)}
     resp = await client.delete(
-        f"/temporary-items/{temporary_item.id}",
+        f"/api/v1/temporary-items/{temporary_item.id}",
         headers=auth_headers,
     )
     assert resp.status_code == 409
@@ -240,7 +240,7 @@ async def test_delete_temporary_item_with_active_registers_fails(
 
     auth_headers = {"X-User-Token": str(chief.user_token)}
     resp = await client.delete(
-        f"/temporary-items/{temporary_item.id}",
+        f"/api/v1/temporary-items/{temporary_item.id}",
         headers=auth_headers,
     )
     assert resp.status_code == 409
@@ -256,7 +256,7 @@ async def test_delete_temporary_item_not_found(
     seed = await _seed(session_factory)
     chief = seed["chief"]
     auth_headers = {"X-User-Token": str(chief.user_token)}
-    resp = await client.delete("/temporary-items/999999", headers=auth_headers)
+    resp = await client.delete("/api/v1/temporary-items/999999", headers=auth_headers)
     assert resp.status_code == 404
 
 
@@ -273,15 +273,26 @@ async def test_delete_temporary_item_already_resolved(
     # Помечаем временный ТМЦ как approved
     async with session_factory() as session:
         db_item = await session.get(TemporaryItem, temporary_item.id)
+        resolved_item = Item(
+            sku=f"RESOLVED-{uuid4().hex[:6]}",
+            name="Resolved Item",
+            normalized_name="resolved item",
+            unit_id=seed["unit"].id,
+            category_id=seed["category"].id,
+            is_active=True,
+            source_system="manual",
+        )
+        session.add(resolved_item)
+        await session.flush()
         db_item.status = "approved_as_item"
-        db_item.resolved_item_id = 999
+        db_item.resolved_item_id = resolved_item.id
         db_item.resolution_type = "approve_as_item"
         db_item.resolved_by_user_id = chief.id
         await session.commit()
 
     auth_headers = {"X-User-Token": str(chief.user_token)}
     resp = await client.delete(
-        f"/temporary-items/{temporary_item.id}",
+        f"/api/v1/temporary-items/{temporary_item.id}",
         headers=auth_headers,
     )
     assert resp.status_code == 409
@@ -296,7 +307,7 @@ async def test_delete_temporary_item_unauthorized(
     """Попытка удалить без аутентификации."""
     seed = await _seed(session_factory)
     temporary_item = seed["temporary_item"]
-    resp = await client.delete(f"/temporary-items/{temporary_item.id}")
+    resp = await client.delete(f"/api/v1/temporary-items/{temporary_item.id}")
     assert resp.status_code == 401
 
 
@@ -323,8 +334,7 @@ async def test_delete_temporary_item_no_permission(
 
     auth_headers = {"X-User-Token": str(user.user_token)}
     resp = await client.delete(
-        f"/temporary-items/{temporary_item.id}",
+        f"/api/v1/temporary-items/{temporary_item.id}",
         headers=auth_headers,
     )
     assert resp.status_code == 403
-

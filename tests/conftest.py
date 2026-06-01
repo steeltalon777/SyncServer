@@ -10,6 +10,7 @@ from uuid import uuid4
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+from app.api.deps import rate_limiter
 from app.core.db import get_db
 from app.models import Base
 from app.models.document import Document
@@ -28,6 +29,12 @@ from sqlalchemy.pool import NullPool
 load_dotenv()
 
 app = create_app(enable_startup_migrations=False)
+
+
+@pytest.fixture(autouse=True)
+async def reset_rate_limiter() -> AsyncIterator[None]:
+    await rate_limiter.reset()
+    yield
 
 
 def _test_database_url() -> str:

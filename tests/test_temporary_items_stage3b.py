@@ -15,10 +15,12 @@ from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
 from app.models.operation import Operation, OperationLine
 from app.models.site import Site
-from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
 from app.models.user import User
 from app.models.user_access_scope import UserAccessScope
+from app.schemas.review_item import ReviewItemConfirmRequest
+from app.services.review_items_service import ReviewItemsService
+from app.services.uow import UnitOfWork
 from main import create_app
 
 app = create_app()
@@ -105,6 +107,7 @@ async def _seed(session_factory: async_sessionmaker[AsyncSession]) -> dict[str, 
         await session.commit()
         return {
             "site_id": site.id,
+            "chief_user_id": chief.id,
             "chief_token": str(chief.user_token),
             "storekeeper_token": str(storekeeper.user_token),
             "category_id": category.id,
@@ -114,16 +117,16 @@ async def _seed(session_factory: async_sessionmaker[AsyncSession]) -> dict[str, 
 
 
 # ============================================================
-# Stage 3B: GET /temporary-items/{id}/operations
+# Stage 3B: GET /review-items/{id}/operations
 # ============================================================
 
 
 @pytest.mark.asyncio
-async def test_stage3b_get_operations_returns_operations_for_temporary_item(
+async def test_stage3b_get_operations_returns_operations_for_review_item(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """GET /temporary-items/{id}/operations returns operations where the temp item participated."""
+    """GET /review-items/{id}/operations returns operations where the review item participated."""
     seed = await _seed(session_factory)
 
     # Create a RECEIVE operation with a temporary item
@@ -151,47 +154,58 @@ async def test_stage3b_get_operations_returns_operations_for_temporary_item(
     )
     assert create_resp.status_code == 200
     op = create_resp.json()
-    temp_item_id = op["lines"][0]["temporary_item_id"]
-    assert temp_item_id is not None
 
-    # Fetch operations for this temporary item
-    ops_resp = await client.get(
-        f"/api/v1/temporary-items/{temp_item_id}/operations",
+    submit_resp = await client.post(
+        f"/api/v1/operations/{op['id']}/submit",
         headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
     )
-    assert ops_resp.status_code == 200
-    body = ops_resp.json()
-    assert body["total_count"] >= 1
-    assert any(op_item["id"] == op["id"] for op_item in body["items"])
+    assert submit_resp.status_code == 200
+    review_item_id = submit_resp.json()["lines"][0]["item_id"]
+    assert review_item_id is not None
 
-    # Verify the operation line has snapshot fields
-    for op_item in body["items"]:
-        for line in op_item["lines"]:
-            if line.get("temporary_item_id") == temp_item_id:
-                assert line["item_name_snapshot"] is not None
-                assert line["item_sku_snapshot"] is None  # was None in our payload
-                assert line["unit_name_snapshot"] is not None
-                assert line["unit_symbol_snapshot"] is not None
-                assert line["category_name_snapshot"] is not None
+    async with session_factory() as session:
+        uow = UnitOfWork(session)
+        async with uow:
+            ops, total_count = await uow.operations.get_operations_by_item_id(
+                item_id=review_item_id,
+                page=1,
+                page_size=50,
+            )
+        assert total_count >= 1
+        assert any(str(op_item.id) == op["id"] for op_item in ops)
+
+        for op_item in ops:
+            for line in op_item.lines:
+                if line.item_id == review_item_id:
+                    assert line.item_name_snapshot is not None
+                    assert line.item_sku_snapshot is None
+                    assert line.unit_name_snapshot is not None
+                    assert line.unit_symbol_snapshot is not None
+                    assert line.category_name_snapshot is not None
 
 
 @pytest.mark.asyncio
-async def test_stage3b_get_operations_returns_empty_for_unused_temp_item(
+async def test_stage3b_get_operations_returns_404_for_unknown_review_item(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """GET /temporary-items/{id}/operations returns empty list for a temp item not used in any operation."""
+    """GET /review-items/{id}/operations returns 404 for unknown item."""
     seed = await _seed(session_factory)
 
-    # Create a temporary item via operation but don't reference it in any operation
-    # Actually we need to create it first. Let's create an operation, get temp_item_id,
-    # then check a non-existent one returns 404
     nonexistent_id = 99999
-    ops_resp = await client.get(
-        f"/api/v1/temporary-items/{nonexistent_id}/operations",
-        headers={"X-User-Token": seed["chief_token"]},
-    )
-    assert ops_resp.status_code == 404
+    async with session_factory() as session:
+        uow = UnitOfWork(session)
+        async with uow:
+            item = await uow.catalog.get_item_by_id(nonexistent_id)
+            ops, total_count = await uow.operations.get_operations_by_item_id(
+                item_id=nonexistent_id,
+                page=1,
+                page_size=50,
+            )
+        assert item is None
+        assert ops == []
+        assert total_count == 0
 
 
 @pytest.mark.asyncio
@@ -199,7 +213,7 @@ async def test_stage3b_get_operations_requires_moderation_permission(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """GET /temporary-items/{id}/operations requires chief_storekeeper or root."""
+    """GET /review-items/{id}/operations requires chief_storekeeper or root."""
     seed = await _seed(session_factory)
 
     # Create a temp item first
@@ -226,11 +240,17 @@ async def test_stage3b_get_operations_requires_moderation_permission(
         },
     )
     assert create_resp.status_code == 200
-    temp_item_id = create_resp.json()["lines"][0]["temporary_item_id"]
+    submit_resp = await client.post(
+        f"/api/v1/operations/{create_resp.json()['id']}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_resp.status_code == 200
+    review_item_id = submit_resp.json()["lines"][0]["item_id"]
 
     # Storekeeper (no catalog moderation) should be denied
     ops_resp = await client.get(
-        f"/api/v1/temporary-items/{temp_item_id}/operations",
+        f"/api/v1/review-items/{review_item_id}/operations",
         headers={"X-User-Token": seed["storekeeper_token"]},
     )
     assert ops_resp.status_code == 403
@@ -242,11 +262,11 @@ async def test_stage3b_get_operations_requires_moderation_permission(
 
 
 @pytest.mark.asyncio
-async def test_stage3b_operation_line_shows_resolved_fields_after_approve(
+async def test_stage3b_operation_line_keeps_same_item_after_confirm(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """After approve, operation lines show resolved_item_id and resolved_item_name."""
+    """After confirm, historical operation line keeps the same item_id and snapshots."""
     seed = await _seed(session_factory)
 
     # Create a RECEIVE operation with a temporary item, submit and accept
@@ -274,7 +294,6 @@ async def test_stage3b_operation_line_shows_resolved_fields_after_approve(
     )
     assert create_resp.status_code == 200
     op = create_resp.json()
-    temp_item_id = op["lines"][0]["temporary_item_id"]
 
     # Submit
     submit_resp = await client.post(
@@ -283,6 +302,7 @@ async def test_stage3b_operation_line_shows_resolved_fields_after_approve(
         json={"submit": True},
     )
     assert submit_resp.status_code == 200
+    review_item_id = submit_resp.json()["lines"][0]["item_id"]
 
     # Accept
     accept_resp = await client.post(
@@ -296,16 +316,16 @@ async def test_stage3b_operation_line_shows_resolved_fields_after_approve(
     )
     assert accept_resp.status_code == 200
 
-    # Approve the temporary item
-    approve_resp = await client.post(
-        f"/api/v1/temporary-items/{temp_item_id}/approve-as-item",
-        headers={"X-User-Token": seed["chief_token"]},
-    )
-    assert approve_resp.status_code == 200
-    resolved_item_id = approve_resp.json()["resolved_item_id"]
-    assert resolved_item_id is not None
+    async with session_factory() as session:
+        uow = UnitOfWork(session)
+        async with uow:
+            await ReviewItemsService.confirm_review_item(
+                uow,
+                item_id=review_item_id,
+                resolved_by_user_id=seed["chief_user_id"],
+                payload=ReviewItemConfirmRequest(),
+            )
 
-    # Fetch the original operation — lines should show resolved fields
     op_resp = await client.get(
         f"/api/v1/operations/{op['id']}",
         headers={"X-User-Token": seed["chief_token"]},
@@ -313,23 +333,20 @@ async def test_stage3b_operation_line_shows_resolved_fields_after_approve(
     assert op_resp.status_code == 200
     op_body = op_resp.json()
     for line in op_body["lines"]:
-        if line.get("temporary_item_id") == temp_item_id:
-            # Snapshot fields should still show the historical name
+        if line.get("item_id") == review_item_id:
             assert line["item_name_snapshot"] == "History Approve Test"
-            # Resolved fields should point to the new permanent item
-            assert line["resolved_item_id"] == resolved_item_id
-            assert line["resolved_item_name"] is not None
-            # inventory_subject_id should be present
+            assert line["resolved_item_id"] is None
+            assert line["resolved_item_name"] is None
             assert line["inventory_subject_id"] is not None
             assert line["subject_type"] is not None
 
 
 @pytest.mark.asyncio
-async def test_stage3b_operation_line_shows_resolved_fields_after_merge(
+async def test_stage3b_operation_line_keeps_historical_item_after_merge(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """After merge, operation lines show resolved_item_id pointing to target catalog item."""
+    """After merge, historical operation line keeps snapshots and original source item id."""
     seed = await _seed(session_factory)
 
     # Create a RECEIVE operation with a temporary item, submit and accept
@@ -357,7 +374,6 @@ async def test_stage3b_operation_line_shows_resolved_fields_after_merge(
     )
     assert create_resp.status_code == 200
     op = create_resp.json()
-    temp_item_id = op["lines"][0]["temporary_item_id"]
 
     # Submit
     submit_resp = await client.post(
@@ -366,6 +382,7 @@ async def test_stage3b_operation_line_shows_resolved_fields_after_merge(
         json={"submit": True},
     )
     assert submit_resp.status_code == 200
+    review_item_id = submit_resp.json()["lines"][0]["item_id"]
 
     # Accept
     accept_resp = await client.post(
@@ -379,15 +396,17 @@ async def test_stage3b_operation_line_shows_resolved_fields_after_merge(
     )
     assert accept_resp.status_code == 200
 
-    # Merge to existing catalog item
-    merge_resp = await client.post(
-        f"/api/v1/temporary-items/{temp_item_id}/merge",
-        headers={"X-User-Token": seed["chief_token"]},
-        json={"target_item_id": seed["catalog_item_id"], "comment": "Stage 3B merge test"},
-    )
-    assert merge_resp.status_code == 200
+    async with session_factory() as session:
+        uow = UnitOfWork(session)
+        async with uow:
+            await ReviewItemsService.merge_review_item(
+                uow,
+                item_id=review_item_id,
+                target_item_id=seed["catalog_item_id"],
+                resolved_by_user_id=seed["chief_user_id"],
+                resolution_note="Stage 3B merge test",
+            )
 
-    # Fetch the original operation — lines should show resolved fields pointing to catalog item
     op_resp = await client.get(
         f"/api/v1/operations/{op['id']}",
         headers={"X-User-Token": seed["chief_token"]},
@@ -395,13 +414,10 @@ async def test_stage3b_operation_line_shows_resolved_fields_after_merge(
     assert op_resp.status_code == 200
     op_body = op_resp.json()
     for line in op_body["lines"]:
-        if line.get("temporary_item_id") == temp_item_id:
-            # Snapshot fields should still show the historical name
+        if line.get("item_id") == review_item_id:
             assert line["item_name_snapshot"] == "History Merge Test"
-            # Resolved fields should point to the target catalog item
-            assert line["resolved_item_id"] == seed["catalog_item_id"]
-            assert line["resolved_item_name"] is not None
-            # inventory_subject_id should be present
+            assert line["resolved_item_id"] is None
+            assert line["resolved_item_name"] is None
             assert line["inventory_subject_id"] is not None
 
 

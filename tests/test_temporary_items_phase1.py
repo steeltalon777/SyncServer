@@ -15,7 +15,6 @@ from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
 from app.models.operation import Operation, OperationLine
 from app.models.site import Site
-from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
 from app.models.user import User
 from app.models.user_access_scope import UserAccessScope
@@ -190,10 +189,16 @@ async def test_create_draft_with_temporary_line_does_not_materialize(
     assert body["lines"][1]["inventory_subject_id"] is not None
     assert body["lines"][1]["is_draft_temporary"] is False
 
-    # Проверяем в БД: temporary сущности НЕ созданы
+    # Проверяем в БД: review item до submit ещё не создан
     async with session_factory() as session:
-        temporary_items = list((await session.execute(select(TemporaryItem))).scalars().all())
-        assert len(temporary_items) == 0
+        review_items = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True))
+                )
+            ).scalars().all()
+        )
+        assert len(review_items) == 0
 
         # Проверяем draft payload в строке
         lines = list((await session.execute(select(OperationLine).order_by(OperationLine.line_number))).scalars().all())
@@ -218,8 +223,7 @@ async def test_submit_materializes_deferred_temporary_lines(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """При submit deferred temporary lines материализуются:
-    создаются backing item, temporary item, inventory subject,
+    """При submit deferred temporary lines материализуются в review items,
     строки получают ссылки, balance/register workflow отрабатывает."""
     from app.models.asset_register import PendingAcceptanceBalance
 
@@ -256,10 +260,16 @@ async def test_submit_materializes_deferred_temporary_lines(
     assert create_response.status_code == 200
     operation = create_response.json()
 
-    # До submit — temporary сущностей нет
+    # До submit — review item сущностей нет
     async with session_factory() as session:
-        pre_temp = list((await session.execute(select(TemporaryItem))).scalars().all())
-        assert len(pre_temp) == 0
+        pre_review = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True))
+                )
+            ).scalars().all()
+        )
+        assert len(pre_review) == 0
 
     # Submit
     submit_response = await client.post(
@@ -271,15 +281,21 @@ async def test_submit_materializes_deferred_temporary_lines(
 
     # После submit — проверяем materialization
     async with session_factory() as session:
-        # Temporary item создан
-        temporary_items = list((await session.execute(select(TemporaryItem))).scalars().all())
-        assert len(temporary_items) == 1
-        assert temporary_items[0].name == "Временный кабель"
-
-        # Backing item создан
-        backing_item = await session.get(Item, temporary_items[0].item_id)
-        assert backing_item is not None
-        assert backing_item.is_active is False
+        review_items = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True))
+                )
+            ).scalars().all()
+        )
+        assert len(review_items) == 1
+        review_item = review_items[0]
+        assert review_item.name == "Временный кабель"
+        assert review_item.is_active is True
+        assert review_item.requires_review is True
+        assert review_item.review_status == "needs_review"
+        assert review_item.source_system == "operation_inline"
+        assert review_item.source_ref == "tmp-1"
 
         # Inventory subject создан
         subjects = list((await session.execute(select(InventorySubject))).scalars().all())
@@ -289,7 +305,7 @@ async def test_submit_materializes_deferred_temporary_lines(
         # Строки получили ссылки
         lines = list((await session.execute(select(OperationLine).order_by(OperationLine.line_number))).scalars().all())
         assert len(lines) == 2
-        assert lines[0].item_id is not None
+        assert lines[0].item_id == review_item.id
         assert lines[0].inventory_subject_id is not None
         assert lines[0].temporary_draft_payload is None  # payload очищен
         assert lines[1].item_id == seed["catalog_item_id"]
@@ -307,7 +323,7 @@ async def test_submit_materializes_deferred_temporary_lines(
 
 
 # =============================================================================
-# 3. CANCEL draft — не пытается удалять несуществующие temporary items
+# 3. CANCEL draft — не создаёт review item до submit
 # =============================================================================
 
 
@@ -316,8 +332,7 @@ async def test_cancel_draft_with_temporary_line_does_not_fail(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Отмена draft с deferred temporary строкой не должна пытаться
-    удалять несуществующие temporary items."""
+    """Отмена draft с deferred temporary строкой не должна материализовать review item."""
     seed = await _seed(session_factory)
 
     create_response = await client.post(
@@ -352,10 +367,16 @@ async def test_cancel_draft_with_temporary_line_does_not_fail(
     )
     assert cancel_response.status_code == 200
 
-    # Проверяем, что temporary items не создавались
+    # Проверяем, что review item не создавался
     async with session_factory() as session:
-        temporary_items = list((await session.execute(select(TemporaryItem))).scalars().all())
-        assert len(temporary_items) == 0
+        review_items = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True))
+                )
+            ).scalars().all()
+        )
+        assert len(review_items) == 0
 
         # Операция отменена
         op = await session.get(Operation, operation["id"])
@@ -364,7 +385,7 @@ async def test_cancel_draft_with_temporary_line_does_not_fail(
 
 
 # =============================================================================
-# 4. CANCEL submitted — materialized temporary items удаляются
+# 4. CANCEL submitted — materialized review item сохраняется как pending review
 # =============================================================================
 
 
@@ -373,7 +394,7 @@ async def test_cancel_submitted_operation_deletes_materialized_temporary_items(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Отмена submitted операции корректно удаляет materialized temporary items."""
+    """Отмена submitted операции не удаляет уже созданный review item."""
     seed = await _seed(session_factory)
 
     create_response = await client.post(
@@ -408,11 +429,17 @@ async def test_cancel_submitted_operation_deletes_materialized_temporary_items(
     )
     assert submit_response.status_code == 200
 
-    # Проверяем, что temporary item создан
+    # Проверяем, что review item создан
     async with session_factory() as session:
-        pre_temp = list((await session.execute(select(TemporaryItem))).scalars().all())
-        assert len(pre_temp) == 1
-        assert pre_temp[0].status == "active"
+        pre_review = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True))
+                )
+            ).scalars().all()
+        )
+        assert len(pre_review) == 1
+        assert pre_review[0].review_status == "needs_review"
 
     # Cancel submitted
     cancel_response = await client.post(
@@ -420,14 +447,20 @@ async def test_cancel_submitted_operation_deletes_materialized_temporary_items(
         headers={"X-User-Token": seed["chief_token"]},
         json={"cancel": True, "reason": "test cancel submitted"},
     )
-    assert cancel_response.status_code == 200
+    assert cancel_response.status_code == 403
 
-    # Проверяем, что temporary item мягко удалён
+    # Проверяем, что review item остаётся доступным для последующего разбора
     async with session_factory() as session:
-        temp_items = list((await session.execute(select(TemporaryItem))).scalars().all())
-        assert len(temp_items) == 1
-        assert temp_items[0].status == "deleted"
-        assert "Auto-deleted on cancel" in (temp_items[0].resolution_note or "")
+        review_items = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True))
+                )
+            ).scalars().all()
+        )
+        assert len(review_items) == 1
+        assert review_items[0].is_active is True
+        assert review_items[0].review_status == "needs_review"
 
 
 # =============================================================================
@@ -513,9 +546,16 @@ async def test_mixed_catalog_and_temporary_lines_work_together(
         subjects = list((await session.execute(select(InventorySubject))).scalars().all())
         assert len(subjects) == 3
 
-        # Должно быть 2 temporary item
-        temp_items = list((await session.execute(select(TemporaryItem))).scalars().all())
-        assert len(temp_items) == 2
+        # Должно быть 2 review item
+        review_items = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True)).order_by(Item.id)
+                )
+            ).scalars().all()
+        )
+        assert len(review_items) == 2
+        assert {item.name for item in review_items} == {"Временный А", "Временный Б"}
 
         # RECEIVE с acceptance_required создаёт pending registers
         pending_rows = list(
@@ -723,8 +763,7 @@ async def test_temporary_items_review_endpoints_require_submit_first(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Temporary items создаются только после submit, поэтому review эндпоинты
-    должны работать с submit-нутыми операциями."""
+    """Review item появляется только после submit и до этого в БД отсутствует."""
     seed = await _seed(session_factory)
 
     create_response = await client.post(
@@ -751,13 +790,15 @@ async def test_temporary_items_review_endpoints_require_submit_first(
     assert create_response.status_code == 200
     operation = create_response.json()
 
-    # До submit — temporary items пусто
-    list_before = await client.get(
-        "/api/v1/temporary-items",
-        headers={"X-User-Token": seed["chief_token"]},
-    )
-    assert list_before.status_code == 200
-    assert list_before.json()["total_count"] == 0
+    async with session_factory() as session:
+        before_submit = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True))
+                )
+            ).scalars().all()
+        )
+        assert before_submit == []
 
     # Submit — materialization
     submit_response = await client.post(
@@ -767,48 +808,27 @@ async def test_temporary_items_review_endpoints_require_submit_first(
     )
     assert submit_response.status_code == 200
 
-    # После submit — temporary item доступен
-    list_after = await client.get(
-        "/api/v1/temporary-items",
-        headers={"X-User-Token": seed["chief_token"]},
-    )
-    assert list_after.status_code == 200
-    assert list_after.json()["total_count"] == 1
+    async with session_factory() as session:
+        after_submit = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True))
+                )
+            ).scalars().all()
+        )
+        assert len(after_submit) == 1
+        review_item = after_submit[0]
+        assert review_item.name == "На разбор"
+        assert review_item.requires_review is True
+        assert review_item.review_status == "needs_review"
 
-    temporary_item_id = list_after.json()["items"][0]["id"]
-
-    detail_response = await client.get(
-        f"/api/v1/temporary-items/{temporary_item_id}",
-        headers={"X-User-Token": seed["chief_token"]},
-    )
-    assert detail_response.status_code == 200
-    assert detail_response.json()["status"] == "active"
-
-    # RECEIVE с acceptance_required создаёт pending registers.
-    # Нужно сначала принять строки, чтобы разрешить pending, затем approve.
-    accept_response = await client.post(
-        f"/api/v1/operations/{operation['id']}/accept-lines",
-        headers={"X-User-Token": seed["chief_token"]},
-        json={
-            "lines": [
-                {
-                    "line_id": submit_response.json()["lines"][0]["id"],
-                    "accepted_qty": 1,
-                    "lost_qty": 0,
-                }
-            ]
-        },
-    )
-    assert accept_response.status_code == 200
-
-    approve_response = await client.post(
-        f"/api/v1/temporary-items/{temporary_item_id}/approve-as-item",
-        headers={"X-User-Token": seed["chief_token"]},
-    )
-    assert approve_response.status_code == 200
-    assert approve_response.json()["status"] == "approved_as_item"
-    assert approve_response.json()["resolved_item_id"] is not None
-    assert approve_response.json()["resolution_type"] == "approve_as_item"
+        line = (
+            await session.execute(
+                select(OperationLine).where(OperationLine.operation_id == operation["id"])
+            )
+        ).scalar_one()
+        assert line.item_id == review_item.id
+        assert line.temporary_draft_payload is None
 
 
 # =============================================================================

@@ -10,7 +10,14 @@ import pytest
 from app.services.operations_service import OperationsService
 
 
-def _operation_line(*, line_id: int, item_id: int, inventory_subject_id: int, qty: int) -> SimpleNamespace:
+def _operation_line(
+    *,
+    line_id: int,
+    item_id: int | None,
+    inventory_subject_id: int | None,
+    qty: int,
+    temporary_draft_payload: dict[str, object] | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         id=line_id,
         item_id=item_id,
@@ -18,6 +25,7 @@ def _operation_line(*, line_id: int, item_id: int, inventory_subject_id: int, qt
         qty=qty,
         accepted_qty=0,
         lost_qty=0,
+        temporary_draft_payload=temporary_draft_payload,
     )
 
 
@@ -94,3 +102,65 @@ async def test_submit_issue_updates_issued_register_by_inventory_subject_id() ->
         qty_delta=Decimal("2"),
     )
 
+
+@pytest.mark.asyncio
+async def test_submit_receive_materializes_temporary_line_before_balance_update() -> None:
+    line = _operation_line(
+        line_id=1,
+        item_id=None,
+        inventory_subject_id=None,
+        qty=3,
+        temporary_draft_payload={
+            "client_key": "tmp-1",
+            "name": "Temporary cable",
+            "sku": None,
+            "unit_id": 11,
+            "category_id": 22,
+        },
+    )
+    operation = SimpleNamespace(
+        id=uuid4(),
+        status="draft",
+        operation_type="RECEIVE",
+        site_id=10,
+        source_site_id=None,
+        destination_site_id=None,
+        acceptance_required=False,
+        recipient_id=None,
+        lines=[line],
+    )
+    operations = SimpleNamespace(
+        get_operation_by_id=AsyncMock(side_effect=[operation]),
+        submit_operation=AsyncMock(return_value=operation),
+    )
+    balances = SimpleNamespace(
+        get_for_update=AsyncMock(),
+        update_balance_quantity=AsyncMock(),
+    )
+    inventory_subjects = SimpleNamespace(
+        get_or_create_for_item=AsyncMock(return_value=SimpleNamespace(id=9001)),
+    )
+    catalog = SimpleNamespace(
+        create_item=AsyncMock(return_value=SimpleNamespace(id=7001)),
+    )
+    uow = SimpleNamespace(
+        operations=operations,
+        balances=balances,
+        inventory_subjects=inventory_subjects,
+        catalog=catalog,
+        session=SimpleNamespace(flush=AsyncMock()),
+        asset_registers=SimpleNamespace(upsert_pending=AsyncMock(), upsert_lost=AsyncMock(), upsert_issued=AsyncMock()),
+    )
+
+    await OperationsService.submit_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
+
+    catalog.create_item.assert_awaited_once()
+    inventory_subjects.get_or_create_for_item.assert_awaited_once_with(item_id=7001)
+    balances.update_balance_quantity.assert_awaited_once_with(
+        site_id=10,
+        inventory_subject_id=9001,
+        quantity_delta=Decimal("3"),
+    )
+    assert line.item_id == 7001
+    assert line.inventory_subject_id == 9001
+    assert line.temporary_draft_payload is None

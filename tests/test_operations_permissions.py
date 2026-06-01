@@ -196,15 +196,29 @@ def test_chief_storekeeper_cannot_delete_cancelled_operation() -> None:
     identity = _identity(role="chief_storekeeper")
     op = _operation(uuid4(), status="cancelled")
 
+    OperationsPolicy.require_operation_delete_permission(identity, op)
+
+
+def test_storekeeper_can_delete_own_cancelled_operation() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+    op = _operation(identity.user_id, status="cancelled")
+
+    OperationsPolicy.require_operation_delete_permission(identity, op)
+
+
+def test_storekeeper_cannot_delete_other_users_cancelled_operation() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+    op = _operation(uuid4(), status="cancelled")
+
     with pytest.raises(HTTPException) as exc:
         OperationsPolicy.require_operation_delete_permission(identity, op)
 
     assert exc.value.status_code == 403
 
 
-def test_storekeeper_cannot_delete_cancelled_operation() -> None:
-    identity = _identity(role="storekeeper", scopes=[_scope(10)])
-    op = _operation(identity.user_id, status="cancelled")
+def test_observer_cannot_delete_cancelled_operation() -> None:
+    identity = _identity(role="observer", scopes=[_scope(10, can_operate=False)])
+    op = _operation(uuid4(), status="cancelled")
 
     with pytest.raises(HTTPException) as exc:
         OperationsPolicy.require_operation_delete_permission(identity, op)

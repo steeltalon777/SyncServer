@@ -1100,6 +1100,7 @@ class OperationsService:
     ) -> None:
         operation = await uow.operations.get_operation_by_id(operation_id)
         OperationsWorkflowPolicy.require_exists(operation)
+        # Route checks workflow first; keep service guard as defense in depth.
         OperationsWorkflowPolicy.require_cancelled_for_delete(operation)
 
         await uow.operations.soft_delete_operation(
