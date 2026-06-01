@@ -42,6 +42,13 @@
 - `app/services/catalog_admin_service.py`
 - `alembic/versions/`
 
+## Dev-стенд и тестирование
+
+Агенты тестируют изменения на работающем dev-стенде. По умолчанию стенд запущен. Если нет — агент может запустить/перезапустить/пересобрать его через `make` из `/home/makc/AI_sandbox/warehouse_solution`.
+
+- Полный список `make`-команд и протокол восстановления стенда: `AGENTS.md` в корне workspace.
+- Основные команды: `make up` (запуск), `make restart` (перезапуск), `make build-sync` (ребилд SyncServer), `make status` (проверка).
+
 ## Verification
 
 - Default: `python -m pytest`
