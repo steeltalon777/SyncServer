@@ -164,6 +164,8 @@ class UnitResponse(ORMBaseModel):
     updated_at: datetime
     deleted_at: datetime | None = None
     deleted_by_user_id: UUID | None = None
+    created_by_user_id: UUID | None = None
+    updated_by_user_id: UUID | None = None
 
 
 class UnitBulkCreateResponse(ORMBaseModel):
@@ -201,6 +203,8 @@ class CategoryResponse(ORMBaseModel):
     updated_at: datetime
     deleted_at: datetime | None = None
     deleted_by_user_id: UUID | None = None
+    created_by_user_id: UUID | None = None
+    updated_by_user_id: UUID | None = None
 
 
 class CategoryBulkCreateResponse(ORMBaseModel):
@@ -261,6 +265,8 @@ class ItemResponse(ORMBaseModel):
     updated_at: datetime
     deleted_at: datetime | None = None
     deleted_by_user_id: UUID | None = None
+    created_by_user_id: UUID | None = None
+    updated_by_user_id: UUID | None = None
 
 
 class CatalogSiteDto(ORMBaseModel):

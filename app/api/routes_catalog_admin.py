@@ -55,7 +55,7 @@ async def create_unit(
     service = CatalogAdminService()
     async with uow:
         await _require_catalog_admin(identity=identity)
-        unit = await service.create_unit(uow, payload)
+        unit = await service.create_unit(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info("request_id=%s create_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, identity.user_id)
     return UnitResponse.model_validate(unit)
@@ -71,7 +71,7 @@ async def bulk_create_units(
     service = CatalogAdminService()
     async with uow:
         await _require_catalog_admin(identity=identity)
-        units = await service.bulk_create_units(uow, payload)
+        units = await service.bulk_create_units(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info("request_id=%s bulk_create_units count=%s user_id=%s", get_request_id(request), len(units), identity.user_id)
     return UnitBulkCreateResponse(items=[UnitResponse.model_validate(unit) for unit in units])
@@ -88,7 +88,7 @@ async def update_unit(
     service = CatalogAdminService()
     async with uow:
         await _require_catalog_admin(identity=identity)
-        unit = await service.update_unit(uow, unit_id, payload)
+        unit = await service.update_unit(uow, unit_id, payload, updated_by_user_id=identity.user_id)
 
     logger.info("request_id=%s update_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, identity.user_id)
     return UnitResponse.model_validate(unit)
@@ -104,7 +104,7 @@ async def create_category(
     service = CatalogAdminService()
     async with uow:
         await _require_catalog_admin(identity=identity)
-        category = await service.create_category(uow, payload)
+        category = await service.create_category(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info(
         "request_id=%s create_category category_id=%s user_id=%s",
@@ -125,7 +125,7 @@ async def bulk_create_categories(
     service = CatalogAdminService()
     async with uow:
         await _require_catalog_admin(identity=identity)
-        categories = await service.bulk_create_categories(uow, payload)
+        categories = await service.bulk_create_categories(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info(
         "request_id=%s bulk_create_categories count=%s user_id=%s",
@@ -147,7 +147,7 @@ async def update_category(
     service = CatalogAdminService()
     async with uow:
         await _require_catalog_admin(identity=identity)
-        category = await service.update_category(uow, category_id, payload)
+        category = await service.update_category(uow, category_id, payload, updated_by_user_id=identity.user_id)
 
     logger.info(
         "request_id=%s update_category category_id=%s user_id=%s",
@@ -168,7 +168,7 @@ async def create_item(
     service = CatalogAdminService()
     async with uow:
         await _require_catalog_admin(identity=identity)
-        item = await service.create_item(uow, payload)
+        item = await service.create_item(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info("request_id=%s create_item item_id=%s user_id=%s", get_request_id(request), item.id, identity.user_id)
     return ItemResponse.model_validate(item)
@@ -185,7 +185,7 @@ async def update_item(
     service = CatalogAdminService()
     async with uow:
         await _require_catalog_admin(identity=identity)
-        item = await service.update_item(uow, item_id, payload)
+        item = await service.update_item(uow, item_id, payload, updated_by_user_id=identity.user_id)
 
     logger.info("request_id=%s update_item item_id=%s user_id=%s", get_request_id(request), item.id, identity.user_id)
     return ItemResponse.model_validate(item)

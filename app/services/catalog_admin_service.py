@@ -46,7 +46,7 @@ def _normalize_text(value: str | None) -> str | None:
 
 
 class CatalogAdminService:
-    async def create_unit(self, uow: UnitOfWork, payload: UnitCreateRequest) -> Unit:
+    async def create_unit(self, uow: UnitOfWork, payload: UnitCreateRequest, created_by_user_id: UUID | None = None) -> Unit:
         await self._ensure_unit_unique(uow, name=payload.name, symbol=payload.symbol)
 
         unit = Unit(
@@ -56,9 +56,11 @@ class CatalogAdminService:
             sort_order=payload.sort_order,
             is_active=payload.is_active,
         )
+        if created_by_user_id is not None:
+            unit.created_by_user_id = created_by_user_id
         return await uow.catalog.create_unit(unit)
 
-    async def bulk_create_units(self, uow: UnitOfWork, payload: UnitBulkCreateRequest) -> list[Unit]:
+    async def bulk_create_units(self, uow: UnitOfWork, payload: UnitBulkCreateRequest, created_by_user_id: UUID | None = None) -> list[Unit]:
         seen_names: set[str] = set()
         seen_symbols: set[str] = set()
         for item in payload.items:
@@ -73,11 +75,11 @@ class CatalogAdminService:
 
         created: list[Unit] = []
         for item in payload.items:
-            unit = await self.create_unit(uow, item)
+            unit = await self.create_unit(uow, item, created_by_user_id=created_by_user_id)
             created.append(unit)
         return created
 
-    async def update_unit(self, uow: UnitOfWork, unit_id: int, payload: UnitUpdateRequest) -> Unit:
+    async def update_unit(self, uow: UnitOfWork, unit_id: int, payload: UnitUpdateRequest, updated_by_user_id: UUID | None = None) -> Unit:
         unit = await uow.catalog.get_unit_by_id(unit_id)
         if unit is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unit not found")
@@ -102,9 +104,11 @@ class CatalogAdminService:
         if payload.is_active is not None:
             unit.is_active = payload.is_active
 
+        if updated_by_user_id is not None:
+            unit.updated_by_user_id = updated_by_user_id
         return await uow.catalog.update_unit(unit)
 
-    async def create_category(self, uow: UnitOfWork, payload: CategoryCreateRequest) -> Category:
+    async def create_category(self, uow: UnitOfWork, payload: CategoryCreateRequest, created_by_user_id: UUID | None = None) -> Category:
         if payload.code == UNCATEGORIZED_CATEGORY_CODE:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="reserved category code")
 
@@ -125,16 +129,18 @@ class CatalogAdminService:
             sort_order=payload.sort_order,
             is_active=payload.is_active,
         )
+        if created_by_user_id is not None:
+            category.created_by_user_id = created_by_user_id
         return await uow.catalog.create_category(category)
 
-    async def bulk_create_categories(self, uow: UnitOfWork, payload: CategoryBulkCreateRequest) -> list[Category]:
+    async def bulk_create_categories(self, uow: UnitOfWork, payload: CategoryBulkCreateRequest, created_by_user_id: UUID | None = None) -> list[Category]:
         created: list[Category] = []
         for item in payload.items:
-            category = await self.create_category(uow, item)
+            category = await self.create_category(uow, item, created_by_user_id=created_by_user_id)
             created.append(category)
         return created
 
-    async def update_category(self, uow: UnitOfWork, category_id: int, payload: CategoryUpdateRequest) -> Category:
+    async def update_category(self, uow: UnitOfWork, category_id: int, payload: CategoryUpdateRequest, updated_by_user_id: UUID | None = None) -> Category:
         category = await uow.catalog.get_category_by_id(category_id)
         if category is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
@@ -172,6 +178,8 @@ class CatalogAdminService:
         if payload.is_active is not None:
             category.is_active = payload.is_active
 
+        if updated_by_user_id is not None:
+            category.updated_by_user_id = updated_by_user_id
         return await uow.catalog.update_category(category)
 
     async def create_item(self, uow: UnitOfWork, payload: ItemCreateRequest, created_by_user_id: UUID | None = None) -> Item:
@@ -203,6 +211,7 @@ class CatalogAdminService:
             requires_review=payload.requires_review,
             review_created_by_user_id=created_by_user_id if payload.requires_review else None,
             review_status="needs_review" if payload.requires_review else None,
+            created_by_user_id=created_by_user_id,
         )
         return await uow.catalog.create_item(item)
 
@@ -213,7 +222,7 @@ class CatalogAdminService:
                 detail="item is frozen by active lost asset balance",
             )
 
-    async def update_item(self, uow: UnitOfWork, item_id: int, payload: ItemUpdateRequest) -> Item:
+    async def update_item(self, uow: UnitOfWork, item_id: int, payload: ItemUpdateRequest, updated_by_user_id: UUID | None = None) -> Item:
         item = await uow.catalog.get_item_by_id(item_id)
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
@@ -247,6 +256,8 @@ class CatalogAdminService:
         if payload.is_active is not None:
             item.is_active = payload.is_active
 
+        if updated_by_user_id is not None:
+            item.updated_by_user_id = updated_by_user_id
         return await uow.catalog.update_item(item)
 
     async def _ensure_unit_unique(self, uow: UnitOfWork, name: str, symbol: str) -> None:
@@ -625,7 +636,7 @@ class CatalogAdminService:
             if isinstance(change, BatchChangeCreate):
                 payload = change.payload
                 if isinstance(payload, BatchChangeUnitPayload):
-                    unit = await self.create_unit(uow, payload)
+                    unit = await self.create_unit(uow, payload, created_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="unit",
@@ -636,7 +647,7 @@ class CatalogAdminService:
             elif isinstance(change, BatchChangeUpdate):
                 payload = change.payload
                 if isinstance(payload, BatchChangeUpdatePayload) and change.entity_id:
-                    unit = await self.update_unit(uow, change.entity_id, payload)
+                    unit = await self.update_unit(uow, change.entity_id, payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="unit",
@@ -647,7 +658,7 @@ class CatalogAdminService:
             elif isinstance(change, BatchChangeDeactivate):
                 if change.entity_id:
                     payload = UnitUpdateRequest(is_active=False)
-                    unit = await self.update_unit(uow, change.entity_id, payload)
+                    unit = await self.update_unit(uow, change.entity_id, payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="unit",
@@ -708,7 +719,7 @@ class CatalogAdminService:
                         sort_order=payload.sort_order,
                         is_active=payload.is_active,
                     )
-                    category = await self.create_category(uow, create_payload)
+                    category = await self.create_category(uow, create_payload, created_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="category",
@@ -719,7 +730,7 @@ class CatalogAdminService:
             elif isinstance(change, BatchChangeUpdate):
                 payload = change.payload
                 if isinstance(payload, BatchChangeUpdatePayload) and change.entity_id:
-                    category = await self.update_category(uow, change.entity_id, payload)
+                    category = await self.update_category(uow, change.entity_id, payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="category",
@@ -730,7 +741,7 @@ class CatalogAdminService:
             elif isinstance(change, BatchChangeDeactivate):
                 if change.entity_id:
                     payload = CategoryUpdateRequest(is_active=False)
-                    category = await self.update_category(uow, change.entity_id, payload)
+                    category = await self.update_category(uow, change.entity_id, payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="category",
@@ -815,7 +826,7 @@ class CatalogAdminService:
             elif isinstance(change, BatchChangeUpdate):
                 payload = change.payload
                 if isinstance(payload, BatchChangeUpdatePayload) and change.entity_id:
-                    item = await self.update_item(uow, change.entity_id, payload)
+                    item = await self.update_item(uow, change.entity_id, payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="item",
@@ -826,7 +837,7 @@ class CatalogAdminService:
             elif isinstance(change, BatchChangeDeactivate):
                 if change.entity_id:
                     payload = ItemUpdateRequest(is_active=False)
-                    item = await self.update_item(uow, change.entity_id, payload)
+                    item = await self.update_item(uow, change.entity_id, payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="item",
