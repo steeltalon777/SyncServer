@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import Text, and_, cast, desc, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -33,8 +33,8 @@ class OperationsRepo:
         destination_site_id: int | None = None,
         issued_to_user_id: UUID | None = None,
         issued_to_name: str | None = None,
-        recipient_id: int | None = None,
-        recipient_name_snapshot: str | None = None,
+        issue_object_id: int | None = None,
+        issue_object_name_snapshot: str | None = None,
         acceptance_required: bool = False,
         client_request_id: str | None = None,
     ) -> Operation:
@@ -48,8 +48,8 @@ class OperationsRepo:
             destination_site_id=destination_site_id,
             issued_to_user_id=issued_to_user_id,
             issued_to_name=issued_to_name,
-            recipient_id=recipient_id,
-            recipient_name_snapshot=recipient_name_snapshot,
+            issue_object_id=issue_object_id,
+            issue_object_name_snapshot=issue_object_name_snapshot,
             acceptance_required=acceptance_required,
             acceptance_state="pending" if acceptance_required else "not_required",
             created_by_user_id=created_by_user_id,
@@ -127,8 +127,8 @@ class OperationsRepo:
         destination_site_id: int | None = None,
         issued_to_user_id: UUID | None = None,
         issued_to_name: str | None = None,
-        recipient_id: int | None = None,
-        recipient_name_snapshot: str | None = None,
+        issue_object_id: int | None = None,
+        issue_object_name_snapshot: str | None = None,
         fields_set: set[str] | None = None,
     ) -> Operation | None:
         operation = await self.get_operation_by_id(operation_id)
@@ -147,10 +147,10 @@ class OperationsRepo:
             operation.issued_to_user_id = issued_to_user_id
         if fields_set is not None and "issued_to_name" in fields_set:
             operation.issued_to_name = issued_to_name
-        if fields_set is not None and "recipient_id" in fields_set:
-            operation.recipient_id = recipient_id
-        if fields_set is not None and "recipient_name_snapshot" in fields_set:
-            operation.recipient_name_snapshot = recipient_name_snapshot
+        if fields_set is not None and "issue_object_id" in fields_set:
+            operation.issue_object_id = issue_object_id
+        if fields_set is not None and "issue_object_name_snapshot" in fields_set:
+            operation.issue_object_name_snapshot = issue_object_name_snapshot
 
         operation.version = int(operation.version) + 1
         await self.session.flush()
@@ -256,9 +256,38 @@ class OperationsRepo:
             where_clauses.append(Operation.updated_at >= filter.updated_after)
         if filter.updated_before is not None:
             where_clauses.append(Operation.updated_at <= filter.updated_before)
+        search_conditions = []
         if filter.search:
-            term = f"%{filter.search}%"
-            where_clauses.append(or_(Operation.notes.ilike(term)))
+            term = f"%{filter.search.strip()}%"
+            search_conditions.extend([
+                Operation.notes.ilike(term),
+                exists(
+                    select(1)
+                    .select_from(OperationLine)
+                    .outerjoin(Item, OperationLine.item_id == Item.id)
+                    .where(
+                        OperationLine.operation_id == Operation.id,
+                        or_(
+                            OperationLine.item_name_snapshot.ilike(term),
+                            OperationLine.item_sku_snapshot.ilike(term),
+                            cast(Item.hashtags, Text).ilike(term),
+                        ),
+                    )
+                ),
+            ])
+        if filter.item_ids:
+            search_conditions.append(
+                exists(
+                    select(1)
+                    .select_from(OperationLine)
+                    .where(
+                        OperationLine.operation_id == Operation.id,
+                        OperationLine.item_id.in_(filter.item_ids),
+                    )
+                )
+            )
+        if search_conditions:
+            where_clauses.append(or_(*search_conditions))
         if exclude_cancelled:
             where_clauses.append(Operation.status != "cancelled")
 

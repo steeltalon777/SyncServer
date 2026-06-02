@@ -291,10 +291,10 @@ class DocumentService:
 
         # Получатель (для ISSUE/ISSUE_RETURN)
         recipient_info = None
-        if operation.recipient_id or operation.recipient_name_snapshot:
+        if operation.issue_object_id or operation.issue_object_name_snapshot:
             recipient_info = {
-                "recipient_id": operation.recipient_id,
-                "recipient_name": operation.recipient_name_snapshot,
+                "recipient_id": operation.issue_object_id,
+                "recipient_name": operation.issue_object_name_snapshot,
             }
 
         # Выдано лицу

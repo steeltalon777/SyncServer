@@ -244,7 +244,7 @@ async def create_operation(db_session: AsyncSession, test_site: Site, test_user:
         destination_site: Site | None = None,
         status: str = "draft",
         notes: str | None = "document test operation",
-        recipient_name_snapshot: str | None = None,
+        issue_object_name_snapshot: str | None = None,
         issued_to_name: str | None = None,
         acceptance_required: bool = False,
         acceptance_state: str | None = None,
@@ -262,7 +262,7 @@ async def create_operation(db_session: AsyncSession, test_site: Site, test_user:
             created_by_user_id=created_by.id,
             source_site_id=site_obj.id if operation_type == "MOVE" else None,
             destination_site_id=destination_site.id if destination_site is not None else None,
-            recipient_name_snapshot=recipient_name_snapshot,
+            issue_object_name_snapshot=issue_object_name_snapshot,
             issued_to_name=issued_to_name,
             acceptance_required=acceptance_required,
             acceptance_state=effective_acceptance_state,
@@ -337,7 +337,7 @@ async def test_move_operation_with_lines(create_operation, secondary_site: Site)
 async def test_issue_operation_with_lines(create_operation) -> Operation:
     return await create_operation(
         operation_type="ISSUE",
-        recipient_name_snapshot="Recipient Employee",
+        issue_object_name_snapshot="Recipient Employee",
         issued_to_name="Issued Employee",
     )
 

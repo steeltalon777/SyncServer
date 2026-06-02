@@ -39,7 +39,7 @@ async def test_submit_receive_updates_balance_by_inventory_subject_id() -> None:
         source_site_id=None,
         destination_site_id=None,
         acceptance_required=False,
-        recipient_id=None,
+        issue_object_id=None,
         lines=[_operation_line(line_id=1, item_id=101, inventory_subject_id=5001, qty=3)],
     )
     operations = SimpleNamespace(
@@ -75,7 +75,7 @@ async def test_submit_issue_updates_issued_register_by_inventory_subject_id() ->
         source_site_id=None,
         destination_site_id=None,
         acceptance_required=False,
-        recipient_id=77,
+        issue_object_id=77,
         lines=[_operation_line(line_id=1, item_id=101, inventory_subject_id=5001, qty=2)],
     )
     operations = SimpleNamespace(
@@ -97,7 +97,7 @@ async def test_submit_issue_updates_issued_register_by_inventory_subject_id() ->
 
     balances.get_for_update.assert_awaited_once_with(site_id=10, inventory_subject_id=5001)
     asset_registers.upsert_issued.assert_awaited_once_with(
-        recipient_id=77,
+        issue_object_id=77,
         inventory_subject_id=5001,
         qty_delta=Decimal("2"),
     )
@@ -126,7 +126,7 @@ async def test_submit_receive_materializes_temporary_line_before_balance_update(
         source_site_id=None,
         destination_site_id=None,
         acceptance_required=False,
-        recipient_id=None,
+        issue_object_id=None,
         lines=[line],
     )
     operations = SimpleNamespace(

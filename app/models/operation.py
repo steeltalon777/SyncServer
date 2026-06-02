@@ -62,12 +62,12 @@ class Operation(Base):
         nullable=True,
     )
     issued_to_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    recipient_id: Mapped[int | None] = mapped_column(
+    issue_object_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("recipients.id"),
+        ForeignKey("issue_objects.id"),
         nullable=True,
     )
-    recipient_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    issue_object_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_by_user_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),

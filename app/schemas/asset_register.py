@@ -117,7 +117,7 @@ class LostAssetResolveRequest(BaseModel):
 
 
 class IssuedAssetFilter(BaseModel):
-    recipient_id: int | None = None
+    issue_object_id: int | None = None
     item_id: int | None = Field(
         default=None,
         description="[deprecated] Use inventory_subject_id for filtering",
@@ -128,9 +128,9 @@ class IssuedAssetFilter(BaseModel):
 
 
 class IssuedAssetRow(ORMBaseModel):
-    recipient_id: int
-    recipient_name: str
-    recipient_type: str
+    issue_object_id: int
+    issue_object_name: str
+    issue_object_type: str
     inventory_subject_id: int
     subject_type: str
     item_id: int | None = Field(

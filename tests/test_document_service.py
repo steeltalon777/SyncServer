@@ -246,7 +246,7 @@ async def test_payload_structure_for_issue_operation(
     assert payload["operation_type"] == "ISSUE"
     assert "recipient" in payload
     assert payload["recipient"] is not None
-    assert payload["recipient"]["recipient_name"] == operation.recipient_name_snapshot
+    assert payload["recipient"]["recipient_name"] == operation.issue_object_name_snapshot
     
     # Должен быть issued_to
     assert "issued_to" in payload

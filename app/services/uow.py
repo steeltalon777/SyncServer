@@ -11,7 +11,7 @@ from app.repos.events_repo import EventsRepo
 from app.repos.inventory_subjects_repo import InventorySubjectsRepo
 from app.repos.machine_repo import MachineRepo
 from app.repos.operations_repo import OperationsRepo
-from app.repos.recipients_repo import RecipientsRepo
+from app.repos.issue_objects_repo import IssueObjectsRepo
 from app.repos.reports_repo import ReportsRepo
 from app.repos.sites_repo import SitesRepo
 from app.repos.temporary_items_repo import TemporaryItemsRepo
@@ -34,7 +34,7 @@ class UnitOfWork:
         self.asset_registers = AssetRegistersRepo(session)
         self.user_access_scopes = UserAccessScopesRepo(session)
         self.operations = OperationsRepo(session)
-        self.recipients = RecipientsRepo(session)
+        self.issue_objects = IssueObjectsRepo(session)
         self.reports = ReportsRepo(session)
         self.machine = MachineRepo(session)
         self.users = UsersRepo(session)

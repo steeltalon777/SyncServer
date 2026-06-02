@@ -151,7 +151,7 @@ async def resolve_lost_asset(
 async def list_issued_assets(
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
-    recipient_id: int | None = Query(None),
+    issue_object_id: int | None = Query(None),
     item_id: int | None = Query(None),
     search: str | None = Query(None),
     page: int = Query(1, ge=1),
@@ -161,7 +161,7 @@ async def list_issued_assets(
 
     async with uow:
         rows, total_count = await uow.asset_registers.list_issued(
-            recipient_id=recipient_id,
+            issue_object_id=issue_object_id,
             item_id=item_id,
             search=search,
             page=page,

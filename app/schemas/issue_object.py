@@ -8,12 +8,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.schemas.common import ORMBaseModel
 
 
-class RecipientCreate(BaseModel):
+class IssueObjectCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=255)
-    recipient_type: str = Field(default="person", max_length=24)
-    personnel_no: str | None = Field(default=None, max_length=64)
+    object_type: str = Field(default="person", max_length=24)
+    code: str | None = Field(default=None, max_length=64)
 
-    @field_validator("personnel_no", mode="before")
+    @field_validator("code", mode="before")
     @classmethod
     def normalize_blank_strings(cls, value: object) -> object:
         if isinstance(value, str) and value.strip() == "":
@@ -21,13 +21,13 @@ class RecipientCreate(BaseModel):
         return value
 
 
-class RecipientUpdate(BaseModel):
+class IssueObjectUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=255)
-    recipient_type: str | None = Field(default=None, max_length=24)
-    personnel_no: str | None = Field(default=None, max_length=64)
+    object_type: str | None = Field(default=None, max_length=24)
+    code: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None
 
-    @field_validator("personnel_no", mode="before")
+    @field_validator("code", mode="before")
     @classmethod
     def normalize_blank_strings(cls, value: object) -> object:
         if isinstance(value, str) and value.strip() == "":
@@ -35,17 +35,17 @@ class RecipientUpdate(BaseModel):
         return value
 
 
-class RecipientMerge(BaseModel):
+class IssueObjectMerge(BaseModel):
     source_id: int
     target_id: int
 
 
-class RecipientResponse(ORMBaseModel):
+class IssueObjectResponse(ORMBaseModel):
     id: int
-    recipient_type: str
     display_name: str
+    object_type: str
+    code: str | None = None
     normalized_key: str
-    personnel_no: str | None = None
     is_active: bool
     merged_into_id: int | None = None
     created_at: datetime
@@ -54,16 +54,16 @@ class RecipientResponse(ORMBaseModel):
     deleted_by_user_id: UUID | None = None
 
 
-class RecipientListResponse(ORMBaseModel):
-    items: list[RecipientResponse]
+class IssueObjectListResponse(ORMBaseModel):
+    items: list[IssueObjectResponse]
     total_count: int
     page: int
     page_size: int
 
 
-class RecipientFilter(BaseModel):
+class IssueObjectFilter(BaseModel):
     search: str | None = None
-    recipient_type: str | None = None
+    object_type: str | None = None
     is_active: bool | None = None
     include_deleted: bool = False
 

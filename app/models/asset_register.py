@@ -122,9 +122,9 @@ class LostAssetBalance(Base):
 class IssuedAssetBalance(Base):
     __tablename__ = "issued_asset_balances"
 
-    recipient_id: Mapped[int] = mapped_column(
+    issue_object_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("recipients.id"),
+        ForeignKey("issue_objects.id"),
         primary_key=True,
     )
     inventory_subject_id: Mapped[int] = mapped_column(
@@ -176,7 +176,7 @@ class OperationAcceptanceAction(Base):
     )
     recipient_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("recipients.id"),
+        ForeignKey("issue_objects.id"),
         nullable=True,
     )
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)

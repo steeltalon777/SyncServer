@@ -15,7 +15,7 @@ from app.models.asset_register import (
 )
 from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
-from app.models.recipient import Recipient
+from app.models.issue_object import IssueObject
 from app.models.site import Site
 from app.models.temporary_item import TemporaryItem
 
@@ -74,12 +74,12 @@ class AssetRegistersRepo:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def _get_issued_for_update(self, recipient_id: int, inventory_subject_id: int) -> IssuedAssetBalance | None:
+    async def _get_issued_for_update(self, issue_object_id: int, inventory_subject_id: int) -> IssuedAssetBalance | None:
         stmt = (
             select(IssuedAssetBalance)
             .where(
                 and_(
-                    IssuedAssetBalance.recipient_id == recipient_id,
+                    IssuedAssetBalance.issue_object_id == issue_object_id,
                     IssuedAssetBalance.inventory_subject_id == inventory_subject_id,
                 )
             )
@@ -172,18 +172,18 @@ class AssetRegistersRepo:
     async def upsert_issued(
         self,
         *,
-        recipient_id: int,
+        issue_object_id: int,
         inventory_subject_id: int,
         qty_delta: Decimal,
     ) -> IssuedAssetBalance | None:
-        row = await self._get_issued_for_update(recipient_id, inventory_subject_id)
+        row = await self._get_issued_for_update(issue_object_id, inventory_subject_id)
         if row is None:
             if qty_delta < 0:
                 raise ValueError("insufficient issued quantity")
             if qty_delta == 0:
                 return None
             row = IssuedAssetBalance(
-                recipient_id=recipient_id,
+                issue_object_id=issue_object_id,
                 inventory_subject_id=inventory_subject_id,
                 qty=qty_delta,
             )
@@ -351,7 +351,7 @@ class AssetRegistersRepo:
     async def list_issued(
         self,
         *,
-        recipient_id: int | None,
+        issue_object_id: int | None,
         item_id: int | None,
         search: str | None,
         page: int,
@@ -359,9 +359,9 @@ class AssetRegistersRepo:
     ) -> tuple[list[dict], int]:
         stmt = (
             select(
-                IssuedAssetBalance.recipient_id.label("recipient_id"),
-                Recipient.display_name.label("recipient_name"),
-                Recipient.recipient_type.label("recipient_type"),
+                IssuedAssetBalance.issue_object_id.label("issue_object_id"),
+                IssueObject.display_name.label("issue_object_name"),
+                IssueObject.object_type.label("issue_object_type"),
                 IssuedAssetBalance.inventory_subject_id.label("inventory_subject_id"),
                 InventorySubject.subject_type.label("subject_type"),
                 InventorySubject.item_id.label("item_id"),
@@ -375,24 +375,75 @@ class AssetRegistersRepo:
                 IssuedAssetBalance.updated_at.label("updated_at"),
             )
             .select_from(IssuedAssetBalance)
-            .join(Recipient, Recipient.id == IssuedAssetBalance.recipient_id)
+            .join(IssueObject, IssueObject.id == IssuedAssetBalance.issue_object_id)
             .join(InventorySubject, InventorySubject.id == IssuedAssetBalance.inventory_subject_id)
             .outerjoin(Item, Item.id == InventorySubject.item_id)
             .outerjoin(TemporaryItem, TemporaryItem.id == InventorySubject.temporary_item_id)
         )
 
-        if recipient_id is not None:
-            stmt = stmt.where(IssuedAssetBalance.recipient_id == recipient_id)
+        if issue_object_id is not None:
+            stmt = stmt.where(IssuedAssetBalance.issue_object_id == issue_object_id)
         if item_id is not None:
             stmt = stmt.where(InventorySubject.item_id == item_id)
         if search:
             term = f"%{search.strip()}%"
-            stmt = stmt.where(or_(Recipient.display_name.ilike(term), Item.name.ilike(term), Item.sku.ilike(term)))
+            stmt = stmt.where(or_(IssueObject.display_name.ilike(term), Item.name.ilike(term), Item.sku.ilike(term)))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
         stmt = (
-            stmt.order_by(IssuedAssetBalance.updated_at.desc(), IssuedAssetBalance.recipient_id)
+            stmt.order_by(IssuedAssetBalance.updated_at.desc(), IssuedAssetBalance.issue_object_id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [dict(row._mapping) for row in rows], int(total_count)
+
+    async def list_issued_by_object(
+        self,
+        *,
+        issue_object_id: int,
+        item_id: int | None = None,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[dict], int]:
+        """List issued assets for a specific issue_object (for object-card endpoint)."""
+        stmt = (
+            select(
+                IssuedAssetBalance.issue_object_id.label("issue_object_id"),
+                IssueObject.display_name.label("issue_object_name"),
+                IssueObject.object_type.label("issue_object_type"),
+                IssuedAssetBalance.inventory_subject_id.label("inventory_subject_id"),
+                InventorySubject.subject_type.label("subject_type"),
+                InventorySubject.item_id.label("item_id"),
+                InventorySubject.temporary_item_id.label("temporary_item_id"),
+                TemporaryItem.resolved_item_id.label("resolved_item_id"),
+                Item.name.label("resolved_item_name"),
+                func.coalesce(TemporaryItem.name, Item.name).label("display_name"),
+                Item.name.label("item_name"),
+                Item.sku.label("sku"),
+                IssuedAssetBalance.qty.label("qty"),
+                IssuedAssetBalance.updated_at.label("updated_at"),
+            )
+            .select_from(IssuedAssetBalance)
+            .join(IssueObject, IssueObject.id == IssuedAssetBalance.issue_object_id)
+            .join(InventorySubject, InventorySubject.id == IssuedAssetBalance.inventory_subject_id)
+            .outerjoin(Item, Item.id == InventorySubject.item_id)
+            .outerjoin(TemporaryItem, TemporaryItem.id == InventorySubject.temporary_item_id)
+            .where(IssuedAssetBalance.issue_object_id == issue_object_id)
+        )
+
+        if item_id is not None:
+            stmt = stmt.where(InventorySubject.item_id == item_id)
+        if search:
+            term = f"%{search.strip()}%"
+            stmt = stmt.where(Item.name.ilike(term))
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total_count = (await self.session.execute(count_stmt)).scalar_one()
+        stmt = (
+            stmt.order_by(IssuedAssetBalance.updated_at.desc(), IssuedAssetBalance.issue_object_id)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )

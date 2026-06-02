@@ -35,7 +35,7 @@ def _operation(
         source_site_id=source_site_id,
         destination_site_id=destination_site_id,
         acceptance_required=False,
-        recipient_id=None,
+        issue_object_id=None,
         lines=[_line(item_id=10, qty=5)],
     )
 

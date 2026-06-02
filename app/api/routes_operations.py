@@ -30,6 +30,23 @@ router = APIRouter(prefix="/operations")
 logger = logging.getLogger(__name__)
 
 
+def _parse_item_ids(raw_value: str | None) -> list[int] | None:
+    if raw_value is None:
+        return None
+
+    values = [part.strip() for part in raw_value.split(",") if part.strip()]
+    if not values:
+        return None
+
+    try:
+        return [int(value) for value in values]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="item_ids must be a comma-separated list of integers",
+        ) from exc
+
+
 @router.get("", response_model=OperationListResponse)
 async def list_operations(
     request: Request,
@@ -46,6 +63,7 @@ async def list_operations(
     updated_after: datetime | None = Query(None),
     updated_before: datetime | None = Query(None),
     search: str | None = Query(None),
+    item_ids: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
 ) -> OperationListResponse:
@@ -69,6 +87,7 @@ async def list_operations(
             site_id=site_id,
             operation_type=operation_type,
             status=status_filter,
+            item_ids=_parse_item_ids(item_ids),
             created_by_user_id=created_by_user_id,
             effective_after=effective_after,
             effective_before=effective_before,

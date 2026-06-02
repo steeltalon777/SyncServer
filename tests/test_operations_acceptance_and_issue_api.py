@@ -138,6 +138,7 @@ async def _seed_fixture(session_factory: async_sessionmaker[AsyncSession]) -> di
             normalized_name=f"item {suffix}",
             category_id=category.id,
             unit_id=unit.id,
+            hashtags=[f"tag-{suffix}", "shared-search-tag"],
             is_active=True,
         )
         session.add(item)
@@ -147,12 +148,56 @@ async def _seed_fixture(session_factory: async_sessionmaker[AsyncSession]) -> di
             "source_site_id": source_site.id,
             "destination_site_id": destination_site.id,
             "item_id": item.id,
+            "item_name": item.name,
+            "item_sku": item.sku,
+            "item_hashtag": "shared-search-tag",
             "chief_token": str(chief.user_token),
             "sender_token": str(sender.user_token),
             "receiver_token": str(receiver.user_token),
             "root_token": str(root.user_token),
             "observer_token": str(observer.user_token),
         }
+
+
+@pytest.mark.asyncio
+async def test_list_operations_search_matches_item_name_sku_and_hashtag(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_fixture(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["source_site_id"],
+            "notes": "search baseline",
+            "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 2}],
+        },
+    )
+    assert create_response.status_code == 200
+    operation_id = create_response.json()["id"]
+
+    for search_value in (seed["item_name"], seed["item_sku"], seed["item_hashtag"]):
+        response = await client.get(
+            "/api/v1/operations",
+            headers={"X-User-Token": seed["sender_token"]},
+            params={"search": search_value},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["total_count"] == 1
+        assert response.json()["items"][0]["id"] == operation_id
+
+    item_ids_response = await client.get(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        params={"search": "does-not-match-notes", "item_ids": str(seed["item_id"])},
+    )
+    assert item_ids_response.status_code == 200
+    assert item_ids_response.json()["total_count"] == 1
+    assert item_ids_response.json()["items"][0]["id"] == operation_id
 
 
 @pytest.mark.asyncio
@@ -371,7 +416,7 @@ async def test_move_acceptance_allows_only_target_storekeeper_chief_or_root(
 
 
 @pytest.mark.asyncio
-async def test_issue_and_return_moves_stock_to_recipient_register(
+async def test_issue_and_return_moves_stock_to_issue_object_register(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -406,13 +451,13 @@ async def test_issue_and_return_moves_stock_to_recipient_register(
         json={
             "operation_type": "ISSUE",
             "site_id": seed["source_site_id"],
-            "recipient_name": "Employee A",
+            "recipient_name": "Employee A",  # backward compat alias
             "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 3}],
         },
     )
     assert issue_response.status_code == 200
     issue_id = issue_response.json()["id"]
-    recipient_id = issue_response.json()["recipient_id"]
+    issue_object_id = issue_response.json()["issue_object_id"]
 
     submit_issue = await client.post(
         f"/api/v1/operations/{issue_id}/submit",
@@ -424,7 +469,7 @@ async def test_issue_and_return_moves_stock_to_recipient_register(
     issued_rows = await client.get(
         "/api/v1/issued-assets",
         headers={"X-User-Token": seed["sender_token"]},
-        params={"recipient_id": recipient_id},
+        params={"issue_object_id": issue_object_id},
     )
     assert issued_rows.status_code == 200
     assert issued_rows.json()["total_count"] == 1
@@ -436,7 +481,7 @@ async def test_issue_and_return_moves_stock_to_recipient_register(
         json={
             "operation_type": "ISSUE_RETURN",
             "site_id": seed["source_site_id"],
-            "recipient_id": recipient_id,
+            "issue_object_id": issue_object_id,
             "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 1}],
         },
     )
@@ -452,7 +497,7 @@ async def test_issue_and_return_moves_stock_to_recipient_register(
     issued_after_return = await client.get(
         "/api/v1/issued-assets",
         headers={"X-User-Token": seed["sender_token"]},
-        params={"recipient_id": recipient_id},
+        params={"issue_object_id": issue_object_id},
     )
     assert issued_after_return.status_code == 200
     assert issued_after_return.json()["total_count"] == 1

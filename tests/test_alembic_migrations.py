@@ -46,12 +46,13 @@ EXPECTED_TABLES = {
     "machine_reports",
     "machine_batches",
     # 0004_operations_acceptance_asset_registers
-    "recipients",
-    "recipient_aliases",
     "pending_acceptance_balances",
     "lost_asset_balances",
     "issued_asset_balances",
     "operation_acceptance_actions",
+    # 0012_issue_objects — replaced recipients with issue_objects
+    "issue_objects",
+    "issue_object_aliases",
     # 0005_documents_tables
     "documents",
     "document_operations",
@@ -75,6 +76,10 @@ VALID_REVISIONS = (
     "'0007_temporary_items_phase1'",
     "'0008_inventory_subjects_backfill'",
     "'0009_add_temporary_draft_payload'",
+    "'0010_add_item_review_fields'",
+    "'7538376fd139'",
+    "'0011_catalog_audit_fields'",
+    "'0012_issue_objects'",
 )
 
 

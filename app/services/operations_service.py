@@ -8,7 +8,7 @@ from uuid import UUID
 from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
 from app.models.category import Category
 from app.models.item import Item
-from app.repos.recipients_repo import normalize_recipient_name
+from app.repos.issue_objects_repo import normalize_issue_object_name
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
 from app.services.document_service import DocumentService
@@ -174,14 +174,14 @@ class OperationsService:
     async def _upsert_issued(
         uow: UnitOfWork,
         *,
-        recipient_id: int,
+        issue_object_id: int,
         inventory_subject_id: int,
         qty_delta: Decimal,
         error_context: str,
     ) -> None:
         try:
             await uow.asset_registers.upsert_issued(
-                recipient_id=recipient_id,
+                issue_object_id=issue_object_id,
                 inventory_subject_id=inventory_subject_id,
                 qty_delta=qty_delta,
             )
@@ -236,41 +236,50 @@ class OperationsService:
                 )
 
     @staticmethod
-    async def _resolve_recipient(
+    async def _resolve_issue_object(
         uow: UnitOfWork,
         *,
         operation_type: OperationType,
-        recipient_id: int | None,
-        recipient_name_snapshot: str | None,
+        issue_object_id: int | None,
+        issue_object_name_snapshot: str | None,
         issued_to_name: str | None,
     ) -> tuple[int | None, str | None]:
+        # For WRITE_OFF with issue_object_id: validate existence but do not auto-create
+        if operation_type == "WRITE_OFF":
+            if issue_object_id is not None:
+                issue_object = await uow.issue_objects.get_by_id(issue_object_id)
+                if issue_object is None or issue_object.merged_into_id is not None or not issue_object.is_active:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="issue_object not found")
+                return issue_object.id, issue_object.display_name
+            return None, None
+
         if operation_type not in ISSUE_OPERATION_TYPES:
-            return recipient_id, recipient_name_snapshot
+            return issue_object_id, issue_object_name_snapshot
 
-        if recipient_id is not None:
-            recipient = await uow.recipients.get_by_id(recipient_id)
-            if recipient is None or recipient.merged_into_id is not None or not recipient.is_active:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="recipient not found")
-            return recipient.id, recipient.display_name
+        if issue_object_id is not None:
+            issue_object = await uow.issue_objects.get_by_id(issue_object_id)
+            if issue_object is None or issue_object.merged_into_id is not None or not issue_object.is_active:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="issue_object not found")
+            return issue_object.id, issue_object.display_name
 
-        candidate_name = recipient_name_snapshot or issued_to_name
+        candidate_name = issue_object_name_snapshot or issued_to_name
         if candidate_name is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="ISSUE and ISSUE_RETURN require recipient_id or recipient_name",
+                detail="ISSUE and ISSUE_RETURN require issue_object_id or issue_object_name",
             )
-        normalized = normalize_recipient_name(candidate_name)
+        normalized = normalize_issue_object_name(candidate_name)
         if not normalized:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="recipient_name is empty after normalization",
+                detail="issue_object_name is empty after normalization",
             )
 
-        recipient = await uow.recipients.get_or_create_by_name(
+        issue_object = await uow.issue_objects.get_or_create_by_name(
             display_name=candidate_name,
-            recipient_type="person",
+            object_type="person",
         )
-        return recipient.id, recipient.display_name
+        return issue_object.id, issue_object.display_name
 
     @staticmethod
     def _destination_site_for_acceptance(operation) -> int:
@@ -377,11 +386,11 @@ class OperationsService:
                     )
                 return {"operation": existing_operation}
 
-        recipient_id, recipient_name_snapshot = await OperationsService._resolve_recipient(
+        issue_object_id, issue_object_name_snapshot = await OperationsService._resolve_issue_object(
             uow,
             operation_type=operation_data.operation_type,
-            recipient_id=operation_data.recipient_id,
-            recipient_name_snapshot=operation_data.recipient_name_snapshot,
+            issue_object_id=operation_data.issue_object_id,
+            issue_object_name_snapshot=operation_data.issue_object_name_snapshot,
             issued_to_name=operation_data.issued_to_name,
         )
 
@@ -393,9 +402,9 @@ class OperationsService:
             source_site_id=operation_data.source_site_id,
             destination_site_id=operation_data.destination_site_id,
             issued_to_user_id=operation_data.issued_to_user_id,
-            issued_to_name=recipient_name_snapshot or operation_data.issued_to_name,
-            recipient_id=recipient_id,
-            recipient_name_snapshot=recipient_name_snapshot,
+            issued_to_name=issue_object_name_snapshot or operation_data.issued_to_name,
+            issue_object_id=issue_object_id,
+            issue_object_name_snapshot=issue_object_name_snapshot,
             acceptance_required=acceptance_required,
             created_by_user_id=user_id,
             notes=operation_data.notes,
@@ -554,25 +563,25 @@ class OperationsService:
         if update_data.lines is not None:
             OperationsService._validate_line_quantities(operation.operation_type, update_data.lines)
 
-        recipient_id = operation.recipient_id
-        recipient_name_snapshot = operation.recipient_name_snapshot
+        issue_object_id = operation.issue_object_id
+        issue_object_name_snapshot = operation.issue_object_name_snapshot
         if operation.operation_type in ISSUE_OPERATION_TYPES:
-            desired_recipient_id = update_data.recipient_id if "recipient_id" in update_data.model_fields_set else operation.recipient_id
+            desired_issue_object_id = update_data.issue_object_id if "issue_object_id" in update_data.model_fields_set else operation.issue_object_id
             desired_snapshot = (
-                update_data.recipient_name_snapshot
-                if "recipient_name_snapshot" in update_data.model_fields_set
-                else operation.recipient_name_snapshot
+                update_data.issue_object_name_snapshot
+                if "issue_object_name_snapshot" in update_data.model_fields_set
+                else operation.issue_object_name_snapshot
             )
             desired_issued_to_name = (
                 update_data.issued_to_name
                 if "issued_to_name" in update_data.model_fields_set
                 else operation.issued_to_name
             )
-            recipient_id, recipient_name_snapshot = await OperationsService._resolve_recipient(
+            issue_object_id, issue_object_name_snapshot = await OperationsService._resolve_issue_object(
                 uow,
                 operation_type=operation.operation_type,
-                recipient_id=desired_recipient_id,
-                recipient_name_snapshot=desired_snapshot,
+                issue_object_id=desired_issue_object_id,
+                issue_object_name_snapshot=desired_snapshot,
                 issued_to_name=desired_issued_to_name,
             )
 
@@ -583,9 +592,9 @@ class OperationsService:
             source_site_id=source_site_id,
             destination_site_id=destination_site_id,
             issued_to_user_id=update_data.issued_to_user_id,
-            issued_to_name=recipient_name_snapshot or update_data.issued_to_name,
-            recipient_id=recipient_id,
-            recipient_name_snapshot=recipient_name_snapshot,
+            issued_to_name=issue_object_name_snapshot or update_data.issued_to_name,
+            issue_object_id=issue_object_id,
+            issue_object_name_snapshot=issue_object_name_snapshot,
             fields_set=update_data.model_fields_set,
         )
 
@@ -727,6 +736,15 @@ class OperationsService:
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
                     )
+            elif operation.operation_type == "WRITE_OFF" and operation.issue_object_id is not None:
+                # Object write-off: decrement issued register, do NOT touch warehouse balance
+                await OperationsService._upsert_issued(
+                    uow,
+                    issue_object_id=operation.issue_object_id,
+                    inventory_subject_id=line.inventory_subject_id,
+                    qty_delta=-quantity,
+                    error_context="WRITE_OFF from issue object",
+                )
             elif operation.operation_type in DECREMENT_OPERATION_TYPES:
                 await OperationsService._ensure_sufficient_balance(
                     uow,
@@ -800,10 +818,10 @@ class OperationsService:
                         quantity_delta=quantity,
                     )
             elif operation.operation_type == "ISSUE":
-                if operation.recipient_id is None:
+                if operation.issue_object_id is None:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="ISSUE requires recipient_id",
+                        detail="ISSUE requires issue_object_id",
                     )
                 await OperationsService._ensure_sufficient_balance(
                     uow,
@@ -822,20 +840,20 @@ class OperationsService:
                 )
                 await OperationsService._upsert_issued(
                     uow,
-                    recipient_id=operation.recipient_id,
+                    issue_object_id=operation.issue_object_id,
                     inventory_subject_id=line.inventory_subject_id,
                     qty_delta=quantity,
                     error_context="ISSUE submit",
                 )
             elif operation.operation_type == "ISSUE_RETURN":
-                if operation.recipient_id is None:
+                if operation.issue_object_id is None:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="ISSUE_RETURN requires recipient_id",
+                        detail="ISSUE_RETURN requires issue_object_id",
                     )
                 await OperationsService._upsert_issued(
                     uow,
-                    recipient_id=operation.recipient_id,
+                    issue_object_id=operation.issue_object_id,
                     inventory_subject_id=line.inventory_subject_id,
                     qty_delta=-quantity,
                     error_context="ISSUE_RETURN submit",
@@ -1169,6 +1187,15 @@ class OperationsService:
                             quantity_delta=-quantity,
                             error_context="RECEIVE rollback",
                         )
+                elif operation.operation_type == "WRITE_OFF" and operation.issue_object_id is not None:
+                    # Object write-off rollback: restore issued register
+                    await OperationsService._upsert_issued(
+                        uow,
+                        issue_object_id=operation.issue_object_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        qty_delta=quantity,
+                        error_context="WRITE_OFF from issue object rollback",
+                    )
                 elif operation.operation_type in DECREMENT_OPERATION_TYPES:
                     await OperationsService._apply_balance_delta(
                         uow,
@@ -1255,14 +1282,14 @@ class OperationsService:
                             error_context="MOVE rollback from destination",
                         )
                 elif operation.operation_type == "ISSUE":
-                    if operation.recipient_id is None:
-                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="ISSUE requires recipient_id")
+                    if operation.issue_object_id is None:
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="ISSUE requires issue_object_id")
                     await OperationsService._upsert_issued(
                         uow,
-                        recipient_id=operation.recipient_id,
+                        issue_object_id=operation.issue_object_id,
                         inventory_subject_id=line.inventory_subject_id,
                         qty_delta=-quantity,
-                        error_context="ISSUE rollback from recipient",
+                        error_context="ISSUE rollback from issue_object",
                     )
                     await OperationsService._apply_balance_delta(
                         uow,
@@ -1272,8 +1299,8 @@ class OperationsService:
                         error_context="ISSUE rollback to stock",
                     )
                 elif operation.operation_type == "ISSUE_RETURN":
-                    if operation.recipient_id is None:
-                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="ISSUE_RETURN requires recipient_id")
+                    if operation.issue_object_id is None:
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="ISSUE_RETURN requires issue_object_id")
                     await OperationsService._apply_balance_delta(
                         uow,
                         site_id=operation.site_id,
@@ -1283,10 +1310,10 @@ class OperationsService:
                     )
                     await OperationsService._upsert_issued(
                         uow,
-                        recipient_id=operation.recipient_id,
+                        issue_object_id=operation.issue_object_id,
                         inventory_subject_id=line.inventory_subject_id,
                         qty_delta=quantity,
-                        error_context="ISSUE_RETURN rollback to recipient",
+                        error_context="ISSUE_RETURN rollback to issue_object",
                     )
 
         cancelled_operation = await uow.operations.cancel_operation(

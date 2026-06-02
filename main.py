@@ -17,7 +17,7 @@ from app.api.routes_catalog_admin import router as catalog_admin_router
 from app.api.routes_documents import router as documents_router
 from app.api.routes_health import router as health_router
 from app.api.routes_operations import router as operations_router
-from app.api.routes_recipients import router as recipients_router
+from app.api.routes_issue_objects import router as issue_objects_router
 from app.api.routes_reports import router as reports_router
 from app.api.routes_sync import router as sync_router
 from app.api.routes_review_items import router as review_items_router
@@ -118,8 +118,8 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
     # Documents API (user token auth)
     app.include_router(documents_router, prefix=api_v1_prefix)
 
-    # Recipients API (user token auth)
-    app.include_router(recipients_router, prefix=api_v1_prefix)
+    # Issue Objects API (user token auth)
+    app.include_router(issue_objects_router, prefix=api_v1_prefix)
 
     # Asset registers API (user token auth)
     app.include_router(assets_router, prefix=api_v1_prefix)

@@ -75,10 +75,10 @@ class OperationCreate(BaseModel):
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
     issued_to_user_id: UUID | None = None
     issued_to_name: str | None = Field(default=None, max_length=255)
-    recipient_id: int | None = None
-    recipient_name_snapshot: str | None = Field(
+    issue_object_id: int | None = None
+    issue_object_name_snapshot: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("recipient_name_snapshot", "recipient_name", "issued_to_name"),
+        validation_alias=AliasChoices("issue_object_name_snapshot", "issue_object_name", "recipient_name", "issued_to_name"),
         max_length=255,
     )
     lines: list[OperationLineCreate] = Field(min_length=1)
@@ -103,10 +103,10 @@ class OperationCreate(BaseModel):
         if operation_type == "ADJUSTMENT":
             return lines
         if operation_type in {"ISSUE", "ISSUE_RETURN"}:
-            recipient_id = info.data.get("recipient_id")
-            recipient_name = info.data.get("recipient_name_snapshot") or info.data.get("issued_to_name")
-            if recipient_id is None and not recipient_name:
-                raise ValueError("ISSUE and ISSUE_RETURN require recipient_id or recipient_name")
+            issue_object_id = info.data.get("issue_object_id")
+            issue_object_name = info.data.get("issue_object_name_snapshot") or info.data.get("issued_to_name")
+            if issue_object_id is None and not issue_object_name:
+                raise ValueError("ISSUE and ISSUE_RETURN require issue_object_id or issue_object_name")
         for line in lines:
             if line.qty <= 0:
                 raise ValueError(f"{operation_type} operations require positive qty values")
@@ -119,20 +119,20 @@ class OperationCreate(BaseModel):
             raise ValueError("client_request_id is required when temporary_item lines are used")
         return self
 
-    @field_validator("recipient_name_snapshot", "issued_to_name", "notes", mode="before")
+    @field_validator("issue_object_name_snapshot", "issued_to_name", "notes", mode="before")
     @classmethod
     def normalize_blank_strings(cls, value: object) -> object:
         if isinstance(value, str) and value.strip() == "":
             return None
         return value
 
-    @field_validator("recipient_name_snapshot")
+    @field_validator("issue_object_name_snapshot")
     @classmethod
-    def validate_recipient_name_not_blank(cls, value: str | None) -> str | None:
+    def validate_issue_object_name_not_blank(cls, value: str | None) -> str | None:
         if value is None:
             return None
         if not value.strip():
-            raise ValueError("recipient_name_snapshot must not be blank")
+            raise ValueError("issue_object_name_snapshot must not be blank")
         return value.strip()
 
 
@@ -143,15 +143,15 @@ class OperationUpdate(BaseModel):
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
     issued_to_user_id: UUID | None = None
     issued_to_name: str | None = Field(default=None, max_length=255)
-    recipient_id: int | None = None
-    recipient_name_snapshot: str | None = Field(
+    issue_object_id: int | None = None
+    issue_object_name_snapshot: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("recipient_name_snapshot", "recipient_name", "issued_to_name"),
+        validation_alias=AliasChoices("issue_object_name_snapshot", "issue_object_name", "recipient_name", "issued_to_name"),
         max_length=255,
     )
     lines: list[OperationLineCreate] | None = None
 
-    @field_validator("recipient_name_snapshot", "issued_to_name", "notes", mode="before")
+    @field_validator("issue_object_name_snapshot", "issued_to_name", "notes", mode="before")
     @classmethod
     def normalize_blank_strings(cls, value: object) -> object:
         if isinstance(value, str) and value.strip() == "":
@@ -220,8 +220,8 @@ class OperationResponse(ORMBaseModel):
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
     issued_to_user_id: UUID | None = None
     issued_to_name: str | None = None
-    recipient_id: int | None = None
-    recipient_name_snapshot: str | None = None
+    issue_object_id: int | None = None
+    issue_object_name_snapshot: str | None = None
     acceptance_required: bool = False
     acceptance_state: AcceptanceState = "not_required"
     acceptance_resolved_at: datetime | None = None
@@ -252,6 +252,7 @@ class OperationFilter(BaseModel):
     site_id: int | None = None
     operation_type: OperationType | None = Field(default=None, validation_alias=AliasChoices("operation_type", "type"))
     status: OperationStatus | None = None
+    item_ids: list[int] | None = None
     created_by_user_id: UUID | None = None
     effective_after: datetime | None = None
     effective_before: datetime | None = None
