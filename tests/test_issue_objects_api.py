@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import get_db
+from app.models.issue_object_category import IssueObjectCategory
 from app.models.site import Site
 from app.models.user import User
 from main import create_app
@@ -64,12 +65,22 @@ async def _seed_fixture(session_factory: async_sessionmaker[AsyncSession]) -> di
             default_site_id=None,
         )
         session.add_all([storekeeper, chief, root])
+        await session.flush()
+
+        default_category = IssueObjectCategory(
+            name=f"Test Category {suffix}",
+            normalized_key=f"test_category_{suffix}",
+            sort_order=0,
+            is_active=True,
+        )
+        session.add(default_category)
         await session.commit()
 
         return {
             "storekeeper_token": str(storekeeper.user_token),
             "chief_token": str(chief.user_token),
             "root_token": str(root.user_token),
+            "default_category_id": default_category.id,
         }
 
 
@@ -80,7 +91,7 @@ async def test_create_issue_object(client: AsyncClient, session_factory: async_s
     response = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Иван Иванов", "object_type": "person"},
+        json={"display_name": "Иван Иванов", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     assert response.status_code == 200
     data = response.json()
@@ -97,14 +108,14 @@ async def test_create_duplicate_issue_object(client: AsyncClient, session_factor
     response = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Duplicate Name", "object_type": "person"},
+        json={"display_name": "Duplicate Name", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     assert response.status_code == 200
 
     response2 = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Duplicate Name", "object_type": "person"},
+        json={"display_name": "Duplicate Name", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     # Should return 200 since get_or_create returns existing
     assert response2.status_code == 200
@@ -117,7 +128,7 @@ async def test_get_issue_object_by_id(client: AsyncClient, session_factory: asyn
     create = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Test Person", "object_type": "person"},
+        json={"display_name": "Test Person", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     created_id = create.json()["id"]
 
@@ -136,7 +147,7 @@ async def test_update_issue_object(client: AsyncClient, session_factory: async_s
     create = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Old Name", "object_type": "person"},
+        json={"display_name": "Old Name", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     created_id = create.json()["id"]
 
@@ -156,7 +167,7 @@ async def test_soft_delete_issue_object(client: AsyncClient, session_factory: as
     create = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "To Delete", "object_type": "person"},
+        json={"display_name": "To Delete", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     created_id = create.json()["id"]
 
@@ -181,7 +192,7 @@ async def test_cannot_delete_active_issue_object(client: AsyncClient, session_fa
     create = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Active Object", "object_type": "person"},
+        json={"display_name": "Active Object", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     created_id = create.json()["id"]
 
@@ -199,12 +210,12 @@ async def test_list_issue_objects(client: AsyncClient, session_factory: async_se
     await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Alpha", "object_type": "person"},
+        json={"display_name": "Alpha", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Beta", "object_type": "department"},
+        json={"display_name": "Beta", "object_type": "department", "category_id": seed["default_category_id"]},
     )
 
     list_resp = await client.get(
@@ -224,7 +235,7 @@ async def test_search_issue_objects(client: AsyncClient, session_factory: async_
     await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "SpecialName", "object_type": "person"},
+        json={"display_name": "SpecialName", "object_type": "person", "category_id": seed["default_category_id"]},
     )
 
     list_resp = await client.get(
@@ -244,7 +255,7 @@ async def test_filter_by_object_type(client: AsyncClient, session_factory: async
     await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Vehicle One", "object_type": "vehicle"},
+        json={"display_name": "Vehicle One", "object_type": "vehicle", "category_id": seed["default_category_id"]},
     )
 
     list_resp = await client.get(
@@ -266,14 +277,14 @@ async def test_merge_issue_objects(client: AsyncClient, session_factory: async_s
     source = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Source Object", "object_type": "person"},
+        json={"display_name": "Source Object", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     source_id = source.json()["id"]
 
     target = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Target Object", "object_type": "person"},
+        json={"display_name": "Target Object", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     target_id = target.json()["id"]
 
@@ -292,7 +303,7 @@ async def test_merge_self_fails(client: AsyncClient, session_factory: async_sess
     obj = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"display_name": "Self Merge", "object_type": "person"},
+        json={"display_name": "Self Merge", "object_type": "person", "category_id": seed["default_category_id"]},
     )
     obj_id = obj.json()["id"]
 
@@ -321,8 +332,16 @@ async def test_observer_can_read_issue_objects(client: AsyncClient, session_fact
             default_site_id=site.id,
         )
         session.add(observer)
+        default_category = IssueObjectCategory(
+            name=f"Test Cat {suffix}",
+            normalized_key=f"test_cat_{suffix}",
+            sort_order=0,
+            is_active=True,
+        )
+        session.add(default_category)
         await session.commit()
         token = str(observer.user_token)
+        default_category_id = default_category.id
 
     list_resp = await client.get(
         "/api/v1/issue-objects",
@@ -333,6 +352,18 @@ async def test_observer_can_read_issue_objects(client: AsyncClient, session_fact
     create_resp = await client.post(
         "/api/v1/issue-objects",
         headers={"X-User-Token": token},
-        json={"display_name": "Should Fail", "object_type": "person"},
+        json={"display_name": "Should Fail", "object_type": "person", "category_id": default_category_id},
     )
     assert create_resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_create_issue_object_without_category_id_fails(client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    seed = await _seed_fixture(session_factory)
+
+    response = await client.post(
+        "/api/v1/issue-objects",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={"display_name": "No Category", "object_type": "person"},
+    )
+    assert response.status_code == 422

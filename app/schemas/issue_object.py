@@ -12,6 +12,8 @@ class IssueObjectCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=255)
     object_type: str = Field(default="person", max_length=24)
     code: str | None = Field(default=None, max_length=64)
+    comment: str | None = Field(default=None, max_length=500)
+    category_id: int
 
     @field_validator("code", mode="before")
     @classmethod
@@ -25,6 +27,8 @@ class IssueObjectUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=255)
     object_type: str | None = Field(default=None, max_length=24)
     code: str | None = Field(default=None, max_length=64)
+    comment: str | None = Field(default=None, max_length=500)
+    category_id: int | None = None
     is_active: bool | None = None
 
     @field_validator("code", mode="before")
@@ -46,6 +50,8 @@ class IssueObjectResponse(ORMBaseModel):
     object_type: str
     code: str | None = None
     normalized_key: str
+    comment: str | None = None
+    category_id: int | None = None
     is_active: bool
     merged_into_id: int | None = None
     created_at: datetime
@@ -64,6 +70,7 @@ class IssueObjectListResponse(ORMBaseModel):
 class IssueObjectFilter(BaseModel):
     search: str | None = None
     object_type: str | None = None
+    category_id: int | None = None
     is_active: bool | None = None
     include_deleted: bool = False
 

@@ -12,10 +12,18 @@ from app.schemas.issue_object import (
     IssueObjectResponse,
     IssueObjectUpdate,
 )
-from app.services.issue_objects_service import IssueObjectsService
+from app.schemas.issue_object_category import (
+    IssueObjectCategoryCreate,
+    IssueObjectCategoryListResponse,
+    IssueObjectCategoryResponse,
+    IssueObjectCategoryUpdate,
+    TreeResponse,
+)
+from app.services.issue_objects_service import IssueObjectCategoriesService, IssueObjectsService
 from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/issue-objects")
+router_categories = APIRouter(prefix="/issue-object-categories")
 
 READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
@@ -41,6 +49,11 @@ def _require_merge(identity: Identity) -> None:
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="only chief_storekeeper or root may merge issue_objects")
 
 
+# ---------------------------------------------------------------------------
+# Issue Object CRUD
+# ---------------------------------------------------------------------------
+
+
 @router.post("", response_model=IssueObjectResponse)
 async def create_issue_object(
     payload: IssueObjectCreate,
@@ -48,14 +61,9 @@ async def create_issue_object(
     identity: Identity = Depends(require_user_identity),
 ) -> IssueObjectResponse:
     _require_write(identity)
-
+    service = IssueObjectsService()
     async with uow:
-        issue_object = await uow.issue_objects.create_issue_object(
-            display_name=payload.display_name,
-            object_type=payload.object_type,
-            code=payload.code,
-        )
-
+        issue_object = await service.create_issue_object(uow, payload)
     return IssueObjectResponse.model_validate(issue_object)
 
 
@@ -108,6 +116,25 @@ async def list_issue_object_assets(
     )
 
 
+@router.get("/tree", response_model=list[TreeResponse])
+async def get_issue_objects_tree(
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+    search: str | None = Query(None),
+    include_inactive: bool = False,
+    include_deleted: bool = False,
+) -> list[TreeResponse]:
+    _require_read(identity)
+    service = IssueObjectCategoriesService()
+    async with uow:
+        return await service.build_tree(
+            uow,
+            search=search,
+            include_inactive=include_inactive,
+            include_deleted=include_deleted,
+        )
+
+
 @router.get("/{issue_object_id}", response_model=IssueObjectResponse)
 async def get_issue_object(
     issue_object_id: int,
@@ -153,6 +180,7 @@ async def list_issue_objects(
     identity: Identity = Depends(require_user_identity),
     search: str | None = Query(None),
     object_type: str | None = Query(None),
+    category_id: int | None = Query(None),
     include_inactive: bool = False,
     include_deleted: bool = False,
     page: int = Query(1, ge=1),
@@ -165,6 +193,7 @@ async def list_issue_objects(
             uow,
             search=search,
             object_type=object_type,
+            category_id=category_id,
             include_inactive=include_inactive,
             include_deleted=include_deleted,
             page=page,
@@ -177,3 +206,104 @@ async def list_issue_objects(
         page=page,
         page_size=page_size,
     )
+
+
+# ---------------------------------------------------------------------------
+# IssueObjectCategory CRUD
+# ---------------------------------------------------------------------------
+
+
+@router_categories.post("", response_model=IssueObjectCategoryResponse)
+async def create_category(
+    payload: IssueObjectCategoryCreate,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> IssueObjectCategoryResponse:
+    _require_write(identity)
+    service = IssueObjectCategoriesService()
+    async with uow:
+        category = await service.create_category(
+            uow,
+            name=payload.name,
+            parent_id=payload.parent_id,
+            sort_order=payload.sort_order,
+            is_active=payload.is_active,
+        )
+    return IssueObjectCategoryResponse.model_validate(category)
+
+
+@router_categories.get("", response_model=IssueObjectCategoryListResponse)
+async def list_categories(
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+    search: str | None = Query(None),
+    parent_id: int | None = Query(None),
+    is_active: bool | None = Query(None),
+    include_deleted: bool = False,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> IssueObjectCategoryListResponse:
+    _require_read(identity)
+    service = IssueObjectCategoriesService()
+    async with uow:
+        categories, total_count = await service.list_categories(
+            uow,
+            search=search,
+            parent_id=parent_id,
+            is_active=is_active,
+            include_deleted=include_deleted,
+            page=page,
+            page_size=page_size,
+        )
+    return IssueObjectCategoryListResponse(
+        items=[IssueObjectCategoryResponse.model_validate(c) for c in categories],
+        total_count=total_count,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router_categories.get("/{category_id}", response_model=IssueObjectCategoryResponse)
+async def get_category(
+    category_id: int,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> IssueObjectCategoryResponse:
+    _require_read(identity)
+    service = IssueObjectCategoriesService()
+    async with uow:
+        category = await service.get_category(uow, category_id)
+    return IssueObjectCategoryResponse.model_validate(category)
+
+
+@router_categories.patch("/{category_id}", response_model=IssueObjectCategoryResponse)
+async def update_category(
+    category_id: int,
+    payload: IssueObjectCategoryUpdate,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> IssueObjectCategoryResponse:
+    _require_write(identity)
+    service = IssueObjectCategoriesService()
+    async with uow:
+        category = await service.update_category(
+            uow,
+            category_id=category_id,
+            name=payload.name,
+            parent_id=payload.parent_id,
+            sort_order=payload.sort_order,
+            is_active=payload.is_active,
+        )
+    return IssueObjectCategoryResponse.model_validate(category)
+
+
+@router_categories.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_category(
+    category_id: int,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> None:
+    _require_write(identity)
+    service = IssueObjectCategoriesService()
+    async with uow:
+        await service.delete_category(uow, category_id, identity.user_id)

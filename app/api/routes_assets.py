@@ -153,6 +153,7 @@ async def list_issued_assets(
     identity: Identity = Depends(require_user_identity),
     issue_object_id: int | None = Query(None),
     item_id: int | None = Query(None),
+    category_id: int | None = Query(None),
     search: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
@@ -163,6 +164,7 @@ async def list_issued_assets(
         rows, total_count = await uow.asset_registers.list_issued(
             issue_object_id=issue_object_id,
             item_id=item_id,
+            category_id=category_id,
             search=search,
             page=page,
             page_size=page_size,

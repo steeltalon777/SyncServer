@@ -57,6 +57,8 @@ class IssueObjectsRepo:
         display_name: str,
         object_type: str = "person",
         code: str | None = None,
+        comment: str | None = None,
+        category_id: int | None = None,
     ) -> IssueObject:
         normalized_key = normalize_issue_object_name(display_name)
         if not normalized_key:
@@ -75,6 +77,8 @@ class IssueObjectsRepo:
             display_name=display_name.strip(),
             normalized_key=normalized_key,
             code=code,
+            comment=comment,
+            category_id=category_id,
             is_active=True,
         )
         self.session.add(issue_object)
@@ -88,6 +92,8 @@ class IssueObjectsRepo:
         display_name: str,
         object_type: str = "person",
         code: str | None = None,
+        comment: str | None = None,
+        category_id: int | None = None,
     ) -> IssueObject:
         normalized_key = normalize_issue_object_name(display_name)
         if not normalized_key:
@@ -102,6 +108,8 @@ class IssueObjectsRepo:
             display_name=display_name.strip(),
             normalized_key=normalized_key,
             code=code,
+            comment=comment,
+            category_id=category_id,
             is_active=True,
         )
         self.session.add(issue_object)
@@ -210,6 +218,8 @@ class IssueObjectsRepo:
         display_name: str | None = None,
         object_type: str | None = None,
         code: str | None = None,
+        comment: str | None = None,
+        category_id: int | None = None,
         is_active: bool | None = None,
     ) -> IssueObject:
         issue_object = await self.get_by_id(issue_object_id)
@@ -224,6 +234,10 @@ class IssueObjectsRepo:
             issue_object.object_type = object_type
         if code is not None:
             issue_object.code = code
+        if comment is not None:
+            issue_object.comment = comment
+        if category_id is not None:
+            issue_object.category_id = category_id
         if is_active is not None:
             issue_object.is_active = is_active
         await self.session.flush()
@@ -247,6 +261,7 @@ class IssueObjectsRepo:
         *,
         search: str | None = None,
         object_type: str | None = None,
+        category_id: int | None = None,
         include_inactive: bool = False,
         include_deleted: bool = False,
         page: int = 1,
@@ -266,11 +281,15 @@ class IssueObjectsRepo:
                     IssueObject.display_name.ilike(search_term),
                     IssueObject.normalized_key.ilike(search_term),
                     IssueObject.code.ilike(search_term) if IssueObject.code is not None else false(),
+                    IssueObject.comment.ilike(search_term) if IssueObject.comment is not None else false(),
                 )
             )
 
         if object_type:
             stmt = stmt.where(IssueObject.object_type == object_type)
+
+        if category_id is not None:
+            stmt = stmt.where(IssueObject.category_id == category_id)
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
@@ -278,3 +297,45 @@ class IssueObjectsRepo:
         stmt = stmt.order_by(IssueObject.display_name).offset((page - 1) * page_size).limit(page_size)
         result = await self.session.execute(stmt)
         return list(result.scalars().all()), int(total_count)
+
+    async def list_active_objects_for_category(self, category_id: int) -> list[IssueObject]:
+        stmt = (
+            select(IssueObject)
+            .where(
+                and_(
+                    IssueObject.category_id == category_id,
+                    IssueObject.deleted_at.is_(None),
+                    IssueObject.is_active.is_(True),
+                    IssueObject.merged_into_id.is_(None),
+                )
+            )
+            .order_by(IssueObject.display_name)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def search_objects_for_tree(
+        self,
+        category_id: int,
+        *,
+        search: str | None = None,
+        include_inactive: bool = False,
+        include_deleted: bool = False,
+    ) -> list[IssueObject]:
+        stmt = select(IssueObject).where(
+            IssueObject.category_id == category_id,
+            IssueObject.merged_into_id.is_(None),
+        )
+        if not include_deleted:
+            stmt = stmt.where(IssueObject.deleted_at.is_(None))
+        if not include_inactive:
+            stmt = stmt.where(IssueObject.is_active.is_(True))
+        if search:
+            term = f"%{search.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    IssueObject.display_name.ilike(term),
+                    IssueObject.comment.ilike(term),
+                )
+            )
+        stmt = stmt.order_by(IssueObject.display_name)
+        return list((await self.session.execute(stmt)).scalars().all())

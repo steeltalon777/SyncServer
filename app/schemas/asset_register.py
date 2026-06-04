@@ -122,6 +122,7 @@ class IssuedAssetFilter(BaseModel):
         default=None,
         description="[deprecated] Use inventory_subject_id for filtering",
     )
+    category_id: int | None = None
     search: str | None = None
 
     model_config = ConfigDict(extra="forbid")
@@ -131,6 +132,7 @@ class IssuedAssetRow(ORMBaseModel):
     issue_object_id: int
     issue_object_name: str
     issue_object_type: str
+    issue_object_comment: str | None = None
     inventory_subject_id: int
     subject_type: str
     item_id: int | None = Field(

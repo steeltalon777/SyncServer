@@ -87,6 +87,10 @@ class AssetRegistersRepo:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_issued_balance(self, issue_object_id: int, inventory_subject_id: int) -> IssuedAssetBalance | None:
+        """Get the issued balance row for a given issue_object and inventory_subject (for validation)."""
+        return await self._get_issued_for_update(issue_object_id, inventory_subject_id)
+
     async def upsert_pending(
         self,
         *,
@@ -353,7 +357,8 @@ class AssetRegistersRepo:
         *,
         issue_object_id: int | None,
         item_id: int | None,
-        search: str | None,
+        category_id: int | None = None,
+        search: str | None = None,
         page: int,
         page_size: int,
     ) -> tuple[list[dict], int]:
@@ -362,6 +367,7 @@ class AssetRegistersRepo:
                 IssuedAssetBalance.issue_object_id.label("issue_object_id"),
                 IssueObject.display_name.label("issue_object_name"),
                 IssueObject.object_type.label("issue_object_type"),
+                IssueObject.comment.label("issue_object_comment"),
                 IssuedAssetBalance.inventory_subject_id.label("inventory_subject_id"),
                 InventorySubject.subject_type.label("subject_type"),
                 InventorySubject.item_id.label("item_id"),
@@ -385,9 +391,18 @@ class AssetRegistersRepo:
             stmt = stmt.where(IssuedAssetBalance.issue_object_id == issue_object_id)
         if item_id is not None:
             stmt = stmt.where(InventorySubject.item_id == item_id)
+        if category_id is not None:
+            stmt = stmt.where(IssueObject.category_id == category_id)
         if search:
             term = f"%{search.strip()}%"
-            stmt = stmt.where(or_(IssueObject.display_name.ilike(term), Item.name.ilike(term), Item.sku.ilike(term)))
+            stmt = stmt.where(
+                or_(
+                    IssueObject.display_name.ilike(term),
+                    IssueObject.comment.ilike(term),
+                    Item.name.ilike(term),
+                    Item.sku.ilike(term),
+                )
+            )
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
