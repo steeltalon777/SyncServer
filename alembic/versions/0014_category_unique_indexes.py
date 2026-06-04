@@ -1,6 +1,6 @@
 """fix category unique constraints for root and children
 
-Revision ID: 0014_fix_category_unique_constraints
+Revision ID: 0014_category_unique_indexes
 Revises: 0013_issue_object_categories
 Create Date: 2026-06-04 10:00:00.000000
 
@@ -12,7 +12,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = "0014_fix_category_unique_constraints"
+revision: str = "0014_category_unique_indexes"
 down_revision: Union[str, Sequence[str], None] = "0013_issue_object_categories"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
