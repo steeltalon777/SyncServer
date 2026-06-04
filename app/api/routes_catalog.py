@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -25,7 +25,7 @@ from app.schemas.catalog import (
 from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/catalog")
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 ALLOWED_CATALOG_READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 DEFAULT_CATEGORY_READ_INCLUDES = {
@@ -103,7 +103,7 @@ async def list_items(
         items = await uow.catalog.list_items(updated_after=updated_after, limit=limit)
 
     next_updated_after = max((item.updated_at for item in items), default=None)
-    logger.info("request_id=%s catalog_items returned=%s", get_request_id(request), len(items))
+    logger.info("catalog_items", request_id=get_request_id(request), returned=len(items))
     return CatalogItemsResponse(items=items, server_time=datetime.now(UTC), next_updated_after=next_updated_after)
 
 
@@ -122,7 +122,7 @@ async def list_categories(
         categories = await uow.catalog.list_categories(updated_after=updated_after, limit=limit)
 
     next_updated_after = max((category.updated_at for category in categories), default=None)
-    logger.info("request_id=%s catalog_categories returned=%s", get_request_id(request), len(categories))
+    logger.info("catalog_categories", request_id=get_request_id(request), returned=len(categories))
     return CatalogCategoriesResponse(
         categories=categories,
         server_time=datetime.now(UTC),
@@ -145,7 +145,7 @@ async def list_units(
         units = await uow.catalog.list_units(updated_after=updated_after, limit=limit)
 
     next_updated_after = max((unit.updated_at for unit in units), default=None)
-    logger.info("request_id=%s catalog_units returned=%s", get_request_id(request), len(units))
+    logger.info("catalog_units", request_id=get_request_id(request), returned=len(units))
     return CatalogUnitsResponse(units=units, server_time=datetime.now(UTC), next_updated_after=next_updated_after)
 
 
@@ -216,7 +216,7 @@ async def list_sites(
                     for site in sites
                 ]
 
-    logger.info("request_id=%s catalog_sites returned=%s", get_request_id(request), len(site_payload))
+    logger.info("catalog_sites", request_id=get_request_id(request), returned=len(site_payload))
     return CatalogSitesResponse(sites=site_payload, server_time=datetime.now(UTC))
 
 
@@ -232,7 +232,7 @@ async def get_categories_tree(
         _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
         categories_tree = await uow.catalog.get_categories_tree()
 
-    logger.info("request_id=%s catalog_categories_tree returned=%s", get_request_id(request), len(categories_tree))
+    logger.info("catalog_categories_tree", request_id=get_request_id(request), returned=len(categories_tree))
     return [CategoryTreeNode.model_validate(node) for node in categories_tree]
 
 
@@ -316,10 +316,10 @@ async def browse_items(
         )
 
     logger.info(
-        "request_id=%s catalog_read_items returned=%s total=%s",
-        get_request_id(request),
-        len(items),
-        total_count,
+        "catalog_read_items",
+        request_id=get_request_id(request),
+        returned=len(items),
+        total=total_count,
     )
     return CatalogBrowseItemsResponse(
         items=items,
@@ -358,10 +358,10 @@ async def browse_categories(
         )
 
     logger.info(
-        "request_id=%s catalog_read_categories returned=%s total=%s",
-        get_request_id(request),
-        len(categories),
-        total_count,
+        "catalog_read_categories",
+        request_id=get_request_id(request),
+        returned=len(categories),
+        total=total_count,
     )
     return CatalogBrowseCategoriesResponse(
         categories=categories,
@@ -397,11 +397,11 @@ async def browse_category_items(
         )
 
     logger.info(
-        "request_id=%s catalog_read_category_items category_id=%s returned=%s total=%s",
-        get_request_id(request),
-        category_id,
-        len(items),
-        total_count,
+        "catalog_read_category_items",
+        request_id=get_request_id(request),
+        category_id=category_id,
+        returned=len(items),
+        total=total_count,
     )
     return CatalogBrowseItemsResponse(
         items=items,
@@ -443,11 +443,11 @@ async def browse_category_children(
         )
 
     logger.info(
-        "request_id=%s catalog_read_category_children category_id=%s returned=%s total=%s",
-        get_request_id(request),
-        category_id,
-        len(categories),
-        total_count,
+        "catalog_read_category_children",
+        request_id=get_request_id(request),
+        category_id=category_id,
+        returned=len(categories),
+        total=total_count,
     )
     return CatalogBrowseCategoriesResponse(
         categories=categories,
@@ -475,10 +475,10 @@ async def browse_category_parent_chain(
         chain_by_category = await uow.catalog.get_parent_chain_summaries([category_id])
 
     logger.info(
-        "request_id=%s catalog_read_category_parent_chain category_id=%s chain_length=%s",
-        get_request_id(request),
-        category_id,
-        len(chain_by_category.get(category_id, [])),
+        "catalog_read_category_parent_chain",
+        request_id=get_request_id(request),
+        category_id=category_id,
+        chain_length=len(chain_by_category.get(category_id, [])),
     )
     return CategoryParentChainResponse(
         category_id=category_id,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -15,7 +15,7 @@ from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 SUPPORTED_OPERATION_TYPES: set[OperationType] = {
     "RECEIVE",
@@ -630,6 +630,11 @@ class OperationsService:
                     qty=line.qty,
                     batch=line.batch,
                     comment=line.comment,
+                    item_name_snapshot=item.name,
+                    item_sku_snapshot=item.sku,
+                    unit_name_snapshot=unit.name,
+                    unit_symbol_snapshot=unit.symbol,
+                    category_name_snapshot=category.name,
                 )
 
         return await uow.operations.get_operation_by_id(updated.id)
@@ -928,17 +933,17 @@ class OperationsService:
                 )
                 document_created = result["document"]
                 logger.info(
-                    "Auto-generated document id=%s for operation id=%s type=%s",
-                    document_created.id,
-                    operation_id,
-                    submitted_operation.operation_type,
+                    "auto_generated_document",
+                    document_id=document_created.id,
+                    operation_id=str(operation_id),
+                    operation_type=submitted_operation.operation_type,
                 )
         except Exception as e:
             # Логируем ошибку, но не прерываем выполнение
             logger.warning(
-                "Failed to auto-generate document for operation id=%s: %s",
-                operation_id,
-                str(e),
+                "failed_to_auto_generate_document",
+                operation_id=str(operation_id),
+                error=str(e),
             )
 
         response = {"operation": submitted_operation}

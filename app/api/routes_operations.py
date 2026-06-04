@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import datetime
 from uuid import UUID
 
@@ -11,6 +11,7 @@ from app.core.identity import Identity
 from app.schemas.asset_register import OperationAcceptLinesRequest
 from app.schemas.operation import (
     OperationCancel,
+    AcceptanceState,
     OperationCreate,
     OperationEffectiveAtUpdate,
     OperationFilter,
@@ -27,7 +28,7 @@ from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/operations")
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 def _parse_item_ids(raw_value: str | None) -> list[int] | None:
@@ -55,6 +56,7 @@ async def list_operations(
     site_id: int | None = Query(None),
     operation_type: OperationType | None = Query(None, alias="type"),
     status_filter: OperationStatus | None = Query(None, alias="status"),
+    acceptance_state: AcceptanceState | None = Query(None),
     created_by_user_id: UUID | None = Query(None),
     effective_after: datetime | None = Query(None),
     effective_before: datetime | None = Query(None),
@@ -87,6 +89,7 @@ async def list_operations(
             site_id=site_id,
             operation_type=operation_type,
             status=status_filter,
+            acceptance_state=acceptance_state,
             item_ids=_parse_item_ids(item_ids),
             created_by_user_id=created_by_user_id,
             effective_after=effective_after,
@@ -129,7 +132,7 @@ async def get_operation(
         if operation.status == "cancelled" and not OperationsPolicy.can_view_cancelled_operations(identity):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
-    logger.info("request_id=%s get_operation id=%s user=%s", get_request_id(request), operation_id, identity.user_id)
+    logger.info("get_operation", request_id=get_request_id(request), id=operation_id, user=identity.user_id)
     return OperationResponse.model_validate(operation)
 
 
@@ -154,7 +157,7 @@ async def create_operation(
         )
 
     operation = result["operation"]
-    logger.info("request_id=%s create_operation id=%s user=%s", get_request_id(request), operation.id, identity.user_id)
+    logger.info("create_operation", request_id=get_request_id(request), id=operation.id, user=identity.user_id)
     return OperationResponse.model_validate(operation)
 
 
@@ -194,7 +197,7 @@ async def update_operation(
             update_data=update_data,
         )
 
-    logger.info("request_id=%s update_operation id=%s user=%s", get_request_id(request), operation_id, identity.user_id)
+    logger.info("update_operation", request_id=get_request_id(request), id=operation_id, user=identity.user_id)
     return OperationResponse.model_validate(updated_operation)
 
 
@@ -212,7 +215,7 @@ async def update_operation_effective_at(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
         OperationsPolicy.require_read_site(identity, operation.site_id)
-        OperationsPolicy.require_operation_effective_at_permission(identity)
+        OperationsPolicy.require_operation_effective_at_permission(identity, operation)
 
         updated_operation = await OperationsService.update_operation_effective_at(
             uow=uow,
@@ -221,10 +224,10 @@ async def update_operation_effective_at(
         )
 
     logger.info(
-        "request_id=%s update_operation_effective_at id=%s user=%s",
-        get_request_id(request),
-        operation_id,
-        identity.user_id,
+        "update_operation_effective_at",
+        request_id=get_request_id(request),
+        id=operation_id,
+        user=identity.user_id,
     )
     return OperationResponse.model_validate(updated_operation)
 
@@ -281,7 +284,7 @@ async def delete_operation(
             user_id=identity.user_id,
         )
 
-    logger.info("request_id=%s delete_operation id=%s user=%s", get_request_id(request), operation_id, identity.user_id)
+    logger.info("delete_operation", request_id=get_request_id(request), id=operation_id, user=identity.user_id)
 
 
 @router.post("/{operation_id}/cancel", response_model=OperationResponse)
@@ -312,7 +315,7 @@ async def cancel_operation(
             reason=cancel_data.reason,
         )
 
-    logger.info("request_id=%s cancel_operation id=%s user=%s", get_request_id(request), operation_id, identity.user_id)
+    logger.info("cancel_operation", request_id=get_request_id(request), id=operation_id, user=identity.user_id)
     return OperationResponse.model_validate(result["operation"])
 
 
@@ -345,10 +348,10 @@ async def accept_operation_lines(
         )
 
     logger.info(
-        "request_id=%s accept_operation_lines id=%s user=%s lines=%s",
-        get_request_id(request),
-        operation_id,
-        identity.user_id,
-        len(payload.lines),
+        "accept_operation_lines",
+        request_id=get_request_id(request),
+        id=operation_id,
+        user=identity.user_id,
+        lines=len(payload.lines),
     )
     return OperationResponse.model_validate(result["operation"])

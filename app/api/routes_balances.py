@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -16,7 +16,7 @@ from app.schemas.balance import (
 from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/balances")
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 
@@ -84,11 +84,11 @@ async def list_balances(
 
     items = [BalanceResponse.model_validate(balance) for balance in balances]
     logger.info(
-        "request_id=%s list_balances user_id=%s returned=%s total=%s",
-        get_request_id(request),
-        identity.user_id,
-        len(items),
-        total_count,
+        "list_balances",
+        request_id=get_request_id(request),
+        user_id=identity.user_id,
+        returned=len(items),
+        total=total_count,
     )
     return BalanceListResponse(
         items=items,
@@ -135,10 +135,10 @@ async def get_balances_summary(
         summary = await uow.balances.get_balances_summary(visible_site_ids)
 
     logger.info(
-        "request_id=%s balances_summary user_id=%s sites=%s",
-        get_request_id(request),
-        identity.user_id,
-        len(visible_site_ids),
+        "balances_summary",
+        request_id=get_request_id(request),
+        user_id=identity.user_id,
+        sites=len(visible_site_ids),
     )
     return BalanceSummaryResponse(
         accessible_sites_count=len(visible_site_ids),

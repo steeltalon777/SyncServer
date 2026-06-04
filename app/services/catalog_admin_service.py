@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-import logging
+import structlog
 from datetime import datetime
 from uuid import UUID
 
@@ -36,7 +36,7 @@ from fastapi import HTTPException, status
 
 from app.services.uow import UnitOfWork
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 def _normalize_text(value: str | None) -> str | None:
@@ -188,15 +188,15 @@ class CatalogAdminService:
         await self._ensure_item_sku_unique(uow, payload.sku)
 
         logger.info(
-            "catalog_admin_create_item repo_method=%s repo_signature=%s payload_name=%s payload_sku=%s category_id=%s unit_id=%s hashtags_len=%s is_active=%s",
-            getattr(uow.catalog.create_item, "__qualname__", repr(uow.catalog.create_item)),
-            inspect.signature(uow.catalog.create_item),
-            payload.name,
-            payload.sku,
-            category.id,
-            payload.unit_id,
-            len(payload.hashtags or []),
-            payload.is_active,
+            "catalog_admin_create_item",
+            repo_method=getattr(uow.catalog.create_item, "__qualname__", repr(uow.catalog.create_item)),
+            repo_signature=str(inspect.signature(uow.catalog.create_item)),
+            payload_name=payload.name,
+            payload_sku=payload.sku,
+            category_id=category.id,
+            unit_id=payload.unit_id,
+            hashtags_len=len(payload.hashtags or []),
+            is_active=payload.is_active,
         )
 
         item = Item(

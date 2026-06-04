@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -33,7 +33,7 @@ from app.services.sync_service import SyncService
 from app.services.uow import UnitOfWork
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 settings = get_settings()
 
 
@@ -50,11 +50,11 @@ async def ping(
         server_seq_upto = await uow.events.get_max_server_seq(payload.site_id)
 
     logger.info(
-        "request_id=%s ping site_id=%s device_id=%s outbox_count=%s",
-        get_request_id(request),
-        payload.site_id,
-        payload.device_id,
-        payload.outbox_count,
+        "ping",
+        request_id=get_request_id(request),
+        site_id=payload.site_id,
+        device_id=payload.device_id,
+        outbox_count=payload.outbox_count,
     )
 
     return PingResponse(
@@ -88,28 +88,28 @@ async def push(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("request_id=%s unexpected push failure", get_request_id(request))
+        logger.error("unexpected_push_failure", request_id=get_request_id(request), exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal server error")
 
     for rejected in response.rejected:
         if rejected.reason_code == "uuid_collision":
             logger.warning(
-                "request_id=%s push uuid_collision event_uuid=%s batch_id=%s",
-                get_request_id(request),
-                rejected.event_uuid,
-                payload.batch_id,
+                "push_uuid_collision",
+                request_id=get_request_id(request),
+                event_uuid=rejected.event_uuid,
+                batch_id=payload.batch_id,
             )
 
     logger.info(
-        "request_id=%s push site_id=%s device_id=%s batch_id=%s events=%s accepted=%s duplicates=%s rejected=%s",
-        get_request_id(request),
-        payload.site_id,
-        payload.device_id,
-        payload.batch_id,
-        len(payload.events),
-        len(response.accepted),
-        len(response.duplicates),
-        len(response.rejected),
+        "push",
+        request_id=get_request_id(request),
+        site_id=payload.site_id,
+        device_id=payload.device_id,
+        batch_id=payload.batch_id,
+        events=len(payload.events),
+        accepted=len(response.accepted),
+        duplicates=len(response.duplicates),
+        rejected=len(response.rejected),
     )
     return response
 
@@ -144,12 +144,12 @@ async def pull(
         next_since_seq = response_events[-1].server_seq
 
     logger.info(
-        "request_id=%s pull site_id=%s device_id=%s since_seq=%s returned=%s",
-        get_request_id(request),
-        payload.site_id,
-        payload.device_id,
-        payload.since_seq,
-        len(response_events),
+        "pull",
+        request_id=get_request_id(request),
+        site_id=payload.site_id,
+        device_id=payload.device_id,
+        since_seq=payload.since_seq,
+        returned=len(response_events),
     )
 
     return PullResponse(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from pathlib import Path
 from typing import Literal
 
@@ -14,7 +14,7 @@ from sqlalchemy.pool import NullPool
 from app.core.config import get_settings
 
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 ALEMBIC_BASELINE_REVISION = "0001_initial_baseline"
 MIGRATION_LOCK_ID = 2026040801
@@ -86,7 +86,7 @@ async def ensure_database_ready(database_url: str | None = None) -> None:
             )
             try:
                 plan = await _detect_migration_plan(conn)
-                logger.info("database migration plan selected: %s", plan)
+                logger.info("database_migration_plan_selected", plan=plan)
                 await asyncio.to_thread(_run_migration_plan, target_url, plan)
             finally:
                 await conn.execute(

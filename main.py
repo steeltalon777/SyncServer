@@ -1,7 +1,8 @@
-import logging
+import os
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+import structlog
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -24,10 +25,14 @@ from app.api.routes_review_items import router as review_items_router
 from app.api.routes_temporary_items import router as temporary_items_router
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.logging_config import configure_logging
 
 settings = get_settings()
-logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
-logger = logging.getLogger(__name__)
+if "LOG_LEVEL" not in os.environ:
+    os.environ["LOG_LEVEL"] = settings.LOG_LEVEL
+
+configure_logging()
+logger = structlog.get_logger()
 
 def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
     # Backward-compatible argument for test bootstrap:
@@ -58,7 +63,7 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
         try:
             response = await call_next(request)
         except Exception:
-            logger.exception("request_id=%s unhandled_error path=%s", request_id, request.url.path)
+            logger.error("unhandled_error", path=request.url.path, request_id=request_id, exc_info=True)
             return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
         response.headers["X-Request-Id"] = request_id
@@ -153,12 +158,7 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
         for route in app.routes
         if getattr(route, "path", "").startswith(f"{api_v1_prefix}/temporary-items")
     )
-    logger.info(
-        "app_route_registration temporary_items_registered=%s temporary_item_paths=%s total_routes=%s",
-        bool(temporary_item_paths),
-        temporary_item_paths,
-        len(app.routes),
-    )
+    logger.info("app_route_registration", temporary_items_registered=bool(temporary_item_paths), temporary_item_paths=temporary_item_paths, total_routes=len(app.routes))
 
     return app
 

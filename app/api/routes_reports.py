@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -19,7 +19,7 @@ from app.schemas.report import (
 from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/reports")
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 
@@ -93,11 +93,11 @@ async def list_item_movement_report(
         )
 
     logger.info(
-        "request_id=%s item_movement_report user_id=%s returned=%s total=%s",
-        get_request_id(request),
-        identity.user_id,
-        len(items),
-        total_count,
+        "item_movement_report",
+        request_id=get_request_id(request),
+        user_id=identity.user_id,
+        returned=len(items),
+        total=total_count,
     )
     return ItemMovementReportResponse(
         items=[ItemMovementRow.model_validate(item) for item in items],
@@ -145,11 +145,11 @@ async def list_stock_summary_report(
         )
 
     logger.info(
-        "request_id=%s stock_summary_report user_id=%s returned=%s total=%s",
-        get_request_id(request),
-        identity.user_id,
-        len(items),
-        total_count,
+        "stock_summary_report",
+        request_id=get_request_id(request),
+        user_id=identity.user_id,
+        returned=len(items),
+        total=total_count,
     )
     return StockSummaryReportResponse(
         items=[StockSummaryRow.model_validate(item) for item in items],

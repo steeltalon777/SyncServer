@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -10,7 +10,7 @@ from app.schemas.review_item import (
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class ReviewItemsService:
@@ -91,8 +91,9 @@ class ReviewItemsService:
         await uow.session.flush()
 
         logger.info(
-            "review_item confirmed item_id=%s by user=%s",
-            item_id, resolved_by_user_id,
+            "review_item_confirmed",
+            item_id=item_id,
+            user_id=str(resolved_by_user_id),
         )
 
         return {"item_id": item_id, "resolution_type": "confirmed"}
@@ -229,8 +230,10 @@ class ReviewItemsService:
         await uow.session.flush()
 
         logger.info(
-            "review_item merged item_id=%s into target_item_id=%s by user=%s",
-            item_id, target_item_id, resolved_by_user_id,
+            "review_item_merged",
+            item_id=item_id,
+            target_item_id=target_item_id,
+            user_id=str(resolved_by_user_id),
         )
 
         return {"resolved_item_id": target_item_id, "resolution_type": "merge"}
@@ -299,8 +302,9 @@ class ReviewItemsService:
         await uow.session.flush()
 
         logger.info(
-            "review_item deleted item_id=%s by user=%s",
-            item_id, resolved_by_user_id,
+            "review_item_deleted",
+            item_id=item_id,
+            user_id=str(resolved_by_user_id),
         )
 
         return {"resolution_type": "deleted"}

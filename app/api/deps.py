@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from collections.abc import AsyncGenerator
 from time import monotonic
 
@@ -14,7 +14,7 @@ from app.core.identity import Identity
 from app.services.identity_service import IdentityService
 from app.services.uow import UnitOfWork
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class InMemoryRateLimiter:
@@ -80,7 +80,7 @@ async def enforce_rate_limit(request: Request, device_id: int | str, route_name:
         await rate_limiter.check(key=key, min_interval_seconds=10.0)
         return
 
-    logger.debug("No rate limit configured for route=%s", route_name)
+    logger.debug("no_rate_limit_configured", route=route_name)
 
 
 # ---------------------------------------------------------------------------

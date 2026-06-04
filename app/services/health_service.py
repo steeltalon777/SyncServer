@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.schemas.health import HealthCheckDetail, HealthStatus
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class HealthChecker(ABC):
@@ -83,7 +83,7 @@ class DatabaseHealthChecker(HealthChecker):
             )
 
         except Exception as e:
-            logger.exception("Database health check failed")
+            logger.error("database_health_check_failed", exc_info=True)
             return HealthCheckDetail(
                 status=HealthStatus.UNHEALTHY,
                 latency_ms=None,
@@ -137,7 +137,7 @@ class ConfigHealthChecker(HealthChecker):
             )
 
         except Exception as e:
-            logger.exception("Config health check failed")
+            logger.error("config_health_check_failed", exc_info=True)
             return HealthCheckDetail(
                 status=HealthStatus.UNHEALTHY,
                 latency_ms=None,
@@ -181,7 +181,7 @@ class RedisHealthChecker(HealthChecker):
             )
 
         except Exception as e:
-            logger.exception("Redis health check failed")
+            logger.error("redis_health_check_failed", exc_info=True)
             return HealthCheckDetail(
                 status=HealthStatus.UNHEALTHY,
                 latency_ms=None,
@@ -219,7 +219,7 @@ class HealthService:
                 result = await task
                 results[name] = result
             except Exception as e:
-                logger.exception("Health check task failed: %s", name)
+                logger.error("health_check_task_failed", name=name, exc_info=True)
                 results[name] = HealthCheckDetail(
                     status=HealthStatus.UNHEALTHY,
                     latency_ms=None,
@@ -244,7 +244,7 @@ class HealthService:
                 error=f"Timeout after {self.settings.HEALTH_CHECK_TIMEOUT}s",
             )
         except Exception as e:
-            logger.exception("Health check failed: %s", checker.name)
+            logger.error("health_check_failed", checker_name=checker.name, exc_info=True)
             return HealthCheckDetail(
                 status=HealthStatus.UNHEALTHY,
                 latency_ms=None,

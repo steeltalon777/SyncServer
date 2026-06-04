@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
+import structlog
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -14,10 +14,11 @@ from app.repos.users_repo import UsersRepo
 from app.schemas.document import DocumentGenerateRequest, DocumentType
 from app.services.uow import UnitOfWork
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
-# Версия схемы payload для генерации документов
-PAYLOAD_SCHEMA_VERSION = "1.0.0"
+# Версия схемы payload для генерации документов.
+# 1.1.0 добавляет печатный номер операции и готовые строки для Django PDF renderer.
+PAYLOAD_SCHEMA_VERSION = "1.1.0"
 
 # Шаблоны по умолчанию для каждого типа документа
 DEFAULT_TEMPLATES: dict[DocumentType, str] = {
@@ -56,6 +57,87 @@ def _generate_document_number(
     import secrets
     suffix = secrets.token_hex(2)  # 4 hex символа
     return f"{prefix}-{site_id}-{timestamp}-{suffix}"
+
+
+def _compute_operation_display_number(site_id: int | None, created_at: datetime | None) -> str | None:
+    """Вернуть номер операции в том же формате, что Django BFF/Angular таблица.
+
+    Формат: ``{site_id}/{HHmm}/{ddMMyy}``.
+    """
+    if site_id is None or created_at is None:
+        return None
+    return f"{site_id}/{created_at.strftime('%H%M')}/{created_at.strftime('%d%m%y')}"
+
+
+def _site_fallback(site_id: int | None) -> str:
+    return f"Склад #{site_id}" if site_id else "Склад"
+
+
+def _site_name(site: Any | None, fallback_site_id: int | None = None) -> str:
+    if site is not None:
+        return str(getattr(site, "name", None) or getattr(site, "code", None) or _site_fallback(getattr(site, "id", fallback_site_id)))
+    return _site_fallback(fallback_site_id)
+
+
+def _issue_object_name(operation: Any) -> str:
+    return str(operation.issue_object_name_snapshot or (f"Объект выдачи #{operation.issue_object_id}" if operation.issue_object_id else "Объект выдачи"))
+
+
+def _operation_type_label(operation_type: str | None) -> str:
+    labels = {
+        "MOVE": "Перемещение",
+        "RECEIVE": "Приход",
+        "ISSUE": "Выдача",
+        "ISSUE_RETURN": "Возврат выдачи",
+        "WRITE_OFF": "Списание",
+        "EXPENSE": "Расход",
+        "ADJUSTMENT": "Корректировка",
+        "CORRECTION": "Корректировка",
+    }
+    return labels.get(str(operation_type or "").upper(), str(operation_type or "Операция"))
+
+
+def _build_basis_label(operation: Any, site: Any, source_site: Any | None, destination_site: Any | None) -> str:
+    """Собрать deterministic `Основание` для печатной накладной."""
+    operation_type = str(operation.operation_type or "").upper()
+    site_label = _site_name(site, operation.site_id)
+    source_label = (
+        _site_name(source_site, operation.source_site_id)
+        if source_site is not None or operation.source_site_id
+        else site_label
+    )
+    destination_label = (
+        _site_name(destination_site, operation.destination_site_id)
+        if destination_site is not None or operation.destination_site_id
+        else site_label
+    )
+    issue_object_label = _issue_object_name(operation)
+
+    if operation_type == "MOVE":
+        return f"Перемещение {source_label} → {destination_label}"
+    if operation_type == "RECEIVE":
+        return f"Приход на склад {destination_label or site_label}"
+    if operation_type == "ISSUE":
+        return f"Выдача {source_label or site_label} → {issue_object_label}"
+    if operation_type == "ISSUE_RETURN":
+        return f"Возврат выдачи {issue_object_label} → {destination_label or site_label}"
+    if operation_type == "WRITE_OFF":
+        return f"Списание {source_label or site_label}"
+    if operation_type == "EXPENSE":
+        return f"Расход {source_label or site_label}"
+    if operation_type in {"ADJUSTMENT", "CORRECTION"}:
+        return f"Корректировка {site_label}"
+    return f"{_operation_type_label(operation_type)} {site_label}"
+
+
+def _build_consignee_label(operation: Any, site: Any, destination_site: Any | None) -> str:
+    """Получатель для шапки накладной без персональных подписантов."""
+    operation_type = str(operation.operation_type or "").upper()
+    if operation_type in {"ISSUE", "ISSUE_RETURN"} and (operation.issue_object_name_snapshot or operation.issue_object_id):
+        return _issue_object_name(operation)
+    if destination_site is not None:
+        return _site_name(destination_site, operation.destination_site_id)
+    return _site_name(site, operation.site_id)
 
 
 class DocumentService:
@@ -118,9 +200,13 @@ class DocumentService:
                 detail=f"site with id {operation.site_id} not found",
             )
 
-        # Для MOVE — получаем также destination site
+        # Для MOVE и печатного основания получаем source/destination site, если они заданы.
+        source_site = site
+        if operation.source_site_id and operation.source_site_id != operation.site_id:
+            source_site = await uow.sites.get_by_id(operation.source_site_id)
+
         destination_site = None
-        if operation.operation_type == "MOVE" and operation.destination_site_id:
+        if operation.destination_site_id:
             destination_site = await uow.sites.get_by_id(operation.destination_site_id)
 
         # 3. Получаем пользователя-создателя
@@ -133,10 +219,48 @@ class DocumentService:
         if operation.submitted_by_user_id:
             submitted_by_user = await uow.users.get_by_id(operation.submitted_by_user_id)
 
-        # 5. Формируем payload
+        # 5. Определяем шаблон
+        effective_template = template_name or DEFAULT_TEMPLATES.get(document_type, "default_v1")
+
+        # 6. Для черновиков — всегда создаём новый документ (войдируем старый).
+        #    Для проведённых — сохраняем идемпотентность.
+        if operation.status == "draft":
+            await DocumentService._void_existing_documents(
+                uow=uow,
+                operation_id=operation_id,
+                document_type=document_type,
+                template_name=effective_template,
+            )
+            # Документы черновика всегда draft, независимо от auto_finalize.
+            effective_auto_finalize = False
+        else:
+            existing_document = await DocumentService._find_reusable_document(
+                uow=uow,
+                operation_id=operation_id,
+                document_type=document_type,
+                template_name=effective_template,
+                auto_finalize=auto_finalize,
+            )
+            if existing_document is not None:
+                logger.info(
+                    "reused_document",
+                    document_id=existing_document.id,
+                    document_type=document_type,
+                    operation_id=str(operation_id),
+                    status=existing_document.status,
+                )
+                return {
+                    "document": existing_document,
+                    "operation": operation,
+                    "created": False,
+                }
+            effective_auto_finalize = auto_finalize
+
+        # 7. Формируем payload
         payload = DocumentService._build_payload(
             operation=operation,
             site=site,
+            source_site=source_site,
             destination_site=destination_site,
             created_by_user=created_by_user,
             submitted_by_user=submitted_by_user,
@@ -147,20 +271,17 @@ class DocumentService:
             basis_date=basis_date,
         )
 
-        # 6. Определяем шаблон
-        effective_template = template_name or DEFAULT_TEMPLATES.get(document_type, "default_v1")
-
-        # 7. Генерируем номер документа
+        # 8. Генерируем технический номер документа
         document_number = _generate_document_number(document_type, operation.site_id)
 
-        # 8. Вычисляем хэш payload
+        # 9. Вычисляем хэш payload
         payload_hash = _compute_payload_hash(payload)
 
-        # 9. Определяем статус
-        status_value = "finalized" if auto_finalize else "draft"
-        now = datetime.now(UTC) if auto_finalize else None
+        # 10. Определяем статус
+        status_value = "finalized" if effective_auto_finalize else "draft"
+        now = datetime.now(UTC) if effective_auto_finalize else None
 
-        # 10. Создаём документ
+        # 11. Создаём документ
         document = await uow.documents.create_document(
             document_type=document_type,
             site_id=operation.site_id,
@@ -176,26 +297,81 @@ class DocumentService:
             finalized_at=now,
         )
 
-        # 11. Линкуем документ к операции
+        # 12. Линкуем документ к операции
         await uow.documents.link_document_to_operation(document.id, operation_id)
 
         logger.info(
-            "Generated document id=%s type=%s for operation id=%s status=%s",
-            document.id,
-            document_type,
-            operation_id,
-            status_value,
+            "generated_document",
+            document_id=document.id,
+            document_type=document_type,
+            operation_id=str(operation_id),
+            status=status_value,
         )
 
         return {
             "document": document,
             "operation": operation,
+            "created": True,
         }
+
+    @staticmethod
+    async def _find_reusable_document(
+        uow: UnitOfWork,
+        operation_id: UUID,
+        document_type: DocumentType,
+        template_name: str,
+        auto_finalize: bool,
+    ):
+        """Найти уже созданный документ текущей схемы для идемпотентной генерации."""
+        documents = await uow.documents.get_documents_by_operation(operation_id, document_type=document_type)
+        reusable = None
+        for document in documents:
+            if document.status in {"void", "superseded"}:
+                continue
+            if document.template_name != template_name:
+                continue
+            if document.payload_schema_version != PAYLOAD_SCHEMA_VERSION:
+                continue
+            reusable = document
+            break
+
+        if reusable is None:
+            return None
+
+        if auto_finalize and reusable.status == "draft":
+            updated = await uow.documents.update_document_status(reusable.id, "finalized")
+            if updated:
+                refreshed = await uow.documents.get_document_by_id(reusable.id)
+                return refreshed or reusable
+        return reusable
+
+    @staticmethod
+    async def _void_existing_documents(
+        uow: UnitOfWork,
+        operation_id: UUID,
+        document_type: DocumentType,
+        template_name: str,
+    ) -> None:
+        """Войдировать все не-void документы операции (для пересоздания черновика)."""
+        documents = await uow.documents.get_documents_by_operation(operation_id, document_type=document_type)
+        for doc in documents:
+            if doc.status in ("void", "superseded"):
+                continue
+            if doc.template_name != template_name:
+                continue
+            await uow.documents.update_document_status(doc.id, "void")
+            logger.info(
+                "voided_document",
+                document_id=doc.id,
+                document_type=document_type,
+                operation_id=str(operation_id),
+            )
 
     @staticmethod
     def _build_payload(
         operation,
         site,
+        source_site=None,
         destination_site=None,
         created_by_user=None,
         submitted_by_user=None,
@@ -217,6 +393,8 @@ class DocumentService:
         # Заголовок документа
         document_title = DocumentService._get_document_title(document_type)
 
+        operation_display_number = _compute_operation_display_number(operation.site_id, operation.created_at)
+
         # Данные площадки (отправитель)
         sender_organization = {
             "legal_name": site.name,
@@ -231,6 +409,21 @@ class DocumentService:
             "description": site.description,
             "organization": sender_organization,
         }
+
+        source_site_info = sender_info
+        if source_site and getattr(source_site, "id", None) != site.id:
+            source_site_info = {
+                "site_id": source_site.id,
+                "site_code": source_site.code,
+                "site_name": source_site.name,
+                "description": source_site.description,
+                "organization": {
+                    "legal_name": source_site.name,
+                    "address": source_site.description,
+                    "tax_id": None,
+                    "contacts": None,
+                },
+            }
 
         # Данные площадки-получателя (для MOVE)
         receiver_info = None
@@ -317,10 +510,15 @@ class DocumentService:
         }
 
         # Основание документа (приказ/договор/заявка и т.п.)
+        basis_label = _build_basis_label(operation, site, source_site, destination_site)
+        consignee_label = _build_consignee_label(operation, site, destination_site)
+        operation_type_label = _operation_type_label(operation.operation_type)
         basis = {
             "type": basis_type,
             "number": basis_number,
             "date": basis_date.isoformat() if basis_date else None,
+            "label": basis_label,
+            "operation_type_label": operation_type_label,
         }
 
         # Локализационные настройки
@@ -347,15 +545,36 @@ class DocumentService:
 
         payload = {
             "document_title": document_title,
+            "operation_display_number": operation_display_number,
+            "basis_label": basis_label,
+            "consignee_label": consignee_label,
             "operation_id": str(operation.id),
             "operation_type": operation.operation_type,
+            "operation_type_label": operation_type_label,
             "operation_status": operation.status,
             "operation_notes": operation.notes,
             "operation_created_at": operation.created_at.isoformat() if operation.created_at else None,
             "operation_submitted_at": operation.submitted_at.isoformat() if operation.submitted_at else None,
             "operation_effective_at": operation.effective_at.isoformat() if operation.effective_at else None,
             "operation_acceptance_state": operation.acceptance_state,
+            "operation": {
+                "id": str(operation.id),
+                "display_number": operation_display_number,
+                "type": operation.operation_type,
+                "type_label": operation_type_label,
+                "status": operation.status,
+                "site_id": operation.site_id,
+                "source_site_id": operation.source_site_id,
+                "destination_site_id": operation.destination_site_id,
+                "issue_object_id": operation.issue_object_id,
+                "issue_object_name": operation.issue_object_name_snapshot,
+                "created_at": operation.created_at.isoformat() if operation.created_at else None,
+                "submitted_at": operation.submitted_at.isoformat() if operation.submitted_at else None,
+                "effective_at": operation.effective_at.isoformat() if operation.effective_at else None,
+            },
             "sender": sender_info,
+            "source_site": source_site_info,
+            "destination_site": receiver_info,
             "receiver": receiver_info,
             "recipient": recipient_info,
             "issued_to": issued_to_info,

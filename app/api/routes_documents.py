@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import datetime
 from uuid import UUID
 
@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, Response
 
 router = APIRouter(prefix="/documents")
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
@@ -92,18 +92,20 @@ async def generate_document(
         basis_number=data.basis_number,
         basis_date=data.basis_date,
     )
+    await uow.commit()
 
     logger.info(
-        "Generated document id=%s for operation id=%s by user id=%s",
-        result["document"].id,
-        data.operation_id,
-        identity.user_id,
+        "document_generated",
+        document_id=result["document"].id,
+        operation_id=data.operation_id,
+        user_id=identity.user_id,
     )
 
     return {
         "document": DocumentResponse.model_validate(result["document"]),
         "operation_id": str(data.operation_id),
         "generated_at": datetime.now().isoformat(),
+        "created": bool(result.get("created", True)),
     }
 
 
@@ -272,12 +274,13 @@ async def update_document_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="failed to update document",
         )
+    await uow.commit()
 
     logger.info(
-        "Updated document id=%s status=%s by user id=%s",
-        document_id,
-        update_data.status,
-        identity.user_id,
+        "document_status_updated",
+        document_id=document_id,
+        status=update_data.status,
+        user_id=identity.user_id,
     )
 
     return DocumentResponse.model_validate(updated)
@@ -349,16 +352,18 @@ async def generate_document_for_operation(
         basis_number=basis_number,
         basis_date=basis_date,
     )
+    await uow.commit()
 
     logger.info(
-        "Generated document id=%s for operation id=%s via shortcut by user id=%s",
-        result["document"].id,
-        operation_id,
-        identity.user_id,
+        "document_generated_shortcut",
+        document_id=result["document"].id,
+        operation_id=operation_id,
+        user_id=identity.user_id,
     )
 
     return {
         "document": DocumentResponse.model_validate(result["document"]),
         "operation_id": str(operation_id),
         "generated_at": datetime.now().isoformat(),
+        "created": bool(result.get("created", True)),
     }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -10,7 +10,7 @@ from app.services.operations_service import OperationsService
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class TemporaryItemsResolutionService:

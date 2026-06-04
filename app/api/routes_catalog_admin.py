@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 from uuid import UUID
 
 from app.api.deps import get_request_id, get_uow, require_user_identity
@@ -31,7 +31,7 @@ from app.services.uow import UnitOfWork
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 router = APIRouter(prefix="/catalog/admin")
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 async def _require_catalog_admin(identity: Identity) -> None:
@@ -57,7 +57,7 @@ async def create_unit(
         await _require_catalog_admin(identity=identity)
         unit = await service.create_unit(uow, payload, created_by_user_id=identity.user_id)
 
-    logger.info("request_id=%s create_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, identity.user_id)
+    logger.info("create_unit", request_id=get_request_id(request), unit_id=unit.id, user_id=identity.user_id)
     return UnitResponse.model_validate(unit)
 
 
@@ -73,7 +73,7 @@ async def bulk_create_units(
         await _require_catalog_admin(identity=identity)
         units = await service.bulk_create_units(uow, payload, created_by_user_id=identity.user_id)
 
-    logger.info("request_id=%s bulk_create_units count=%s user_id=%s", get_request_id(request), len(units), identity.user_id)
+    logger.info("bulk_create_units", request_id=get_request_id(request), count=len(units), user_id=identity.user_id)
     return UnitBulkCreateResponse(items=[UnitResponse.model_validate(unit) for unit in units])
 
 
@@ -90,7 +90,7 @@ async def update_unit(
         await _require_catalog_admin(identity=identity)
         unit = await service.update_unit(uow, unit_id, payload, updated_by_user_id=identity.user_id)
 
-    logger.info("request_id=%s update_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, identity.user_id)
+    logger.info("update_unit", request_id=get_request_id(request), unit_id=unit.id, user_id=identity.user_id)
     return UnitResponse.model_validate(unit)
 
 
@@ -107,10 +107,10 @@ async def create_category(
         category = await service.create_category(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info(
-        "request_id=%s create_category category_id=%s user_id=%s",
-        get_request_id(request),
-        category.id,
-        identity.user_id,
+        "create_category",
+        request_id=get_request_id(request),
+        category_id=category.id,
+        user_id=identity.user_id,
     )
     return CategoryResponse.model_validate(category)
 
@@ -128,10 +128,10 @@ async def bulk_create_categories(
         categories = await service.bulk_create_categories(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info(
-        "request_id=%s bulk_create_categories count=%s user_id=%s",
-        get_request_id(request),
-        len(categories),
-        identity.user_id,
+        "bulk_create_categories",
+        request_id=get_request_id(request),
+        count=len(categories),
+        user_id=identity.user_id,
     )
     return CategoryBulkCreateResponse(items=[CategoryResponse.model_validate(category) for category in categories])
 
@@ -150,10 +150,10 @@ async def update_category(
         category = await service.update_category(uow, category_id, payload, updated_by_user_id=identity.user_id)
 
     logger.info(
-        "request_id=%s update_category category_id=%s user_id=%s",
-        get_request_id(request),
-        category.id,
-        identity.user_id,
+        "update_category",
+        request_id=get_request_id(request),
+        category_id=category.id,
+        user_id=identity.user_id,
     )
     return CategoryResponse.model_validate(category)
 
@@ -170,7 +170,7 @@ async def create_item(
         await _require_catalog_admin(identity=identity)
         item = await service.create_item(uow, payload, created_by_user_id=identity.user_id)
 
-    logger.info("request_id=%s create_item item_id=%s user_id=%s", get_request_id(request), item.id, identity.user_id)
+    logger.info("create_item", request_id=get_request_id(request), item_id=item.id, user_id=identity.user_id)
     return ItemResponse.model_validate(item)
 
 
@@ -187,7 +187,7 @@ async def update_item(
         await _require_catalog_admin(identity=identity)
         item = await service.update_item(uow, item_id, payload, updated_by_user_id=identity.user_id)
 
-    logger.info("request_id=%s update_item item_id=%s user_id=%s", get_request_id(request), item.id, identity.user_id)
+    logger.info("update_item", request_id=get_request_id(request), item_id=item.id, user_id=identity.user_id)
     return ItemResponse.model_validate(item)
 
 
@@ -203,7 +203,7 @@ async def get_unit(
         await _require_catalog_admin(identity=identity)
         unit = await service.get_unit(uow, unit_id)
 
-    logger.info("request_id=%s get_unit unit_id=%s user_id=%s", get_request_id(request), unit.id, identity.user_id)
+    logger.info("get_unit", request_id=get_request_id(request), unit_id=unit.id, user_id=identity.user_id)
     return UnitResponse.model_validate(unit)
 
 
@@ -219,7 +219,7 @@ async def delete_unit(
         await _require_catalog_admin(identity=identity)
         await service.delete_unit(uow, unit_id, identity.user_id)
 
-    logger.info("request_id=%s delete_unit unit_id=%s user_id=%s", get_request_id(request), unit_id, identity.user_id)
+    logger.info("delete_unit", request_id=get_request_id(request), unit_id=unit_id, user_id=identity.user_id)
 
 
 @router.get("/units", response_model=UnitListResponse)
@@ -244,11 +244,11 @@ async def list_units(
         )
 
     logger.info(
-        "request_id=%s list_units count=%s page=%s user_id=%s",
-        get_request_id(request),
-        len(units),
-        page,
-        identity.user_id,
+        "list_units",
+        request_id=get_request_id(request),
+        count=len(units),
+        page=page,
+        user_id=identity.user_id,
     )
     return UnitListResponse(
         items=[UnitResponse.model_validate(unit) for unit in units],
@@ -270,7 +270,7 @@ async def get_category(
         await _require_catalog_admin(identity=identity)
         category = await service.get_category(uow, category_id)
 
-    logger.info("request_id=%s get_category category_id=%s user_id=%s", get_request_id(request), category.id, identity.user_id)
+    logger.info("get_category", request_id=get_request_id(request), category_id=category.id, user_id=identity.user_id)
     return CategoryResponse.model_validate(category)
 
 
@@ -286,7 +286,7 @@ async def delete_category(
         await _require_catalog_admin(identity=identity)
         await service.delete_category(uow, category_id, identity.user_id)
 
-    logger.info("request_id=%s delete_category category_id=%s user_id=%s", get_request_id(request), category_id, identity.user_id)
+    logger.info("delete_category", request_id=get_request_id(request), category_id=category_id, user_id=identity.user_id)
 
 
 @router.get("/categories", response_model=CategoryListResponse)
@@ -311,11 +311,11 @@ async def list_categories(
         )
 
     logger.info(
-        "request_id=%s list_categories count=%s page=%s user_id=%s",
-        get_request_id(request),
-        len(categories),
-        page,
-        identity.user_id,
+        "list_categories",
+        request_id=get_request_id(request),
+        count=len(categories),
+        page=page,
+        user_id=identity.user_id,
     )
     return CategoryListResponse(
         items=[CategoryResponse.model_validate(category) for category in categories],
@@ -337,7 +337,7 @@ async def get_item(
         await _require_catalog_admin(identity=identity)
         item = await service.get_item(uow, item_id)
 
-    logger.info("request_id=%s get_item item_id=%s user_id=%s", get_request_id(request), item.id, identity.user_id)
+    logger.info("get_item", request_id=get_request_id(request), item_id=item.id, user_id=identity.user_id)
     return ItemResponse.model_validate(item)
 
 
@@ -353,7 +353,7 @@ async def delete_item(
         await _require_catalog_admin(identity=identity)
         await service.delete_item(uow, item_id, identity.user_id)
 
-    logger.info("request_id=%s delete_item item_id=%s user_id=%s", get_request_id(request), item_id, identity.user_id)
+    logger.info("delete_item", request_id=get_request_id(request), item_id=item_id, user_id=identity.user_id)
 
 
 @router.get("/items", response_model=ItemListResponse)
@@ -378,11 +378,11 @@ async def list_items(
         )
 
     logger.info(
-        "request_id=%s list_items count=%s page=%s user_id=%s",
-        get_request_id(request),
-        len(items),
-        page,
-        identity.user_id,
+        "list_items",
+        request_id=get_request_id(request),
+        count=len(items),
+        page=page,
+        user_id=identity.user_id,
     )
     return ItemListResponse(
         items=[ItemResponse.model_validate(item) for item in items],
@@ -418,11 +418,11 @@ async def apply_catalog_batch(
     overall_status = "applied" if summary["error"] == 0 else "failed"
     
     logger.info(
-        "request_id=%s apply_catalog_batch status=%s summary=%s user_id=%s",
-        get_request_id(request),
-        overall_status,
-        summary,
-        identity.user_id,
+        "apply_catalog_batch",
+        request_id=get_request_id(request),
+        status=overall_status,
+        summary=summary,
+        user_id=identity.user_id,
     )
     
     return CatalogBatchResponse(
