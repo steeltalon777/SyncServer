@@ -380,8 +380,12 @@ class BatchChangeUpdatePayload(BaseModel):
     """Payload for update action (common fields)."""
     sku: str | None = Field(default=None, max_length=100)
     name: str | None = Field(default=None, min_length=1, max_length=255)
+    symbol: str | None = Field(default=None, min_length=1, max_length=20)
+    code: str | None = Field(default=None, max_length=100)
     category_id: int | None = None
+    parent_id: int | None = None
     unit_id: int | None = None
+    sort_order: int | None = None
     description: str | None = None
     hashtags: list[str] | None = None
     is_active: bool | None = None

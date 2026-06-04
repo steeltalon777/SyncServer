@@ -647,7 +647,13 @@ class CatalogAdminService:
             elif isinstance(change, BatchChangeUpdate):
                 payload = change.payload
                 if isinstance(payload, BatchChangeUpdatePayload) and change.entity_id:
-                    unit = await self.update_unit(uow, change.entity_id, payload, updated_by_user_id=user_id)
+                    unit_payload = UnitUpdateRequest(
+                        name=payload.name,
+                        symbol=payload.symbol,
+                        sort_order=payload.sort_order,
+                        is_active=payload.is_active,
+                    )
+                    unit = await self.update_unit(uow, change.entity_id, unit_payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="unit",
@@ -657,8 +663,8 @@ class CatalogAdminService:
                     )
             elif isinstance(change, BatchChangeDeactivate):
                 if change.entity_id:
-                    payload = UnitUpdateRequest(is_active=False)
-                    unit = await self.update_unit(uow, change.entity_id, payload, updated_by_user_id=user_id)
+                    unit_payload = UnitUpdateRequest(is_active=False)
+                    unit = await self.update_unit(uow, change.entity_id, unit_payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="unit",
@@ -730,7 +736,14 @@ class CatalogAdminService:
             elif isinstance(change, BatchChangeUpdate):
                 payload = change.payload
                 if isinstance(payload, BatchChangeUpdatePayload) and change.entity_id:
-                    category = await self.update_category(uow, change.entity_id, payload, updated_by_user_id=user_id)
+                    category_payload = CategoryUpdateRequest(
+                        name=payload.name,
+                        code=payload.code,
+                        parent_id=payload.parent_id,
+                        sort_order=payload.sort_order,
+                        is_active=payload.is_active,
+                    )
+                    category = await self.update_category(uow, change.entity_id, category_payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="category",
@@ -740,8 +753,8 @@ class CatalogAdminService:
                     )
             elif isinstance(change, BatchChangeDeactivate):
                 if change.entity_id:
-                    payload = CategoryUpdateRequest(is_active=False)
-                    category = await self.update_category(uow, change.entity_id, payload, updated_by_user_id=user_id)
+                    category_payload = CategoryUpdateRequest(is_active=False)
+                    category = await self.update_category(uow, change.entity_id, category_payload, updated_by_user_id=user_id)
                     return BatchChangeResult(
                         local_id=change.local_id,
                         entity_type="category",
