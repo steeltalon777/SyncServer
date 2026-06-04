@@ -8,7 +8,6 @@ from uuid import UUID
 from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
 from app.models.category import Category
 from app.models.item import Item
-from app.repos.issue_objects_repo import normalize_issue_object_name
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
 from app.services.document_service import DocumentService
@@ -75,6 +74,23 @@ class OperationsService:
     ) -> None:
         balance = await uow.balances.get_for_update(
             site_id=site_id,
+            inventory_subject_id=inventory_subject_id,
+        )
+        current_qty = balance.qty if balance is not None else Decimal("0")
+        if current_qty < required_qty:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=error_message)
+
+    @staticmethod
+    async def _ensure_sufficient_issued_balance(
+        uow: UnitOfWork,
+        *,
+        issue_object_id: int,
+        inventory_subject_id: int,
+        required_qty: Decimal,
+        error_message: str,
+    ) -> None:
+        balance = await uow.asset_registers.get_issued_balance(
+            issue_object_id=issue_object_id,
             inventory_subject_id=inventory_subject_id,
         )
         current_qty = balance.qty if balance is not None else Decimal("0")
@@ -244,7 +260,6 @@ class OperationsService:
         issue_object_name_snapshot: str | None,
         issued_to_name: str | None,
     ) -> tuple[int | None, str | None]:
-        # For WRITE_OFF with issue_object_id: validate existence but do not auto-create
         if operation_type == "WRITE_OFF":
             if issue_object_id is not None:
                 issue_object = await uow.issue_objects.get_by_id(issue_object_id)
@@ -253,33 +268,18 @@ class OperationsService:
                 return issue_object.id, issue_object.display_name
             return None, None
 
-        if operation_type not in ISSUE_OPERATION_TYPES:
-            return issue_object_id, issue_object_name_snapshot
-
-        if issue_object_id is not None:
+        if operation_type in ISSUE_OPERATION_TYPES:
+            if issue_object_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="ISSUE and ISSUE_RETURN require issue_object_id (free-text names not accepted)",
+                )
             issue_object = await uow.issue_objects.get_by_id(issue_object_id)
             if issue_object is None or issue_object.merged_into_id is not None or not issue_object.is_active:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="issue_object not found")
             return issue_object.id, issue_object.display_name
 
-        candidate_name = issue_object_name_snapshot or issued_to_name
-        if candidate_name is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="ISSUE and ISSUE_RETURN require issue_object_id or issue_object_name",
-            )
-        normalized = normalize_issue_object_name(candidate_name)
-        if not normalized:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="issue_object_name is empty after normalization",
-            )
-
-        issue_object = await uow.issue_objects.get_or_create_by_name(
-            display_name=candidate_name,
-            object_type="person",
-        )
-        return issue_object.id, issue_object.display_name
+        return issue_object_id, issue_object_name_snapshot
 
     @staticmethod
     def _destination_site_for_acceptance(operation) -> int:
@@ -608,7 +608,19 @@ class OperationsService:
                     )
                 if line.item_id is None:
                     raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="item_id is required")
-                await OperationsService._ensure_item_usable(uow, line.item_id)
+                item = await OperationsService._ensure_item_usable(uow, line.item_id)
+                unit = await uow.catalog.get_unit_by_id(item.unit_id)
+                if not unit:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"unit with id {item.unit_id} not found",
+                    )
+                category = await uow.catalog.get_category_by_id(item.category_id)
+                if not category:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"category with id {item.category_id} not found",
+                    )
                 line_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=line.item_id)
                 await uow.operations.create_operation_line(
                     operation_id=operation_id,
@@ -737,7 +749,17 @@ class OperationsService:
                         quantity_delta=quantity,
                     )
             elif operation.operation_type == "WRITE_OFF" and operation.issue_object_id is not None:
-                # Object write-off: decrement issued register, do NOT touch warehouse balance
+                # Object write-off: validate issued balance, then decrement issued register
+                await OperationsService._ensure_sufficient_issued_balance(
+                    uow,
+                    issue_object_id=operation.issue_object_id,
+                    inventory_subject_id=line.inventory_subject_id,
+                    required_qty=quantity,
+                    error_message=(
+                        f"insufficient issued balance for WRITE_OFF: "
+                        f"issue_object={operation.issue_object_id}, inventory_subject={line.inventory_subject_id}, required={line.qty}"
+                    ),
+                )
                 await OperationsService._upsert_issued(
                     uow,
                     issue_object_id=operation.issue_object_id,
@@ -851,6 +873,16 @@ class OperationsService:
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         detail="ISSUE_RETURN requires issue_object_id",
                     )
+                await OperationsService._ensure_sufficient_issued_balance(
+                    uow,
+                    issue_object_id=operation.issue_object_id,
+                    inventory_subject_id=line.inventory_subject_id,
+                    required_qty=quantity,
+                    error_message=(
+                        f"insufficient issued balance for ISSUE_RETURN: "
+                        f"issue_object={operation.issue_object_id}, inventory_subject={line.inventory_subject_id}, required={line.qty}"
+                    ),
+                )
                 await OperationsService._upsert_issued(
                     uow,
                     issue_object_id=operation.issue_object_id,

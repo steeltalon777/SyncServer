@@ -22,7 +22,7 @@ def _base_payload(operation_type: str, qty: int) -> dict:
         payload["source_site_id"] = 1
         payload["destination_site_id"] = 2
     if operation_type in {"ISSUE", "ISSUE_RETURN"}:
-        payload["recipient_name"] = "Worker One"
+        payload["issue_object_id"] = 77
     return payload
 
 

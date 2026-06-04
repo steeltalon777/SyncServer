@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationInfo, computed_field, field_validator, model_validator
 
 from app.schemas.common import ORMBaseModel
 from app.schemas.temporary_item import TemporaryItemInlineCreate
@@ -104,9 +104,8 @@ class OperationCreate(BaseModel):
             return lines
         if operation_type in {"ISSUE", "ISSUE_RETURN"}:
             issue_object_id = info.data.get("issue_object_id")
-            issue_object_name = info.data.get("issue_object_name_snapshot") or info.data.get("issued_to_name")
-            if issue_object_id is None and not issue_object_name:
-                raise ValueError("ISSUE and ISSUE_RETURN require issue_object_id or issue_object_name")
+            if issue_object_id is None:
+                raise ValueError("ISSUE and ISSUE_RETURN require issue_object_id (free-text names not accepted)")
         for line in lines:
             if line.qty <= 0:
                 raise ValueError(f"{operation_type} operations require positive qty values")
@@ -222,6 +221,14 @@ class OperationResponse(ORMBaseModel):
     issued_to_name: str | None = None
     issue_object_id: int | None = None
     issue_object_name_snapshot: str | None = None
+
+    @computed_field
+    @property
+    def write_off_source(self) -> Literal["warehouse", "issue_object"] | None:
+        if self.operation_type == "WRITE_OFF":
+            return "issue_object" if self.issue_object_id is not None else "warehouse"
+        return None
+
     acceptance_required: bool = False
     acceptance_state: AcceptanceState = "not_required"
     acceptance_resolved_at: datetime | None = None
@@ -252,6 +259,7 @@ class OperationFilter(BaseModel):
     site_id: int | None = None
     operation_type: OperationType | None = Field(default=None, validation_alias=AliasChoices("operation_type", "type"))
     status: OperationStatus | None = None
+    acceptance_state: AcceptanceState | None = None
     item_ids: list[int] | None = None
     created_by_user_id: UUID | None = None
     effective_after: datetime | None = None
