@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.issue_object import IssueObject
 from app.models.issue_object_category import IssueObjectCategory
 
+_UNSET = object()
+
 _NON_WORD_RE = re.compile(r"[^\w\s]+", flags=re.UNICODE)
 _SPACES_RE = re.compile(r"\s+", flags=re.UNICODE)
 
@@ -107,7 +109,7 @@ class IssueObjectCategoriesRepo:
         *,
         name: str | None = None,
         normalized_key: str | None = None,
-        parent_id: int | None = None,
+        parent_id: object = _UNSET,
         sort_order: int | None = None,
         is_active: bool | None = None,
     ) -> IssueObjectCategory:
@@ -122,8 +124,8 @@ class IssueObjectCategoriesRepo:
                 category.normalized_key = normalized_key
             else:
                 category.normalized_key = normalize_category_name(name)
-        if parent_id is not None:
-            category.parent_id = parent_id
+        if parent_id is not _UNSET:
+            category.parent_id = parent_id  # type: ignore[assignment]
         if sort_order is not None:
             category.sort_order = sort_order
         if is_active is not None:

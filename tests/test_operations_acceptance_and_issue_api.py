@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import get_db
 from app.models.category import Category
+from app.models.issue_object import IssueObject
+from app.models.issue_object_category import IssueObjectCategory
 from app.models.item import Item
 from app.models.site import Site
 from app.models.unit import Unit
@@ -142,6 +144,30 @@ async def _seed_fixture(session_factory: async_sessionmaker[AsyncSession]) -> di
             is_active=True,
         )
         session.add(item)
+        await session.flush()
+
+        import re
+        _non_word_re = re.compile(r"[^\w\s]+", flags=re.UNICODE)
+        _spaces_re = re.compile(r"\s+", flags=re.UNICODE)
+        def _normalize(value: str) -> str:
+            return _spaces_re.sub(" ", _non_word_re.sub(" ", (value or "").strip().lower().replace("ё", "е"))).strip()
+
+        io_cat = IssueObjectCategory(
+            name=f"People {suffix}",
+            normalized_key=_normalize(f"People {suffix}"),
+            sort_order=0, is_active=True,
+        )
+        session.add(io_cat)
+        await session.flush()
+
+        issue_object = IssueObject(
+            display_name=f"Employee-{suffix}",
+            normalized_key=_normalize(f"Employee-{suffix}"),
+            object_type="person",
+            is_active=True,
+            category_id=io_cat.id,
+        )
+        session.add(issue_object)
         await session.commit()
 
         return {
@@ -151,6 +177,7 @@ async def _seed_fixture(session_factory: async_sessionmaker[AsyncSession]) -> di
             "item_name": item.name,
             "item_sku": item.sku,
             "item_hashtag": "shared-search-tag",
+            "issue_object_id": issue_object.id,
             "chief_token": str(chief.user_token),
             "sender_token": str(sender.user_token),
             "receiver_token": str(receiver.user_token),
@@ -198,6 +225,88 @@ async def test_list_operations_search_matches_item_name_sku_and_hashtag(
     assert item_ids_response.status_code == 200
     assert item_ids_response.json()["total_count"] == 1
     assert item_ids_response.json()["items"][0]["id"] == operation_id
+
+
+@pytest.mark.asyncio
+async def test_patch_operation_lines_persists_catalog_snapshots(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_fixture(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["source_site_id"],
+            "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 2}],
+        },
+    )
+    assert create_response.status_code == 200
+    operation_id = create_response.json()["id"]
+
+    update_response = await client.patch(
+        f"/api/v1/operations/{operation_id}",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={
+            "notes": "long draft edit",
+            "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 3}],
+        },
+    )
+    assert update_response.status_code == 200
+    updated_line = update_response.json()["lines"][0]
+    assert updated_line["item_name_snapshot"] == seed["item_name"]
+    assert updated_line["item_sku_snapshot"] == seed["item_sku"]
+    assert updated_line["unit_symbol_snapshot"]
+    assert updated_line["category_name_snapshot"]
+
+    detail_response = await client.get(
+        f"/api/v1/operations/{operation_id}",
+        headers={"X-User-Token": seed["sender_token"]},
+    )
+    assert detail_response.status_code == 200
+    detail_line = detail_response.json()["lines"][0]
+    assert detail_line["item_name_snapshot"] == seed["item_name"]
+    assert detail_line["item_sku_snapshot"] == seed["item_sku"]
+
+
+@pytest.mark.asyncio
+async def test_list_operations_filters_by_acceptance_state(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_fixture(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["source_site_id"],
+            "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 2}],
+        },
+    )
+    assert create_response.status_code == 200
+    operation_id = create_response.json()["id"]
+
+    submit_response = await client.post(
+        f"/api/v1/operations/{operation_id}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+    assert submit_response.json()["status"] == "submitted"
+    assert submit_response.json()["acceptance_state"] == "pending"
+
+    list_response = await client.get(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        params={"status": "submitted", "acceptance_state": "pending"},
+    )
+    assert list_response.status_code == 200
+    assert list_response.json()["total_count"] == 1
+    assert list_response.json()["items"][0]["id"] == operation_id
 
 
 @pytest.mark.asyncio
@@ -451,13 +560,13 @@ async def test_issue_and_return_moves_stock_to_issue_object_register(
         json={
             "operation_type": "ISSUE",
             "site_id": seed["source_site_id"],
-            "recipient_name": "Employee A",  # backward compat alias
+            "issue_object_id": seed["issue_object_id"],
             "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 3}],
         },
     )
     assert issue_response.status_code == 200
     issue_id = issue_response.json()["id"]
-    issue_object_id = issue_response.json()["issue_object_id"]
+    issue_object_id = seed["issue_object_id"]
 
     submit_issue = await client.post(
         f"/api/v1/operations/{issue_id}/submit",

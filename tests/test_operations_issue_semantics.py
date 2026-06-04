@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.db import get_db
 from app.models.category import Category
 from app.models.issue_object import IssueObject
+from app.models.issue_object_category import IssueObjectCategory
 from app.models.item import Item
 from app.models.site import Site
 from app.models.unit import Unit
@@ -107,15 +108,25 @@ async def _seed_fixture(session_factory: async_sessionmaker[AsyncSession]) -> di
         _spaces_re = re.compile(r"\s+", flags=re.UNICODE)
         def _norm(v): return _spaces_re.sub(" ", _non_word_re.sub(" ", (v or "").strip().lower().replace("ё", "е"))).strip()
 
+        io_cat = IssueObjectCategory(
+            name=f"People {suffix}",
+            normalized_key=_norm(f"People {suffix}"),
+            sort_order=0, is_active=True,
+        )
+        session.add(io_cat)
+        await session.flush()
+
         obj_a = IssueObject(
             display_name=f"Employee-A-{suffix}",
             normalized_key=_norm(f"Employee-A-{suffix}"),
             object_type="person", is_active=True,
+            category_id=io_cat.id,
         )
         obj_b = IssueObject(
             display_name=f"Employee-B-{suffix}",
             normalized_key=_norm(f"Employee-B-{suffix}"),
             object_type="person", is_active=True,
+            category_id=io_cat.id,
         )
         session.add_all([obj_a, obj_b])
         await session.commit()

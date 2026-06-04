@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
@@ -18,6 +19,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 
+if TYPE_CHECKING:
+    from app.models.issue_object_category import IssueObjectCategory
+
 
 class IssueObject(Base):
     __tablename__ = "issue_objects"
@@ -32,6 +36,10 @@ class IssueObject(Base):
     )
     code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     normalized_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    comment: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
+    category_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("issue_object_categories.id"), nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -63,6 +71,10 @@ class IssueObject(Base):
         cascade="all, delete-orphan",
     )
 
+    category: Mapped[IssueObjectCategory | None] = relationship(
+        "IssueObjectCategory", back_populates="issue_objects"
+    )
+
     __table_args__ = (
         CheckConstraint(
             "object_type IN ('person', 'base', 'vehicle', 'department', 'contractor', 'other_object', 'system_repo')",
@@ -70,6 +82,7 @@ class IssueObject(Base):
         ),
         Index("ix_issue_objects_display_name", "display_name"),
         Index("ix_issue_objects_deleted_at", "deleted_at"),
+        Index("ix_issue_objects_category_id", "category_id"),
     )
 
 

@@ -59,6 +59,13 @@ from app.schemas.issue_object import (
     IssueObjectResponse,
     IssueObjectUpdate,
 )
+from app.schemas.issue_object_category import (
+    IssueObjectCategoryCreate,
+    IssueObjectCategoryListResponse,
+    IssueObjectCategoryResponse,
+    IssueObjectCategoryUpdate,
+    TreeResponse,
+)
 from app.schemas.catalog import (
     CatalogCategoriesResponse,
     CatalogItemsResponse,
@@ -178,6 +185,11 @@ __all__ = [
     "IssueObjectListResponse",
     "IssueObjectFilter",
     "IssueObjectMerge",
+    "IssueObjectCategoryCreate",
+    "IssueObjectCategoryUpdate",
+    "IssueObjectCategoryResponse",
+    "IssueObjectCategoryListResponse",
+    "TreeResponse",
     "OperationAcceptLinePayload",
     "OperationAcceptLinesRequest",
     "SiteCreate",

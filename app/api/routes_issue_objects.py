@@ -293,6 +293,7 @@ async def update_category(
             parent_id=payload.parent_id,
             sort_order=payload.sort_order,
             is_active=payload.is_active,
+            fields_set=payload.model_fields_set,
         )
     return IssueObjectCategoryResponse.model_validate(category)
 

@@ -223,6 +223,7 @@ class IssueObjectCategoriesService:
         parent_id: int | None = None,
         sort_order: int | None = None,
         is_active: bool | None = None,
+        fields_set: set[str] | None = None,
     ) -> IssueObjectCategory:
         category = await self.get_category(uow, category_id)
 
@@ -232,41 +233,55 @@ class IssueObjectCategoriesService:
                 detail="cannot update deleted category",
             )
 
-        if parent_id is not None:
-            if parent_id == category_id:
+        parent_id_changed = fields_set is not None and "parent_id" in fields_set
+        effective_parent_id = category.parent_id
+
+        if parent_id_changed:
+            effective_parent_id = parent_id  # may be None for root
+            if effective_parent_id is not None:
+                if effective_parent_id == category_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="category cannot be its own parent",
+                    )
+                await self._check_cycle(uow, category_id, effective_parent_id)
+                parent = await uow.issue_object_categories.get_by_id(effective_parent_id)
+                if parent is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"parent_id {effective_parent_id} not found",
+                    )
+
+        effective_normalized_key = category.normalized_key
+        if name is not None:
+            effective_normalized_key = normalize_category_name(name)
+            if not effective_normalized_key:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="category cannot be its own parent",
-                )
-            await self._check_cycle(uow, category_id, parent_id)
-            parent = await uow.issue_object_categories.get_by_id(parent_id)
-            if parent is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"parent_id {parent_id} not found",
+                    detail="category name is empty after normalization",
                 )
 
-        if name is not None:
-            new_normalized = normalize_category_name(name)
-            effective_parent = parent_id if parent_id is not None else category.parent_id
+        if name is not None or parent_id_changed:
             existing = await uow.issue_object_categories.get_by_parent_and_normalized_key(
-                effective_parent, new_normalized,
+                effective_parent_id, effective_normalized_key,
             )
             if existing is not None and existing.id != category_id:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"category with name '{name}' already exists under this parent",
+                    detail=f"category with name '{name or category.name}' already exists under this parent",
                 )
 
         try:
-            updated = await uow.issue_object_categories.update_category(
+            update_kwargs: dict[str, object] = dict(
                 category_id=category_id,
                 name=name,
                 normalized_key=normalize_category_name(name) if name else None,
-                parent_id=parent_id,
                 sort_order=sort_order,
                 is_active=is_active,
             )
+            if parent_id_changed:
+                update_kwargs["parent_id"] = effective_parent_id
+            updated = await uow.issue_object_categories.update_category(**update_kwargs)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
         return updated

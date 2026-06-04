@@ -3,6 +3,7 @@ from app.repos.balances_repo import BalancesRepo
 from app.repos.catalog_repo import CatalogRepo
 from app.repos.devices_repo import DevicesRepo
 from app.repos.events_repo import EventsRepo
+from app.repos.issue_object_categories_repo import IssueObjectCategoriesRepo
 from app.repos.issue_objects_repo import IssueObjectsRepo
 from app.repos.machine_repo import MachineRepo
 from app.repos.operations_repo import OperationsRepo
@@ -20,6 +21,7 @@ __all__ = [
     "AssetRegistersRepo",
     "UserAccessScopesRepo",
     "UsersRepo",
+    "IssueObjectCategoriesRepo",
     "IssueObjectsRepo",
     "OperationsRepo",
     "ReportsRepo",

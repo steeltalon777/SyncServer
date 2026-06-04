@@ -11,6 +11,7 @@ from app.repos.events_repo import EventsRepo
 from app.repos.inventory_subjects_repo import InventorySubjectsRepo
 from app.repos.machine_repo import MachineRepo
 from app.repos.operations_repo import OperationsRepo
+from app.repos.issue_object_categories_repo import IssueObjectCategoriesRepo
 from app.repos.issue_objects_repo import IssueObjectsRepo
 from app.repos.reports_repo import ReportsRepo
 from app.repos.sites_repo import SitesRepo
@@ -35,6 +36,7 @@ class UnitOfWork:
         self.user_access_scopes = UserAccessScopesRepo(session)
         self.operations = OperationsRepo(session)
         self.issue_objects = IssueObjectsRepo(session)
+        self.issue_object_categories = IssueObjectCategoriesRepo(session)
         self.reports = ReportsRepo(session)
         self.machine = MachineRepo(session)
         self.users = UsersRepo(session)
