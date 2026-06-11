@@ -62,12 +62,47 @@ class OperationsPolicy:
             )
 
     @staticmethod
-    def require_operation_submit_permission(identity: Identity) -> None:
+    def require_operation_submit_permission(identity: Identity, operation) -> None:
+        """
+        Check submit permission for an operation.
+
+        - root / chief_storekeeper: global submit access (any site, any type).
+        - storekeeper: submit allowed when the operation involves a site
+          where the storekeeper has operate scope:
+            * MOVE: source_site_id OR destination_site_id must be in scope
+            * RECEIVE, EXPENSE, WRITE_OFF, ADJUSTMENT, ISSUE, ISSUE_RETURN:
+              site_id must be in scope
+        - observer and others: forbidden.
+        """
         if identity.has_global_business_access:
             return
+
+        if identity.role != "storekeeper":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only storekeeper, chief_storekeeper, or root may submit operations",
+            )
+
+        op_type = operation.operation_type
+        site_id = operation.site_id
+
+        if op_type == "MOVE":
+            source_in_scope = (
+                operation.source_site_id is not None
+                and identity.can_operate_at_site(operation.source_site_id)
+            )
+            dest_in_scope = (
+                operation.destination_site_id is not None
+                and identity.can_operate_at_site(operation.destination_site_id)
+            )
+            if source_in_scope or dest_in_scope:
+                return
+        elif identity.can_operate_at_site(site_id):
+            return
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="only chief_storekeeper or root may submit operations",
+            detail="user has no submit permission for this operation site",
         )
 
     @staticmethod

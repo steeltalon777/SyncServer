@@ -39,10 +39,22 @@ def _scope(site_id: int, *, can_view: bool = True, can_operate: bool = True) -> 
     )
 
 
-def _operation(created_by_user_id, *, status: str = "draft"):
+def _operation(
+    created_by_user_id,
+    *,
+    status: str = "draft",
+    operation_type: str = "RECEIVE",
+    site_id: int = 10,
+    source_site_id: int | None = None,
+    destination_site_id: int | None = None,
+):
     return SimpleNamespace(
         created_by_user_id=created_by_user_id,
         status=status,
+        operation_type=operation_type,
+        site_id=site_id,
+        source_site_id=source_site_id,
+        destination_site_id=destination_site_id,
     )
 
 
@@ -54,18 +66,95 @@ def test_storekeeper_can_create_operation_on_scoped_site() -> None:
 
 def test_chief_storekeeper_has_global_operational_access() -> None:
     identity = _identity(role="chief_storekeeper")
+    op = _operation(identity.user_id, site_id=999)
 
     OperationsPolicy.require_operate_site(identity, 999)
-    OperationsPolicy.require_operation_submit_permission(identity)
+    OperationsPolicy.require_operation_submit_permission(identity, op)
 
 
-def test_storekeeper_cannot_submit_operations() -> None:
-    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+class TestStorekeeperSubmitPermissions:
+    """Storekeeper may submit operations only on sites in their operate scope."""
 
-    with pytest.raises(HTTPException) as exc:
-        OperationsPolicy.require_operation_submit_permission(identity)
+    def test_can_submit_receive_on_scoped_site(self) -> None:
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(identity.user_id, operation_type="RECEIVE", site_id=10)
+        OperationsPolicy.require_operation_submit_permission(identity, op)
 
-    assert exc.value.status_code == 403
+    def test_can_submit_expense_on_scoped_site(self) -> None:
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(identity.user_id, operation_type="EXPENSE", site_id=10)
+        OperationsPolicy.require_operation_submit_permission(identity, op)
+
+    def test_can_submit_write_off_on_scoped_site(self) -> None:
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(identity.user_id, operation_type="WRITE_OFF", site_id=10)
+        OperationsPolicy.require_operation_submit_permission(identity, op)
+
+    def test_can_submit_adjustment_on_scoped_site(self) -> None:
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(identity.user_id, operation_type="ADJUSTMENT", site_id=10)
+        OperationsPolicy.require_operation_submit_permission(identity, op)
+
+    def test_can_submit_issue_on_scoped_site(self) -> None:
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(identity.user_id, operation_type="ISSUE", site_id=10)
+        OperationsPolicy.require_operation_submit_permission(identity, op)
+
+    def test_can_submit_issue_return_on_scoped_site(self) -> None:
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(identity.user_id, operation_type="ISSUE_RETURN", site_id=10)
+        OperationsPolicy.require_operation_submit_permission(identity, op)
+
+    def test_can_submit_move_from_scoped_site(self) -> None:
+        """Storekeeper may submit MOVE where they are the source."""
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(
+            identity.user_id,
+            operation_type="MOVE",
+            site_id=10,
+            source_site_id=10,
+            destination_site_id=99,
+        )
+        OperationsPolicy.require_operation_submit_permission(identity, op)
+
+    def test_can_submit_move_to_scoped_site(self) -> None:
+        """Storekeeper may submit MOVE where they are the destination."""
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(
+            identity.user_id,
+            operation_type="MOVE",
+            site_id=99,
+            source_site_id=99,
+            destination_site_id=10,
+        )
+        OperationsPolicy.require_operation_submit_permission(identity, op)
+
+    def test_cannot_submit_on_unscoped_site(self) -> None:
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(identity.user_id, operation_type="RECEIVE", site_id=99)
+        with pytest.raises(HTTPException) as exc:
+            OperationsPolicy.require_operation_submit_permission(identity, op)
+        assert exc.value.status_code == 403
+
+    def test_cannot_submit_move_without_scope(self) -> None:
+        identity = _identity(role="storekeeper", scopes=[_scope(10)])
+        op = _operation(
+            identity.user_id,
+            operation_type="MOVE",
+            site_id=99,
+            source_site_id=99,
+            destination_site_id=88,
+        )
+        with pytest.raises(HTTPException) as exc:
+            OperationsPolicy.require_operation_submit_permission(identity, op)
+        assert exc.value.status_code == 403
+
+    def test_observer_cannot_submit(self) -> None:
+        identity = _identity(role="observer", scopes=[_scope(10, can_operate=False)])
+        op = _operation(identity.user_id, operation_type="RECEIVE", site_id=10)
+        with pytest.raises(HTTPException) as exc:
+            OperationsPolicy.require_operation_submit_permission(identity, op)
+        assert exc.value.status_code == 403
 
 
 def test_storekeeper_cannot_change_operation_effective_at() -> None:

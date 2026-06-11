@@ -66,6 +66,7 @@ async def list_operations(
     updated_before: datetime | None = Query(None),
     search: str | None = Query(None),
     item_ids: str | None = Query(None),
+    exclude_adjustments: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
 ) -> OperationListResponse:
@@ -106,6 +107,7 @@ async def list_operations(
             page=page,
             page_size=page_size,
             exclude_cancelled=exclude_cancelled,
+            exclude_adjustments=exclude_adjustments and operation_type is None,
         )
 
     return OperationListResponse(
@@ -254,7 +256,7 @@ async def submit_operation(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
         OperationsPolicy.require_operate_site(identity, operation.site_id)
-        OperationsPolicy.require_operation_submit_permission(identity)
+        OperationsPolicy.require_operation_submit_permission(identity, operation)
         if operation.operation_type == "MOVE":
             OperationsPolicy.require_move_access(identity, operation.source_site_id, operation.destination_site_id)
 
