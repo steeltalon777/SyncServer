@@ -269,6 +269,21 @@ class ItemResponse(ORMBaseModel):
     updated_by_user_id: UUID | None = None
 
 
+# ─── Merge Schemas ────────────────────────────────────────────────
+
+
+class ItemMergeRequest(BaseModel):
+    source_item_id: int
+    target_item_id: int
+    comment: str | None = None
+
+
+class CategoryMergeRequest(BaseModel):
+    source_category_id: int
+    target_category_id: int
+    comment: str | None = None
+
+
 class CatalogSiteDto(ORMBaseModel):
     site_id: int
     code: str

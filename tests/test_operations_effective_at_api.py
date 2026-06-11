@@ -146,6 +146,29 @@ async def test_create_operation_sets_default_effective_at(
 
 
 @pytest.mark.asyncio
+async def test_create_operation_accepts_explicit_effective_at(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_fixture(session_factory)
+    effective_at = datetime(2026, 1, 19, 8, 15, tzinfo=timezone.utc)
+
+    response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "effective_at": effective_at.isoformat(),
+            "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 5}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert datetime.fromisoformat(response.json()["effective_at"]) == effective_at
+
+
+@pytest.mark.asyncio
 async def test_general_patch_rejects_effective_at_changes(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
@@ -169,7 +192,7 @@ async def test_general_patch_rejects_effective_at_changes(
 
 
 @pytest.mark.asyncio
-async def test_storekeeper_cannot_use_effective_at_endpoint(
+async def test_storekeeper_can_change_effective_at_for_own_draft(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -181,6 +204,37 @@ async def test_storekeeper_cannot_use_effective_at_endpoint(
         item_id=seed["item_id"],
     )
 
+    new_effective_at = datetime(2026, 1, 21, 10, 30, tzinfo=timezone.utc)
+    response = await client.patch(
+        f"/api/v1/operations/{operation['id']}/effective-at",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={"effective_at": new_effective_at.isoformat()},
+    )
+
+    assert response.status_code == 200
+    assert datetime.fromisoformat(response.json()["effective_at"]) == new_effective_at
+
+
+@pytest.mark.asyncio
+async def test_storekeeper_cannot_change_effective_at_after_submit(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_fixture(session_factory)
+    operation = await _create_operation(
+        client,
+        token=seed["storekeeper_token"],
+        site_id=seed["site_id"],
+        item_id=seed["item_id"],
+    )
+
+    submit_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+
     response = await client.patch(
         f"/api/v1/operations/{operation['id']}/effective-at",
         headers={"X-User-Token": seed["storekeeper_token"]},
@@ -188,7 +242,7 @@ async def test_storekeeper_cannot_use_effective_at_endpoint(
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "only chief_storekeeper or root may change operation effective_at"
+    assert response.json()["detail"] == "only chief_storekeeper, root, or draft creator may change operation effective_at"
 
 
 @pytest.mark.asyncio

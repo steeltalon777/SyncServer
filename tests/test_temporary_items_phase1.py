@@ -877,3 +877,386 @@ async def test_idempotent_create_with_temporary_lines(
     )
     assert second.status_code == 200
     assert second.json()["id"] == first_id
+
+
+# =============================================================================
+# 9. PATCH draft — inline temporary lines support
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_patch_draft_with_temporary_line(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """PATCH draft с inline временной строкой создаёт/заменяет строки корректно."""
+    seed = await _seed(session_factory)
+
+    # Создаём draft с каталожной строкой
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "patch-draft-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 1,
+                    "item_id": seed["catalog_item_id"],
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+
+    # PATCH — добавляем inline строку
+    patch_response = await client.patch(
+        f"/api/v1/operations/{operation['id']}",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 2,
+                    "item_id": seed["catalog_item_id"],
+                },
+                {
+                    "line_number": 2,
+                    "qty": 3,
+                    "temporary_item": {
+                        "client_key": "patch-tmp-1",
+                        "name": "Временный из patch",
+                        "sku": "PATCH-001",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+            ],
+        },
+    )
+    assert patch_response.status_code == 200
+    body = patch_response.json()
+    assert len(body["lines"]) == 2
+    # Каталожная строка
+    assert body["lines"][0]["item_id"] == seed["catalog_item_id"]
+    assert body["lines"][0]["is_draft_temporary"] is False
+    # Inline строка
+    assert body["lines"][1]["item_id"] is None
+    assert body["lines"][1]["inventory_subject_id"] is None
+    assert body["lines"][1]["is_draft_temporary"] is True
+    assert body["lines"][1]["item_name_snapshot"] == "Временный из patch"
+    assert body["lines"][1]["item_sku_snapshot"] == "PATCH-001"
+    assert body["lines"][1]["temporary_draft_payload"] is not None
+    assert body["lines"][1]["temporary_draft_payload"]["client_key"] == "patch-tmp-1"
+    assert body["lines"][1]["temporary_draft_payload"]["name"] == "Временный из patch"
+
+    # Проверяем в БД
+    async with session_factory() as session:
+        lines = list((await session.execute(select(OperationLine).order_by(OperationLine.line_number))).scalars().all())
+        assert len(lines) == 2
+        assert lines[1].temporary_draft_payload is not None
+        assert lines[1].temporary_draft_payload["client_key"] == "patch-tmp-1"
+        assert lines[1].item_id is None
+        assert lines[1].inventory_subject_id is None
+
+        # Review item не создан
+        review_items = list(
+            (
+                await session.execute(
+                    select(Item).where(Item.requires_review.is_(True))
+                )
+            ).scalars().all()
+        )
+        assert len(review_items) == 0
+
+
+@pytest.mark.asyncio
+async def test_patch_draft_replacing_temporary_line(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """PATCH draft может заменить существующую inline строку на другую."""
+    seed = await _seed(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "patch-replace-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 1,
+                    "temporary_item": {
+                        "client_key": "orig-tmp",
+                        "name": "Оригинальная",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+    assert operation["lines"][0]["item_name_snapshot"] == "Оригинальная"
+
+    # Заменяем на другую inline строку
+    patch_response = await client.patch(
+        f"/api/v1/operations/{operation['id']}",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 2,
+                    "temporary_item": {
+                        "client_key": "new-tmp",
+                        "name": "Заменённая",
+                        "sku": "NEW-001",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+            ],
+        },
+    )
+    assert patch_response.status_code == 200
+    body = patch_response.json()
+    assert len(body["lines"]) == 1
+    assert body["lines"][0]["item_name_snapshot"] == "Заменённая"
+    assert body["lines"][0]["temporary_draft_payload"]["client_key"] == "new-tmp"
+    assert body["lines"][0]["temporary_draft_payload"]["sku"] == "NEW-001"
+
+
+@pytest.mark.asyncio
+async def test_reopen_detail_includes_temporary_draft_payload(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /operations/{id} возвращает safe inline payload для draft temporary строк."""
+    seed = await _seed(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "reopen-detail-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 2,
+                    "temporary_item": {
+                        "client_key": "reopen-tmp",
+                        "name": "Для переоткрытия",
+                        "sku": "REOPEN-001",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                        "description": "Тестовое описание",
+                        "hashtags": ["tag1"],
+                    },
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+
+    # Reopen через GET detail
+    detail_response = await client.get(
+        f"/api/v1/operations/{operation['id']}",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+    )
+    assert detail_response.status_code == 200
+    body = detail_response.json()
+    temp_line = body["lines"][0]
+    assert temp_line["is_draft_temporary"] is True
+    assert temp_line["temporary_draft_payload"] is not None
+    assert temp_line["temporary_draft_payload"]["client_key"] == "reopen-tmp"
+    assert temp_line["temporary_draft_payload"]["name"] == "Для переоткрытия"
+    assert temp_line["temporary_draft_payload"]["sku"] == "REOPEN-001"
+    assert temp_line["temporary_draft_payload"]["unit_id"] == seed["unit_id"]
+    assert temp_line["temporary_draft_payload"]["category_id"] == seed["category_id"]
+    assert temp_line["temporary_draft_payload"]["description"] == "Тестовое описание"
+    assert temp_line["temporary_draft_payload"]["hashtags"] == ["tag1"]
+
+
+@pytest.mark.asyncio
+async def test_patch_submitted_operation_with_temporary_line_returns_409(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """PATCH submitted операции с inline строкой должен вернуть 409 (только draft можно обновлять)."""
+    seed = await _seed(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "patch-submitted-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 1,
+                    "temporary_item": {
+                        "client_key": "sub-tmp",
+                        "name": "Для submit",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+
+    # Submit
+    submit_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/submit",
+        headers={"X-User-Token": seed["chief_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+
+    # PATCH submitted — должен вернуть 409
+    patch_response = await client.patch(
+        f"/api/v1/operations/{operation['id']}",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 1,
+                    "temporary_item": {
+                        "client_key": "sub-tmp-2",
+                        "name": "После submit",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+            ],
+        },
+    )
+    assert patch_response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_patch_draft_temporary_line_without_category_uses_uncategorized(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """PATCH draft с category_id=None для inline строки использует системную категорию."""
+    from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE
+
+    seed = await _seed(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "patch-no-cat-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 1,
+                    "item_id": seed["catalog_item_id"],
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+
+    patch_response = await client.patch(
+        f"/api/v1/operations/{operation['id']}",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 1,
+                    "temporary_item": {
+                        "client_key": "no-cat-patch",
+                        "name": "Без категории patch",
+                        "unit_id": seed["unit_id"],
+                        "category_id": None,
+                    },
+                },
+            ],
+        },
+    )
+    assert patch_response.status_code == 200
+    body = patch_response.json()
+    assert body["lines"][0]["category_name_snapshot"] == "Без категории"
+    assert body["lines"][0]["temporary_draft_payload"]["category_id"] is not None
+
+    async with session_factory() as session:
+        uncategorized = (
+            await session.execute(select(Category).where(Category.code == UNCATEGORIZED_CATEGORY_CODE))
+        ).scalar_one_or_none()
+        assert uncategorized is not None
+        line = (await session.execute(
+            select(OperationLine).where(OperationLine.operation_id == operation["id"])
+        )).scalar_one()
+        assert line.temporary_draft_payload is not None
+        assert line.temporary_draft_payload["category_id"] == uncategorized.id
+
+
+@pytest.mark.asyncio
+async def test_patch_draft_observer_blocked_for_temporary_line(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """PATCH draft с inline строкой от observer должен вернуть 403."""
+    seed = await _seed(session_factory)
+
+    create_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["storekeeper_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["site_id"],
+            "client_request_id": "patch-observer-1",
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 1,
+                    "item_id": seed["catalog_item_id"],
+                },
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    operation = create_response.json()
+
+    patch_response = await client.patch(
+        f"/api/v1/operations/{operation['id']}",
+        headers={"X-User-Token": seed["observer_token"]},
+        json={
+            "lines": [
+                {
+                    "line_number": 1,
+                    "qty": 1,
+                    "temporary_item": {
+                        "client_key": "obs-tmp",
+                        "name": "Observer temp",
+                        "unit_id": seed["unit_id"],
+                        "category_id": seed["category_id"],
+                    },
+                },
+            ],
+        },
+    )
+    assert patch_response.status_code == 403

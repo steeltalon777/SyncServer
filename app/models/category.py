@@ -52,6 +52,20 @@ class Category(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
 
+    # Merge fields
+    merged_into_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("categories.id"),
+        nullable=True,
+    )
+    merged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    merged_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True,
+    )
+    merge_comment: Mapped[str | None] = mapped_column(String, nullable=True)
+
     # Audit fields — кто создал и обновил запись
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
@@ -64,8 +78,17 @@ class Category(Base):
         nullable=True,
     )
 
-    parent = relationship("Category", remote_side="Category.id", back_populates="children")
-    children = relationship("Category", back_populates="parent")
+    parent = relationship(
+        "Category",
+        remote_side="Category.id",
+        back_populates="children",
+        foreign_keys=[parent_id],
+    )
+    children = relationship(
+        "Category",
+        back_populates="parent",
+        foreign_keys=[parent_id],
+    )
 
     __table_args__ = (
         UniqueConstraint("parent_id", "name", name="uq_categories_parent_name"),

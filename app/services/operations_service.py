@@ -600,42 +600,108 @@ class OperationsService:
 
         if update_data.lines is not None:
             await uow.operations.delete_operation_lines(operation_id)
+
+            has_temporary_items = any(line.temporary_item is not None for line in update_data.lines)
+            if has_temporary_items and operation.operation_type != "RECEIVE":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Phase 1 supports inline temporary_item creation only for RECEIVE operations",
+                )
+
+            temporary_batch: dict[str, object] = {}
             for line in update_data.lines:
                 if line.temporary_item is not None:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="temporary_item lines are not supported in PATCH /operations in Phase 1",
+                    OperationsService._ensure_temporary_payload_consistent(
+                        temporary_batch,
+                        line.temporary_item.client_key,
+                        line.temporary_item,
                     )
-                if line.item_id is None:
-                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="item_id is required")
-                item = await OperationsService._ensure_item_usable(uow, line.item_id)
-                unit = await uow.catalog.get_unit_by_id(item.unit_id)
-                if not unit:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"unit with id {item.unit_id} not found",
+                    payload = line.temporary_item
+
+                    # Resolve category
+                    if payload.category_id is None:
+                        uncategorized = await OperationsService._get_or_create_uncategorized_category(uow)
+                        category_id_value = uncategorized.id
+                        category_name = uncategorized.name
+                    else:
+                        category_id_value = payload.category_id
+                        category = await uow.catalog.get_category_by_id(category_id_value)
+                        if category is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"category with id {category_id_value} not found",
+                            )
+                        category_name = category.name
+
+                    unit = await uow.catalog.get_unit_by_id(payload.unit_id)
+                    if unit is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"unit with id {payload.unit_id} not found",
+                        )
+
+                    draft_payload = {
+                        "client_key": payload.client_key,
+                        "name": payload.name.strip(),
+                        "sku": payload.sku,
+                        "unit_id": payload.unit_id,
+                        "category_id": category_id_value,
+                        "description": payload.description,
+                        "hashtags": payload.hashtags,
+                    }
+
+                    await uow.operations.create_operation_line(
+                        operation_id=operation_id,
+                        line_number=line.line_number,
+                        inventory_subject_id=None,  # Will be set on submit
+                        item_id=None,  # Will be set on submit
+                        qty=line.qty,
+                        batch=line.batch,
+                        comment=line.comment,
+                        item_name_snapshot=payload.name.strip(),
+                        item_sku_snapshot=payload.sku,
+                        unit_name_snapshot=unit.name,
+                        unit_symbol_snapshot=unit.symbol,
+                        category_name_snapshot=category_name,
+                        temporary_draft_payload=draft_payload,
                     )
-                category = await uow.catalog.get_category_by_id(item.category_id)
-                if not category:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"category with id {item.category_id} not found",
+                else:
+                    if line.item_id is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="item_id is required",
+                        )
+                    item = await OperationsService._ensure_item_usable(uow, line.item_id)
+                    unit = await uow.catalog.get_unit_by_id(item.unit_id)
+                    if not unit:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"unit with id {item.unit_id} not found",
+                        )
+                    category = await uow.catalog.get_category_by_id(item.category_id)
+                    if not category:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"category with id {item.category_id} not found",
+                        )
+                    line_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=line.item_id)
+                    await uow.operations.create_operation_line(
+                        operation_id=operation_id,
+                        line_number=line.line_number,
+                        inventory_subject_id=line_subject.id,
+                        item_id=line.item_id,
+                        qty=line.qty,
+                        batch=line.batch,
+                        comment=line.comment,
+                        item_name_snapshot=item.name,
+                        item_sku_snapshot=item.sku,
+                        unit_name_snapshot=unit.name,
+                        unit_symbol_snapshot=unit.symbol,
+                        category_name_snapshot=category.name,
                     )
-                line_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=line.item_id)
-                await uow.operations.create_operation_line(
-                    operation_id=operation_id,
-                    line_number=line.line_number,
-                    inventory_subject_id=line_subject.id,
-                    item_id=line.item_id,
-                    qty=line.qty,
-                    batch=line.batch,
-                    comment=line.comment,
-                    item_name_snapshot=item.name,
-                    item_sku_snapshot=item.sku,
-                    unit_name_snapshot=unit.name,
-                    unit_symbol_snapshot=unit.symbol,
-                    category_name_snapshot=category.name,
-                )
+
+            # Refresh operation to avoid stale line data from identity map cache
+            await uow.session.refresh(updated)
 
         return await uow.operations.get_operation_by_id(updated.id)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationInfo, computed_field, field_validator, model_validator
@@ -30,7 +30,7 @@ class OperationLineCreate(BaseModel):
     line_number: int = Field(ge=1)
     item_id: int | None = None
     temporary_item: TemporaryItemInlineCreate | None = None
-    qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
+    qty: Decimal = Field(validation_alias=AliasChoices("qty", "quantity"))
     batch: str | None = None
     comment: str | None = None
 
@@ -189,12 +189,13 @@ class OperationLineResponse(ORMBaseModel):
     unit_name_snapshot: str | None = None
     unit_symbol_snapshot: str | None = None
     category_name_snapshot: str | None = None
-    qty: int = Field(validation_alias=AliasChoices("qty", "quantity"))
+    qty: Decimal = Field(validation_alias=AliasChoices("qty", "quantity"))
     accepted_qty: Decimal = Decimal("0")
     lost_qty: Decimal = Decimal("0")
     batch: str | None = None
     comment: str | None = Field(default=None, validation_alias=AliasChoices("comment", "notes"))
     is_draft_temporary: bool = False
+    temporary_draft_payload: dict[str, Any] | None = None
 
     @property
     def quantity(self) -> int:

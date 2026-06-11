@@ -42,6 +42,9 @@ syncserver_stderr.log
 .venv/
 test.db
 
+# Third-party AI tool configs
+continue.yaml
+
 # Generated repo maps
 repo_map.txt
 repo_map.json

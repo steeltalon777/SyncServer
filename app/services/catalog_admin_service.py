@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import inspect
 import structlog
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from app.core.catalog_defaults import (
@@ -419,6 +420,236 @@ class CatalogAdminService:
             page=page,
             page_size=page_size,
         )
+
+    # ─── Merge Operations ────────────────────────────────────────────
+
+    async def merge_items(
+        self,
+        uow: UnitOfWork,
+        *,
+        source_item_id: int,
+        target_item_id: int,
+        comment: str | None = None,
+        resolved_by_user_id: UUID,
+    ) -> Item:
+        """Merge source item into target item.
+
+        Steps:
+        1. Load source + target, validate existence and no self-merge.
+        2. Check not deleted, target is active.
+        3. Assert neither item is frozen (lost assets).
+        4. Transfer balances via ADJUSTMENT operations (write-off source, receipt target).
+        5. Update all operation lines referencing source to point to target.
+        6. Archive source inventory subject.
+        7. Deactivate source, set merge audit fields.
+        """
+        source = await uow.catalog.get_item_by_id(source_item_id)
+        if source is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source item not found")
+
+        target = await uow.catalog.get_item_by_id(target_item_id)
+        if target is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="target item not found")
+
+        if source_item_id == target_item_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="cannot merge item into itself",
+            )
+
+        if source.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source item is deleted")
+        if target.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="target item is deleted")
+        if not target.is_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="target item is not active")
+
+        await self._assert_item_not_frozen(uow, source_item_id)
+        await self._assert_item_not_frozen(uow, target_item_id)
+
+        # Get inventory subjects
+        source_subject = await uow.inventory_subjects.get_by_item_id(source_item_id)
+        target_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=target_item_id)
+
+        # Transfer balances via ADJUSTMENT operations
+        if source_subject is not None and source_subject.archived_at is None:
+            source_balances = await uow.balances.get_all_by_inventory_subject(int(source_subject.id))
+            for balance_row in source_balances:
+                qty = balance_row.qty
+                if qty == 0:
+                    continue
+
+                site_id = int(balance_row.site_id)
+                note = (
+                    f"[catalog merge] item={source_item_id} -> item={target_item_id}: "
+                    f"balance transfer site={site_id} qty={qty}"
+                )
+
+                # Write-off from source
+                write_off = await uow.operations.create_operation(
+                    site_id=site_id,
+                    operation_type="ADJUSTMENT",
+                    created_by_user_id=resolved_by_user_id,
+                    notes=note,
+                    effective_at=datetime.now(UTC),
+                )
+                await uow.operations.create_operation_line(
+                    operation_id=write_off.id,
+                    line_number=1,
+                    inventory_subject_id=int(source_subject.id),
+                    item_id=source_item_id,
+                    qty=-Decimal(str(qty)),
+                    comment=note,
+                )
+                from app.services.operations_service import OperationsService
+
+                await OperationsService.submit_operation(
+                    uow=uow,
+                    operation_id=write_off.id,
+                    user_id=resolved_by_user_id,
+                )
+
+                # Receipt to target
+                receipt_op = await uow.operations.create_operation(
+                    site_id=site_id,
+                    operation_type="ADJUSTMENT",
+                    created_by_user_id=resolved_by_user_id,
+                    notes=note,
+                    effective_at=datetime.now(UTC),
+                )
+                await uow.operations.create_operation_line(
+                    operation_id=receipt_op.id,
+                    line_number=1,
+                    inventory_subject_id=int(target_subject.id),
+                    item_id=target_item_id,
+                    qty=Decimal(str(qty)),
+                    comment=note,
+                )
+                await OperationsService.submit_operation(
+                    uow=uow,
+                    operation_id=receipt_op.id,
+                    user_id=resolved_by_user_id,
+                )
+
+        # Update operation lines: all operation_lines referencing source → target
+        from app.models.operation import OperationLine
+        from sqlalchemy import update as sa_update
+
+        await uow.session.execute(
+            sa_update(OperationLine.__table__)
+            .where(OperationLine.__table__.c.item_id == source_item_id)
+            .values(item_id=target_item_id)
+        )
+
+        # Archive source inventory subject
+        if source_subject is not None and source_subject.archived_at is None:
+            await uow.inventory_subjects.archive(int(source_subject.id))
+
+        # Deactivate source and set merge audit fields
+        now = datetime.now(UTC)
+        source.is_active = False
+        source.merged_into_id = target_item_id
+        source.merged_at = now
+        source.merged_by_user_id = resolved_by_user_id
+        source.merge_comment = comment
+
+        await uow.catalog.update_item(source)
+
+        logger.info(
+            "merge_items",
+            source_item_id=source_item_id,
+            target_item_id=target_item_id,
+            user_id=str(resolved_by_user_id),
+        )
+
+        return target
+
+    async def merge_categories(
+        self,
+        uow: UnitOfWork,
+        *,
+        source_category_id: int,
+        target_category_id: int,
+        comment: str | None = None,
+        resolved_by_user_id: UUID,
+    ) -> Category:
+        """Merge source category into target category.
+
+        Steps:
+        1. Load source + target, validate existence and no self-merge.
+        2. Check not deleted, target is active.
+        3. Check no cyclic dependency (target is not a descendant of source).
+        4. Move all items from source category to target category.
+        5. Move all subcategories from source to target.
+        6. Deactivate source, set merge audit fields.
+        """
+        source = await uow.catalog.get_category_by_id(source_category_id)
+        if source is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source category not found")
+
+        target = await uow.catalog.get_category_by_id(target_category_id)
+        if target is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="target category not found")
+
+        if source_category_id == target_category_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="cannot merge category into itself",
+            )
+
+        if source.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source category is deleted")
+        if target.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="target category is deleted")
+        if not target.is_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="target category is not active")
+
+        # Check no cyclic dependency: target must not be a descendant of source
+        ancestors = await uow.catalog.list_category_ancestors(target_category_id)
+        if source_category_id in ancestors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="target category is a descendant of source category; would create cycle",
+            )
+
+        # Move all items from source category to target category
+        from app.models.item import Item as ItemModel
+        from app.models.category import Category as CategoryModel
+        from sqlalchemy import update as sa_update
+
+        await uow.session.execute(
+            sa_update(ItemModel.__table__)
+            .where(ItemModel.__table__.c.category_id == source_category_id)
+            .where(ItemModel.__table__.c.deleted_at.is_(None))
+            .values(category_id=target_category_id)
+        )
+
+        # Move all subcategories from source to target
+        await uow.session.execute(
+            sa_update(CategoryModel.__table__)
+            .where(CategoryModel.__table__.c.parent_id == source_category_id)
+            .where(CategoryModel.__table__.c.deleted_at.is_(None))
+            .values(parent_id=target_category_id)
+        )
+
+        # Deactivate source and set merge audit fields
+        now = datetime.now(UTC)
+        source.is_active = False
+        source.merged_into_id = target_category_id
+        source.merged_at = now
+        source.merged_by_user_id = resolved_by_user_id
+        source.merge_comment = comment
+
+        await uow.catalog.update_category(source)
+
+        logger.info(
+            "merge_categories",
+            source_category_id=source_category_id,
+            target_category_id=target_category_id,
+            user_id=str(resolved_by_user_id),
+        )
+
+        return target
 
     # ─── Batch Catalog Operations ──────────────────────────────────────
 

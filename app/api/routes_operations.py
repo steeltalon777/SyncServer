@@ -191,6 +191,11 @@ async def update_operation(
             )
             OperationsPolicy.require_move_access(identity, source_site_id, destination_site_id)
 
+        if update_data.lines is not None and any(
+            line.temporary_item is not None for line in update_data.lines
+        ):
+            OperationsPolicy.require_temporary_item_create(identity)
+
         updated_operation = await OperationsService.update_operation(
             uow=uow,
             operation_id=operation_id,

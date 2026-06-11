@@ -124,12 +124,14 @@ class OperationsPolicy:
         )
 
     @staticmethod
-    def require_operation_effective_at_permission(identity: Identity) -> None:
+    def require_operation_effective_at_permission(identity: Identity, operation=None) -> None:
         if identity.has_global_business_access:
+            return
+        if operation is not None and operation.status == "draft" and operation.created_by_user_id == identity.user_id:
             return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="only chief_storekeeper or root may change operation effective_at",
+            detail="only chief_storekeeper, root, or draft creator may change operation effective_at",
         )
 
     @staticmethod

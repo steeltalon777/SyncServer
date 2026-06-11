@@ -113,6 +113,21 @@ Admin:
 - `PATCH /catalog/admin/items/{item_id}` category semantics: omitted keeps current category, `null` moves to `__UNCATEGORIZED__`
 - **Freeze rule**: `PATCH` and `DELETE` on an item return `409 Conflict` with detail `"item is frozen by active lost asset balance"` when the item has positive `lost_asset_balances.qty`. This is a server-side invariant — UI disabling is UX convenience only. The item becomes editable again after all positive lost quantities are resolved to zero (found, write-off, or return-to-source).
 
+Merge endpoints (catalog admin):
+- `POST /catalog/admin/items/merge` — merge source item into target item:
+  - Payload: `{"source_item_id": int, "target_item_id": int, "comment": str | null}`
+  - Transfers balances via ADJUSTMENT operations (write-off source, receipt target)
+  - Updates all operation lines referencing source to point to target
+  - Archives source inventory subject, deactivates source (`is_active=False`)
+  - Sets `merged_into_id`, `merged_at`, `merged_by_user_id`, `merge_comment` on source
+  - `422` on self-merge, `409` if either item is frozen (lost assets), `404` if not found
+- `POST /catalog/admin/categories/merge` — merge source category into target category:
+  - Payload: `{"source_category_id": int, "target_category_id": int, "comment": str | null}`
+  - Moves all items from source category to target category
+  - Moves all subcategories from source to target
+  - Deactivates source (`is_active=False`)
+  - `422` on self-merge, `422` if target is a descendant of source (cycle), `404` if not found
+
 Bulk catalog admin creation:
 - endpoints accept JSON body `{ "items": [...] }`
 - behavior is atomic: if one row conflicts or fails validation, the whole request is rolled back

@@ -240,6 +240,8 @@ class OperationsRepo:
             where_clauses.append(Operation.operation_type == filter.type)
         if filter.status is not None:
             where_clauses.append(Operation.status == filter.status)
+        if filter.acceptance_state is not None:
+            where_clauses.append(Operation.acceptance_state == filter.acceptance_state)
         if filter.created_by_user_id is not None:
             where_clauses.append(
                 Operation.created_by_user_id == filter.created_by_user_id

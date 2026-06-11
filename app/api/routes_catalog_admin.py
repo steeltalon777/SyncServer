@@ -10,10 +10,12 @@ from app.schemas.catalog import (
     CategoryBulkCreateResponse,
     CategoryCreateRequest,
     CategoryListResponse,
+    CategoryMergeRequest,
     CategoryResponse,
     CategoryUpdateRequest,
     ItemCreateRequest,
     ItemListResponse,
+    ItemMergeRequest,
     ItemResponse,
     ItemUpdateRequest,
     UnitBulkCreateRequest,
@@ -390,6 +392,54 @@ async def list_items(
         page=page,
         page_size=page_size,
     )
+
+
+@router.post("/items/merge", response_model=ItemResponse)
+async def merge_items(
+    payload: ItemMergeRequest,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> ItemResponse:
+    await _require_catalog_admin(identity=identity)
+    service = CatalogAdminService()
+    async with uow:
+        target = await service.merge_items(
+            uow,
+            source_item_id=payload.source_item_id,
+            target_item_id=payload.target_item_id,
+            comment=payload.comment,
+            resolved_by_user_id=identity.user_id,
+        )
+    logger.info("merge_items", request_id=get_request_id(request),
+                source_item_id=payload.source_item_id,
+                target_item_id=payload.target_item_id,
+                user_id=identity.user_id)
+    return ItemResponse.model_validate(target)
+
+
+@router.post("/categories/merge", response_model=CategoryResponse)
+async def merge_categories(
+    payload: CategoryMergeRequest,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> CategoryResponse:
+    await _require_catalog_admin(identity=identity)
+    service = CatalogAdminService()
+    async with uow:
+        target = await service.merge_categories(
+            uow,
+            source_category_id=payload.source_category_id,
+            target_category_id=payload.target_category_id,
+            comment=payload.comment,
+            resolved_by_user_id=identity.user_id,
+        )
+    logger.info("merge_categories", request_id=get_request_id(request),
+                source_category_id=payload.source_category_id,
+                target_category_id=payload.target_category_id,
+                user_id=identity.user_id)
+    return CategoryResponse.model_validate(target)
 
 
 @router.post("/batch", response_model=CatalogBatchResponse)

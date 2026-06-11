@@ -8,6 +8,10 @@ from app.services.document_service import DocumentService
 from app.services.uow import UnitOfWork
 
 
+def _expected_display_number(operation) -> str:
+    return f"{operation.site_id}/{operation.created_at.strftime('%H%M')}/{operation.created_at.strftime('%d%m%y')}"
+
+
 @pytest.mark.asyncio
 async def test_generate_from_operation_success(
     uow: UnitOfWork,
@@ -42,6 +46,10 @@ async def test_generate_from_operation_success(
     payload = document.payload
     assert payload["document_title"] == "Товарная накладная"
     assert payload["operation_id"] == str(operation.id)
+    assert payload["operation_display_number"] == _expected_display_number(operation)
+    assert payload["operation"]["display_number"] == _expected_display_number(operation)
+    assert payload["basis_label"].startswith("Приход на склад ")
+    assert payload["consignee_label"] == test_site.name
     assert "lines" in payload
     assert len(payload["lines"]) == len(operation.lines)
     
@@ -83,6 +91,41 @@ async def test_generate_from_operation_auto_finalize(
     document = result["document"]
     assert document.status == "finalized"
     assert document.finalized_at is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_from_operation_reuses_current_schema_document(
+    uow: UnitOfWork,
+    test_site,
+    test_user,
+    test_operation_with_lines,
+):
+    """Repeated waybill generation is idempotent for the same operation/type/template."""
+    operation = test_operation_with_lines
+    operation.status = "submitted"
+    await uow.session.commit()
+
+    first = await DocumentService.generate_from_operation(
+        uow=uow,
+        operation_id=operation.id,
+        document_type="waybill",
+        created_by_user_id=test_user.id,
+    )
+    second = await DocumentService.generate_from_operation(
+        uow=uow,
+        operation_id=operation.id,
+        document_type="waybill",
+        auto_finalize=True,
+        created_by_user_id=test_user.id,
+    )
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert second["document"].id == first["document"].id
+    assert second["document"].status == "finalized"
+
+    linked_docs = await uow.documents.get_documents_by_operation(operation.id, document_type="waybill")
+    assert len(linked_docs) == 1
 
 
 @pytest.mark.asyncio
@@ -211,6 +254,8 @@ async def test_payload_structure_for_move_operation(
     
     # Для MOVE операции должен быть receiver
     assert payload["operation_type"] == "MOVE"
+    assert payload["basis_label"] == f"Перемещение {test_site.name} → {payload['receiver']['site_name']}"
+    assert payload["consignee_label"] == payload["receiver"]["site_name"]
     assert "receiver" in payload
     assert payload["receiver"] is not None
     assert payload["receiver"]["site_id"] == operation.destination_site_id
@@ -244,6 +289,8 @@ async def test_payload_structure_for_issue_operation(
     
     # Для ISSUE операции должен быть recipient
     assert payload["operation_type"] == "ISSUE"
+    assert payload["basis_label"].endswith(f"→ {operation.issue_object_name_snapshot}")
+    assert payload["consignee_label"] == operation.issue_object_name_snapshot
     assert "recipient" in payload
     assert payload["recipient"] is not None
     assert payload["recipient"]["recipient_name"] == operation.issue_object_name_snapshot
@@ -317,3 +364,105 @@ async def test_payload_hash_calculation(
     payload_bytes = json.dumps(document.payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     expected_hash = hashlib.sha256(payload_bytes).hexdigest()
     assert document.payload_hash == expected_hash
+
+
+@pytest.mark.asyncio
+async def test_draft_operation_always_creates_new_document(
+    uow: UnitOfWork,
+    test_site,
+    test_user,
+    test_operation_with_lines,
+):
+    """Draft operation: repeated generation creates new documents (old ones voided)."""
+    operation = test_operation_with_lines
+    # operation.status is "draft" by default
+    await uow.session.commit()
+
+    first = await DocumentService.generate_from_operation(
+        uow=uow,
+        operation_id=operation.id,
+        document_type="waybill",
+        created_by_user_id=test_user.id,
+    )
+    assert first["created"] is True
+    assert first["document"].status == "draft"
+    first_id = first["document"].id
+
+    # Second generation for the same draft — должно создать новый, войдировав старый
+    second = await DocumentService.generate_from_operation(
+        uow=uow,
+        operation_id=operation.id,
+        document_type="waybill",
+        created_by_user_id=test_user.id,
+    )
+    assert second["created"] is True
+    assert second["document"].status == "draft"
+    assert second["document"].id != first_id
+
+    # Старый документ должен быть void
+    old_doc = await uow.documents.get_document_by_id(first_id)
+    assert old_doc is not None
+    assert old_doc.status == "void"
+
+    # В истории два документа: один void, один draft
+    linked = await uow.documents.get_documents_by_operation(operation.id, document_type="waybill")
+    assert len(linked) == 2
+    statuses = {d.status for d in linked}
+    assert statuses == {"void", "draft"}
+
+
+@pytest.mark.asyncio
+async def test_draft_operation_ignores_auto_finalize(
+    uow: UnitOfWork,
+    test_site,
+    test_user,
+    test_operation_with_lines,
+):
+    """Even with auto_finalize=True, draft operation creates draft document."""
+    operation = test_operation_with_lines
+    await uow.session.commit()
+
+    result = await DocumentService.generate_from_operation(
+        uow=uow,
+        operation_id=operation.id,
+        document_type="waybill",
+        auto_finalize=True,
+        created_by_user_id=test_user.id,
+    )
+    assert result["created"] is True
+    assert result["document"].status == "draft"
+    assert result["document"].finalized_at is None
+
+
+@pytest.mark.asyncio
+async def test_submitted_operation_still_idempotent(
+    uow: UnitOfWork,
+    test_site,
+    test_user,
+    test_operation_with_lines,
+):
+    """Submitted operation: repeated generation reuses the same document."""
+    operation = test_operation_with_lines
+    operation.status = "submitted"
+    await uow.session.commit()
+
+    first = await DocumentService.generate_from_operation(
+        uow=uow,
+        operation_id=operation.id,
+        document_type="waybill",
+        created_by_user_id=test_user.id,
+    )
+    assert first["created"] is True
+
+    second = await DocumentService.generate_from_operation(
+        uow=uow,
+        operation_id=operation.id,
+        document_type="waybill",
+        auto_finalize=True,
+        created_by_user_id=test_user.id,
+    )
+    assert second["created"] is False
+    assert second["document"].id == first["document"].id
+
+    linked = await uow.documents.get_documents_by_operation(operation.id, document_type="waybill")
+    assert len(linked) == 1

@@ -1,6 +1,6 @@
 """Tests for documents API endpoints."""
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from app.models.document import Document
@@ -41,6 +41,7 @@ async def test_generate_document_success(
     assert "document" in data
     assert "operation_id" in data
     assert "generated_at" in data
+    assert data["created"] is True
 
     document_data = data["document"]
     assert document_data["document_type"] == "waybill"
@@ -275,6 +276,7 @@ async def test_generate_document_for_operation_shortcut(
     auth_headers_user,
     test_operation_with_lines: Operation,
     db_session: AsyncSession,
+    session_factory,
 ):
     """Test POST /documents/operations/{operation_id}/documents shortcut endpoint."""
     operation = test_operation_with_lines
@@ -296,6 +298,24 @@ async def test_generate_document_for_operation_shortcut(
     assert "generated_at" in data
     assert data["document"]["document_type"] == "waybill"
     assert data["document"]["status"] == "finalized"
+    assert data["created"] is True
+
+    async with session_factory() as verification_session:
+        persisted = await verification_session.get(Document, UUID(data["document"]["id"]))
+        assert persisted is not None
+
+    repeated_response = await client.post(
+        f"/api/v1/documents/operations/{operation.id}/documents",
+        headers=auth_headers_user,
+        params={
+            "document_type": "waybill",
+            "auto_finalize": True,
+        },
+    )
+    assert repeated_response.status_code == 200
+    repeated_data = repeated_response.json()
+    assert repeated_data["document"]["id"] == data["document"]["id"]
+    assert repeated_data["created"] is False
 
 
 @pytest.mark.asyncio
