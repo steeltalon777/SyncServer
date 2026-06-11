@@ -106,6 +106,7 @@ class CatalogBrowseItemDto(ORMBaseModel):
     unit_symbol: str
     description: str | None = None
     is_active: bool
+    hashtags: list[str] | None = None
     requires_review: bool = False
     review_status: str | None = None
     updated_at: datetime

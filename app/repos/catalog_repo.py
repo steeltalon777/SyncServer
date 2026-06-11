@@ -59,6 +59,7 @@ class CatalogRepo:
                 Unit.symbol.label("unit_symbol"),
                 Item.description.label("description"),
                 Item.is_active.label("is_active"),
+                Item.hashtags.label("hashtags"),
                 Item.updated_at.label("updated_at"),
             )
             .join(Category, Category.id == Item.category_id)

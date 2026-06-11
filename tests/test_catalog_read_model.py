@@ -144,6 +144,7 @@ async def _seed_catalog_read_fixture(
             "whole_milk_item_name": whole_milk_item_name,
             "farm_milk_item_name": farm_milk_item_name,
             "milk_search_term": milk_search_term,
+            "unit_liter_id": unit_liter.id,
             "unit_liter_symbol": unit_liter.symbol,
         }
 
@@ -248,3 +249,67 @@ async def test_catalog_read_items_children_and_parent_chain(
     parent_chain_body = parent_chain_response.json()
     assert parent_chain_body["category_id"] == seed["whole_milk_id"]
     assert [node["name"] for node in parent_chain_body["parent_chain_summary"]] == [seed["root_name"], seed["milk_name"]]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_catalog_read_items_accepts_page_size_1000(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /catalog/read/items?page_size=1000 should return 200, not 422 validation error."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    response = await client.get(
+        "/api/v1/catalog/read/items",
+        headers={"X-User-Token": seed["token"]},
+        params={"page": 1, "page_size": 1000},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "items" in body
+    assert "total_count" in body
+    assert body["page"] == 1
+    assert body["page_size"] == 1000
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_catalog_read_items_returns_hashtags(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /catalog/read/items returns hashtags field for items that have them."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+    suffix = seed["milk_search_term"].split("-")[-1]
+    tagged_name = f"Tagged Item {suffix}"
+
+    async with session_factory() as session:
+        item = Item(
+            sku=f"HASHTAG-{suffix}",
+            name=tagged_name,
+            category_id=seed["whole_milk_id"],
+            unit_id=seed["unit_liter_id"],
+            description="Item with hashtags",
+            is_active=True,
+            hashtags=["electronics", "premium", "sale"],
+        )
+        session.add(item)
+        await session.commit()
+
+    response = await client.get(
+        "/api/v1/catalog/read/items",
+        headers={"X-User-Token": seed["token"]},
+        params={"search": tagged_name, "page": 1, "page_size": 10},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_count"] >= 1
+
+    tagged_item = next(
+        (item for item in body["items"] if item["name"] == tagged_name),
+        None,
+    )
+    assert tagged_item is not None, "Tagged item should be found"
+    assert "hashtags" in tagged_item, "hashtags field should be present in response"
+    assert tagged_item["hashtags"] == ["electronics", "premium", "sale"]

@@ -300,7 +300,7 @@ async def browse_items(
     search: str | None = Query(default=None),
     category_id: int | None = Query(default=None),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page_size: int = Query(default=20, ge=1, le=1000),
     site_id: int | None = Query(default=None),
     identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
