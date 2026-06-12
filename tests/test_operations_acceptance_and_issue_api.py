@@ -228,6 +228,57 @@ async def test_list_operations_search_matches_item_name_sku_and_hashtag(
 
 
 @pytest.mark.asyncio
+async def test_list_operations_exclude_adjustments_keeps_explicit_adjustment_filter(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_fixture(session_factory)
+
+    receive_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={
+            "operation_type": "RECEIVE",
+            "site_id": seed["source_site_id"],
+            "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": 2}],
+        },
+    )
+    assert receive_response.status_code == 200
+    receive_id = receive_response.json()["id"]
+
+    adjustment_response = await client.post(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        json={
+            "operation_type": "ADJUSTMENT",
+            "site_id": seed["source_site_id"],
+            "lines": [{"line_number": 1, "item_id": seed["item_id"], "qty": -1}],
+        },
+    )
+    assert adjustment_response.status_code == 200
+    adjustment_id = adjustment_response.json()["id"]
+
+    excluded_response = await client.get(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        params={"exclude_adjustments": "true"},
+    )
+    assert excluded_response.status_code == 200
+    excluded_ids = {item["id"] for item in excluded_response.json()["items"]}
+    assert receive_id in excluded_ids
+    assert adjustment_id not in excluded_ids
+
+    explicit_response = await client.get(
+        "/api/v1/operations",
+        headers={"X-User-Token": seed["sender_token"]},
+        params={"exclude_adjustments": "true", "type": "ADJUSTMENT"},
+    )
+    assert explicit_response.status_code == 200
+    assert explicit_response.json()["total_count"] == 1
+    assert explicit_response.json()["items"][0]["id"] == adjustment_id
+
+
+@pytest.mark.asyncio
 async def test_patch_operation_lines_persists_catalog_snapshots(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],

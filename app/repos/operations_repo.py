@@ -216,6 +216,7 @@ class OperationsRepo:
         page: int = 1,
         page_size: int = 50,
         exclude_cancelled: bool = False,
+        exclude_adjustments: bool = False,
     ) -> tuple[list[Operation], int]:
         stmt = select(Operation).options(
             selectinload(Operation.lines)
@@ -292,6 +293,8 @@ class OperationsRepo:
             where_clauses.append(or_(*search_conditions))
         if exclude_cancelled:
             where_clauses.append(Operation.status != "cancelled")
+        if exclude_adjustments:
+            where_clauses.append(Operation.operation_type != "ADJUSTMENT")
 
         stmt = stmt.where(and_(*where_clauses))
         count_stmt = (
