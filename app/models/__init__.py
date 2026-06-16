@@ -4,6 +4,7 @@ from app.models.asset_register import (
     OperationAcceptanceAction,
     PendingAcceptanceBalance,
 )
+from app.models.audit_event import AuditEvent
 from app.models.balance import Balance
 from app.models.base import Base
 from app.models.category import Category
@@ -24,6 +25,7 @@ from app.models.user_access_scope import UserAccessScope
 
 
 __all__ = [
+    "AuditEvent",
     "Base",
     "Site",
     "TemporaryItem",

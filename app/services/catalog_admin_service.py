@@ -35,6 +35,7 @@ from app.schemas.catalog import (
 )
 from fastapi import HTTPException, status
 
+from app.services.audit_helper import record_audit_event
 from app.services.uow import UnitOfWork
 
 logger = structlog.get_logger()
@@ -59,7 +60,16 @@ class CatalogAdminService:
         )
         if created_by_user_id is not None:
             unit.created_by_user_id = created_by_user_id
-        return await uow.catalog.create_unit(unit)
+        created = await uow.catalog.create_unit(unit)
+        await record_audit_event(
+            uow,
+            event_type="unit.create",
+            actor_user_id=created_by_user_id,
+            entity_type="unit",
+            entity_id=str(created.id),
+            summary=f"Создана единица измерения «{created.name}»",
+        )
+        return created
 
     async def bulk_create_units(self, uow: UnitOfWork, payload: UnitBulkCreateRequest, created_by_user_id: UUID | None = None) -> list[Unit]:
         seen_names: set[str] = set()
@@ -85,10 +95,13 @@ class CatalogAdminService:
         if unit is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unit not found")
 
+        changes: dict[str, dict[str, object]] = {}
+
         if payload.name is not None and payload.name != unit.name:
             existing = await uow.catalog.get_unit_by_name(payload.name)
             if existing is not None and existing.id != unit.id:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="unit name already exists")
+            changes["name"] = {"old": unit.name, "new": payload.name}
             unit.name = payload.name
 
         if payload.symbol is not None and payload.symbol != unit.symbol:
@@ -96,18 +109,32 @@ class CatalogAdminService:
             if existing is not None and existing.id != unit.id:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="unit symbol already exists")
             previous_symbol = unit.symbol
+            changes["symbol"] = {"old": unit.symbol, "new": payload.symbol}
             unit.symbol = payload.symbol
             if unit.code is None or unit.code == previous_symbol.upper():
                 unit.code = payload.symbol.upper()
 
         if payload.sort_order is not None:
+            changes["sort_order"] = {"old": unit.sort_order, "new": payload.sort_order}
             unit.sort_order = payload.sort_order
         if payload.is_active is not None:
+            changes["is_active"] = {"old": unit.is_active, "new": payload.is_active}
             unit.is_active = payload.is_active
 
         if updated_by_user_id is not None:
             unit.updated_by_user_id = updated_by_user_id
-        return await uow.catalog.update_unit(unit)
+        result = await uow.catalog.update_unit(unit)
+        if changes:
+            await record_audit_event(
+                uow,
+                event_type="unit.update",
+                actor_user_id=updated_by_user_id,
+                entity_type="unit",
+                entity_id=str(unit_id),
+                summary=f"Изменена единица измерения «{result.name}»",
+                changes=changes,
+            )
+        return result
 
     async def create_category(self, uow: UnitOfWork, payload: CategoryCreateRequest, created_by_user_id: UUID | None = None) -> Category:
         if payload.code == UNCATEGORIZED_CATEGORY_CODE:
@@ -132,7 +159,16 @@ class CatalogAdminService:
         )
         if created_by_user_id is not None:
             category.created_by_user_id = created_by_user_id
-        return await uow.catalog.create_category(category)
+        created = await uow.catalog.create_category(category)
+        await record_audit_event(
+            uow,
+            event_type="category.create",
+            actor_user_id=created_by_user_id,
+            entity_type="category",
+            entity_id=str(created.id),
+            summary=f"Создана категория «{created.name}»",
+        )
+        return created
 
     async def bulk_create_categories(self, uow: UnitOfWork, payload: CategoryBulkCreateRequest, created_by_user_id: UUID | None = None) -> list[Category]:
         created: list[Category] = []
@@ -150,6 +186,8 @@ class CatalogAdminService:
         if payload.code == UNCATEGORIZED_CATEGORY_CODE:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="reserved category code")
 
+        changes: dict[str, dict[str, object]] = {}
+
         parent_updated = "parent_id" in payload.model_fields_set
         target_parent_id = payload.parent_id if parent_updated else category.parent_id
         target_name = payload.name if payload.name is not None else category.name
@@ -163,6 +201,7 @@ class CatalogAdminService:
                 if parent is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="parent category not found")
                 await self._validate_no_category_cycle(uow, category_id=category.id, new_parent_id=payload.parent_id)
+            changes["parent_id"] = {"old": category.parent_id, "new": payload.parent_id}
             category.parent_id = payload.parent_id
 
         sibling = await uow.catalog.get_category_by_parent_and_name(target_parent_id, target_name)
@@ -170,18 +209,33 @@ class CatalogAdminService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="category name already exists for parent")
 
         if payload.name is not None:
+            changes["name"] = {"old": category.name, "new": payload.name}
             category.name = payload.name
             category.normalized_name = _normalize_text(payload.name)
         if "code" in payload.model_fields_set:
+            changes["code"] = {"old": category.code, "new": payload.code}
             category.code = payload.code
         if "sort_order" in payload.model_fields_set:
+            changes["sort_order"] = {"old": category.sort_order, "new": payload.sort_order}
             category.sort_order = payload.sort_order
         if payload.is_active is not None:
+            changes["is_active"] = {"old": category.is_active, "new": payload.is_active}
             category.is_active = payload.is_active
 
         if updated_by_user_id is not None:
             category.updated_by_user_id = updated_by_user_id
-        return await uow.catalog.update_category(category)
+        result = await uow.catalog.update_category(category)
+        if changes:
+            await record_audit_event(
+                uow,
+                event_type="category.update",
+                actor_user_id=updated_by_user_id,
+                entity_type="category",
+                entity_id=str(category_id),
+                summary=f"Изменена категория «{result.name}»",
+                changes=changes,
+            )
+        return result
 
     async def create_item(self, uow: UnitOfWork, payload: ItemCreateRequest, created_by_user_id: UUID | None = None) -> Item:
         category = await self._resolve_item_category(uow, payload.category_id)
@@ -214,7 +268,16 @@ class CatalogAdminService:
             review_status="needs_review" if payload.requires_review else None,
             created_by_user_id=created_by_user_id,
         )
-        return await uow.catalog.create_item(item)
+        created = await uow.catalog.create_item(item)
+        await record_audit_event(
+            uow,
+            event_type="item.create",
+            actor_user_id=created_by_user_id,
+            entity_type="item",
+            entity_id=str(created.id),
+            summary=f"Создан ТМЦ «{created.name}» (категория: {category.name})",
+        )
+        return created
 
     async def _assert_item_not_frozen(self, uow: UnitOfWork, item_id: int) -> None:
         if await uow.asset_registers.has_active_lost_for_item(item_id):
@@ -229,6 +292,8 @@ class CatalogAdminService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
         await self._assert_item_not_frozen(uow, item_id)
 
+        changes: dict[str, dict[str, object]] = {}
+
         if "category_id" in payload.model_fields_set:
             category = await self._resolve_item_category(uow, payload.category_id)
             category_id = category.id
@@ -241,25 +306,43 @@ class CatalogAdminService:
             existing = await uow.catalog.get_item_by_sku(payload.sku)
             if existing is not None and existing.id != item.id:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="item sku already exists")
+            changes["sku"] = {"old": item.sku, "new": payload.sku}
             item.sku = payload.sku
 
         if payload.name is not None:
+            changes["name"] = {"old": item.name, "new": payload.name}
             item.name = payload.name
             item.normalized_name = _normalize_text(payload.name)
         if "category_id" in payload.model_fields_set:
+            changes["category_id"] = {"old": item.category_id, "new": category_id}
             item.category_id = category_id
         if payload.unit_id is not None:
+            changes["unit_id"] = {"old": item.unit_id, "new": payload.unit_id}
             item.unit_id = payload.unit_id
         if "description" in payload.model_fields_set:
+            changes["description"] = {"old": item.description, "new": payload.description}
             item.description = payload.description
         if "hashtags" in payload.model_fields_set:
+            changes["hashtags"] = {"old": item.hashtags, "new": payload.hashtags}
             item.hashtags = payload.hashtags
         if payload.is_active is not None:
+            changes["is_active"] = {"old": item.is_active, "new": payload.is_active}
             item.is_active = payload.is_active
 
         if updated_by_user_id is not None:
             item.updated_by_user_id = updated_by_user_id
-        return await uow.catalog.update_item(item)
+        result = await uow.catalog.update_item(item)
+        if changes:
+            await record_audit_event(
+                uow,
+                event_type="item.update",
+                actor_user_id=updated_by_user_id,
+                entity_type="item",
+                entity_id=str(item_id),
+                summary=f"Изменён ТМЦ «{result.name}»",
+                changes=changes,
+            )
+        return result
 
     async def _ensure_unit_unique(self, uow: UnitOfWork, name: str, symbol: str) -> None:
         if await uow.catalog.get_unit_by_name(name):
@@ -554,6 +637,18 @@ class CatalogAdminService:
         source.merge_comment = comment
 
         await uow.catalog.update_item(source)
+
+        await record_audit_event(
+            uow,
+            event_type="item.merge",
+            actor_user_id=resolved_by_user_id,
+            entity_type="item",
+            entity_id=str(target_item_id),
+            summary=(
+                f"Слияние: ТМЦ {source_item_id} → {target_item_id}"
+                + (f" ({comment})" if comment else "")
+            ),
+        )
 
         logger.info(
             "merge_items",

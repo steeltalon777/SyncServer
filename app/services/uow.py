@@ -3,6 +3,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repos.asset_registers_repo import AssetRegistersRepo
+from app.repos.audit_events_repo import AuditEventsRepo
 from app.repos.balances_repo import BalancesRepo
 from app.repos.catalog_repo import CatalogRepo
 from app.repos.devices_repo import DevicesRepo
@@ -28,6 +29,7 @@ class UnitOfWork:
 
         self.sites = SitesRepo(session)
         self.devices = DevicesRepo(session)
+        self.audit_events = AuditEventsRepo(session)
         self.events = EventsRepo(session)
         self.inventory_subjects = InventorySubjectsRepo(session)
         self.catalog = CatalogRepo(session)

@@ -1,4 +1,5 @@
 from app.repos.asset_registers_repo import AssetRegistersRepo
+from app.repos.audit_events_repo import AuditEventsRepo
 from app.repos.balances_repo import BalancesRepo
 from app.repos.catalog_repo import CatalogRepo
 from app.repos.devices_repo import DevicesRepo
@@ -13,6 +14,7 @@ from app.repos.user_access_scopes_repo import UserAccessScopesRepo
 from app.repos.users_repo import UsersRepo
 
 __all__ = [
+    "AuditEventsRepo",
     "SitesRepo",
     "DevicesRepo",
     "EventsRepo",

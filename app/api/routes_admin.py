@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from app.api.admin_common import CANONICAL_ROLES, require_admin_basic
 from app.api.deps import get_uow, require_user_identity
 from app.api.routes_admin_access import router as admin_access_router
+from app.api.routes_admin_audit import router as admin_audit_router
 from app.api.routes_admin_devices import router as admin_devices_router
 from app.api.routes_admin_sites import router as admin_sites_router
 from app.api.routes_admin_users import router as admin_users_router
@@ -27,4 +28,5 @@ async def list_roles(
 router.include_router(admin_sites_router)
 router.include_router(admin_users_router)
 router.include_router(admin_access_router)
+router.include_router(admin_audit_router)
 router.include_router(admin_devices_router)

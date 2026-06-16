@@ -11,6 +11,7 @@ from app.models.item import Item
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
 from app.services.document_service import DocumentService
+from app.services.audit_helper import record_audit_event
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
@@ -507,6 +508,20 @@ class OperationsService:
                 )
 
         created_operation = await uow.operations.get_operation_by_id(operation.id)
+        await record_audit_event(
+            uow,
+            event_type="operation.create",
+            actor_user_id=user_id,
+            site_id=operation_data.site_id,
+            entity_type="operation",
+            entity_id=str(created_operation.id),
+            summary=(
+                f"Пользователь создал черновик операции №{created_operation.short_id} "
+                f"({created_operation.operation_type})"
+                if hasattr(created_operation, "short_id") and created_operation.short_id
+                else f"Создан черновик операции ({created_operation.operation_type})"
+            ),
+        )
         return {"operation": created_operation}
 
     @staticmethod
@@ -1012,6 +1027,18 @@ class OperationsService:
                 error=str(e),
             )
 
+        await record_audit_event(
+            uow,
+            event_type="operation.submit",
+            actor_user_id=user_id,
+            site_id=submitted_operation.site_id,
+            entity_type="operation",
+            entity_id=str(submitted_operation.id),
+            summary=f"Пользователь подтвердил операцию №{submitted_operation.short_id} ({submitted_operation.operation_type})"
+            if hasattr(submitted_operation, "short_id") and submitted_operation.short_id
+            else f"Операция подтверждена ({submitted_operation.operation_type})",
+        )
+
         response = {"operation": submitted_operation}
         if document_created:
             response["document"] = document_created
@@ -1141,7 +1168,22 @@ class OperationsService:
             acceptance_state=next_state,
             resolved_by_user_id=user_id if next_state == "resolved" else None,
         )
-        return {"operation": await uow.operations.get_operation_by_id(operation_id)}
+        completed_operation = await uow.operations.get_operation_by_id(operation_id)
+        if next_state == "resolved":
+            await record_audit_event(
+                uow,
+                event_type="operation.acceptance_complete",
+                actor_user_id=user_id,
+                site_id=completed_operation.site_id,
+                entity_type="operation",
+                entity_id=str(operation_id),
+                summary=(
+                    f"Завершена приёмка по операции №{completed_operation.short_id}"
+                    if hasattr(completed_operation, "short_id") and completed_operation.short_id
+                    else "Приёмка завершена"
+                ),
+            )
+        return {"operation": completed_operation}
 
     @staticmethod
     async def resolve_lost_asset(
@@ -1227,6 +1269,20 @@ class OperationsService:
         await uow.operations.soft_delete_operation(
             operation_id=operation_id,
             deleted_by_user_id=user_id,
+        )
+
+        await record_audit_event(
+            uow,
+            event_type="operation.delete",
+            actor_user_id=user_id,
+            site_id=operation.site_id,
+            entity_type="operation",
+            entity_id=str(operation_id),
+            summary=(
+                f"Пользователь удалил операцию №{operation.short_id}"
+                if hasattr(operation, "short_id") and operation.short_id
+                else f"Операция удалена"
+            ),
         )
 
         logger.info("deleted operation=%s by user=%s", operation_id, user_id)
@@ -1427,6 +1483,20 @@ class OperationsService:
         # Удалить временные ТМЦ, связанные с операцией
         await OperationsService._delete_temporary_items_of_operation(
             uow, operation_id=operation_id, user_id=user_id,
+        )
+
+        await record_audit_event(
+            uow,
+            event_type="operation.cancel",
+            actor_user_id=user_id,
+            site_id=operation.site_id,
+            entity_type="operation",
+            entity_id=str(operation_id),
+            summary=(
+                f"Пользователь отменил операцию №{operation.short_id}"
+                if hasattr(operation, "short_id") and operation.short_id
+                else f"Операция отменена"
+            ),
         )
 
         logger.info("cancelled operation=%s by user=%s reason=%s", operation_id, user_id, reason)

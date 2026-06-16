@@ -98,6 +98,30 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
     @app.exception_handler(SyncServerException)
     async def sync_server_exception_handler(request: Request, exc: SyncServerException):
         """Handle SyncServer exceptions with standard error format."""
+        status_code = exc.status_code
+
+        if status_code >= 500:
+            logger.error(
+                "sync_server_exception",
+                code=exc.error_code,
+                status_code=status_code,
+                detail=str(exc.detail)[:500],
+                request_id=getattr(request.state, "request_id", ""),
+                path=request.url.path,
+                method=request.method,
+                exc_info=True,
+            )
+        else:
+            logger.warning(
+                "sync_server_exception",
+                code=exc.error_code,
+                status_code=status_code,
+                detail=str(exc.detail)[:500],
+                request_id=getattr(request.state, "request_id", ""),
+                path=request.url.path,
+                method=request.method,
+            )
+
         error_body = {
             "error": {
                 "code": exc.error_code,
