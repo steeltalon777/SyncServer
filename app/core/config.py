@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     DATABASE_URL_TEST: str | None = None
     APP_ENV: str = "dev"
     LOG_LEVEL: str = "INFO"
+    LOG_SQL: bool = False
     DEFAULT_PAGE_SIZE: int = Field(default=100, ge=1, le=5000)
     ALLOWED_ORIGINS: str = ""
     MAX_PUSH_EVENTS: int = Field(default=500, ge=1, le=5000)

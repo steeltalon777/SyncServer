@@ -8,7 +8,7 @@ settings = get_settings()
 
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.APP_ENV == "dev",
+    echo=settings.LOG_SQL,
     pool_pre_ping=True,
 )
 

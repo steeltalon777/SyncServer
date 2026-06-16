@@ -1,4 +1,5 @@
 import os
+import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -56,15 +57,40 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
     )
 
     @app.middleware("http")
-    async def request_context_middleware(request: Request, call_next):
+    async def access_log_middleware(request: Request, call_next):
         request_id = request.headers.get("X-Request-Id") or str(uuid4())
         request.state.request_id = request_id
+
+        start = time.perf_counter()
 
         try:
             response = await call_next(request)
         except Exception:
-            logger.error("unhandled_error", path=request.url.path, request_id=request_id, exc_info=True)
-            return JSONResponse(status_code=500, content={"detail": "internal server error"})
+            duration_ms = (time.perf_counter() - start) * 1000
+            logger.error(
+                "http_request",
+                method=request.method,
+                path=request.url.path,
+                status_code=500,
+                duration_ms=round(duration_ms, 1),
+                request_id=request_id,
+                exc_info=True,
+            )
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "internal server error"},
+                headers={"X-Request-Id": request_id},
+            )
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        status_code = response.status_code
+
+        if status_code >= 500:
+            logger.error("http_request", method=request.method, path=request.url.path, status_code=status_code, duration_ms=round(duration_ms, 1), request_id=request_id)
+        elif status_code >= 400:
+            logger.warning("http_request", method=request.method, path=request.url.path, status_code=status_code, duration_ms=round(duration_ms, 1), request_id=request_id)
+        else:
+            logger.info("http_request", method=request.method, path=request.url.path, status_code=status_code, duration_ms=round(duration_ms, 1), request_id=request_id)
 
         response.headers["X-Request-Id"] = request_id
         return response
