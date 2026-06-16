@@ -354,3 +354,53 @@ def test_require_cancelled_visibility_non_root_raises() -> None:
         with pytest.raises(HTTPException) as exc:
             OperationsPolicy.require_cancelled_visibility(identity)
         assert exc.value.status_code == 403
+
+
+def test_observer_can_create_draft() -> None:
+    identity = _identity(role="observer", scopes=[_scope(1, can_operate=False)])
+    OperationsPolicy.require_create_draft(identity, 1)
+    OperationsPolicy.require_create_draft(identity, 999)
+
+
+def test_observer_cannot_submit_draft() -> None:
+    identity = _identity(role="observer", scopes=[_scope(1, can_operate=False)])
+    op = _operation(identity.user_id, status="draft", site_id=1)
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_operation_submit_permission(identity, op)
+    assert exc.value.status_code == 403
+
+
+def test_storekeeper_can_create_draft_any_site() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(1)])
+    OperationsPolicy.require_create_draft(identity, 1)
+    OperationsPolicy.require_create_draft(identity, 999)
+
+
+def test_chief_storekeeper_cannot_cancel_submitted() -> None:
+    identity = _identity(role="chief_storekeeper")
+    op = _operation(uuid4(), status="submitted")
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_operation_cancel_permission(identity, op)
+    assert exc.value.status_code == 403
+    assert "only root" in exc.value.detail.lower()
+
+
+def test_root_can_cancel_submitted() -> None:
+    identity = _identity(role="storekeeper", is_root=True)
+    op = _operation(uuid4(), status="submitted")
+    OperationsPolicy.require_operation_cancel_permission(identity, op)
+
+
+def test_observer_cannot_cancel_any_operation() -> None:
+    identity = _identity(role="observer", scopes=[_scope(1)])
+    other_draft = _operation(uuid4(), status="draft")
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_operation_cancel_permission(identity, other_draft)
+    assert exc.value.status_code == 403
+
+
+def test_require_read_site_no_scope_check() -> None:
+    """require_read_site should not check site access scope."""
+    identity = _identity(role="storekeeper", scopes=[_scope(1)])
+    OperationsPolicy.require_read_site(identity, 1)
+    OperationsPolicy.require_read_site(identity, 999)

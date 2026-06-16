@@ -13,6 +13,7 @@ class OperationsPolicy:
     READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
     WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
     TEMPORARY_ITEM_CREATE_ROLES = {"chief_storekeeper", "storekeeper"}
+    CREATE_DRAFT_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
 
     @staticmethod
     def require_read_site(identity: Identity, site_id: int) -> None:
@@ -20,8 +21,6 @@ class OperationsPolicy:
             return
         if identity.role not in OperationsPolicy.READ_ROLES:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read operations permission required")
-        if not identity.has_site_access(site_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user has no view access to site")
 
     @staticmethod
     def require_operate_site(identity: Identity, site_id: int) -> None:
@@ -31,6 +30,17 @@ class OperationsPolicy:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="operate permission required")
         if not identity.can_operate_at_site(site_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user has no operate access to site")
+
+    @staticmethod
+    def require_create_draft(identity: Identity, site_id: int) -> None:
+        """Allow any authenticated user to create a draft. No scope check."""
+        if identity.has_global_business_access:
+            return
+        if identity.role not in OperationsPolicy.CREATE_DRAFT_ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="create draft permission required",
+            )
 
     @staticmethod
     def require_move_access(identity: Identity, source_site_id: int | None, destination_site_id: int | None) -> None:
@@ -222,7 +232,13 @@ class OperationsPolicy:
             return [site.id for site in sites]
         if identity.role not in OperationsPolicy.READ_ROLES:
             return []
-        return identity.get_accessible_site_ids()
+        sites, _ = await uow.sites.list_sites(
+            filter=SiteFilter(is_active=None),
+            user_site_ids=None,
+            page=1,
+            page_size=1000,
+        )
+        return [site.id for site in sites]
 
     @staticmethod
     async def resolve_visible_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
@@ -234,6 +250,12 @@ class OperationsPolicy:
                 page_size=1000,
             )
             return [site.id for site in sites]
-
-        scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
-        return [scope.site_id for scope in scopes if scope.is_active and scope.can_view]
+        if identity.role not in OperationsPolicy.READ_ROLES:
+            return []
+        sites, _ = await uow.sites.list_sites(
+            filter=SiteFilter(is_active=None),
+            user_site_ids=None,
+            page=1,
+            page_size=1000,
+        )
+        return [site.id for site in sites]

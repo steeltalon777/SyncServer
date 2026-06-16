@@ -32,17 +32,15 @@ def _require_read_access(identity: Identity) -> None:
 
 
 async def _resolve_visible_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if identity.has_global_business_access:
+    if identity.has_global_business_access or identity.role in READ_ROLES:
         sites, _ = await uow.sites.list_sites(
-            filter=SiteFilter(is_active=None),
+            filter=SiteFilter(is_active=True),
             user_site_ids=None,
             page=1,
             page_size=1000,
         )
         return [site.id for site in sites]
-
-    scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
-    return [scope.site_id for scope in scopes if scope.is_active and scope.can_view]
+    return []
 
 
 @router.get("", response_model=BalanceListResponse)
@@ -62,11 +60,6 @@ async def list_balances(
 
     async with uow:
         visible_site_ids = await _resolve_visible_site_ids(uow, identity)
-        if site_id is not None and site_id not in visible_site_ids:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="user does not have access to requested site",
-            )
 
         filter_data = BalanceFilter(
             site_id=site_id,

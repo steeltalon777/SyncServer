@@ -37,7 +37,7 @@ SUPPORTED_CATEGORY_READ_INCLUDES = set(DEFAULT_CATEGORY_READ_INCLUDES)
 
 
 async def _resolve_accessible_site_ids(uow: UnitOfWork, identity: Identity) -> list[int]:
-    if identity.has_global_business_access:
+    if identity.has_global_business_access or identity.role in ALLOWED_CATALOG_READ_ROLES:
         sites, _ = await uow.sites.list_sites(
             filter=SiteFilter(is_active=True),
             user_site_ids=None,
@@ -45,28 +45,16 @@ async def _resolve_accessible_site_ids(uow: UnitOfWork, identity: Identity) -> l
             page_size=1000,
         )
         return [site.id for site in sites]
-
-    scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
-    return [scope.site_id for scope in scopes if scope.is_active and scope.can_view]
+    return []
 
 
-def _require_catalog_read_access(identity: Identity, accessible_site_ids: list[int], site_id: int | None = None) -> None:
+def _require_catalog_read_access(identity: Identity, site_id: int | None = None) -> None:
     if identity.has_global_business_access:
         return
     if identity.role not in ALLOWED_CATALOG_READ_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="catalog read access denied",
-        )
-    if not accessible_site_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="catalog read access denied",
-        )
-    if site_id is not None and site_id not in accessible_site_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="no access to requested site",
         )
 
 
@@ -98,8 +86,7 @@ async def list_items(
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogItemsResponse:
     async with uow:
-        accessible_site_ids = await _resolve_accessible_site_ids(uow, identity)
-        _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
+        _require_catalog_read_access(identity, site_id=site_id)
         items = await uow.catalog.list_items(updated_after=updated_after, limit=limit)
 
     next_updated_after = max((item.updated_at for item in items), default=None)
@@ -117,8 +104,7 @@ async def list_categories(
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogCategoriesResponse:
     async with uow:
-        accessible_site_ids = await _resolve_accessible_site_ids(uow, identity)
-        _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
+        _require_catalog_read_access(identity, site_id=site_id)
         categories = await uow.catalog.list_categories(updated_after=updated_after, limit=limit)
 
     next_updated_after = max((category.updated_at for category in categories), default=None)
@@ -140,8 +126,7 @@ async def list_units(
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogUnitsResponse:
     async with uow:
-        accessible_site_ids = await _resolve_accessible_site_ids(uow, identity)
-        _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
+        _require_catalog_read_access(identity, site_id=site_id)
         units = await uow.catalog.list_units(updated_after=updated_after, limit=limit)
 
     next_updated_after = max((unit.updated_at for unit in units), default=None)
@@ -156,65 +141,33 @@ async def list_sites(
     identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogSitesResponse:
-    async with uow:
-        if identity.has_global_business_access:
-            sites, _ = await uow.sites.list_sites(
-                filter=SiteFilter(is_active=is_active),
-                user_site_ids=None,
-                page=1,
-                page_size=1000,
-            )
-            site_payload = [
-                {
-                    "site_id": site.id,
-                    "code": site.code,
-                    "name": site.name,
-                    "is_active": site.is_active,
-                    "permissions": {
-                        "can_view": True,
-                        "can_operate": True,
-                        "can_manage_catalog": True,
-                    },
-                }
-                for site in sites
-            ]
-        else:
-            if identity.role not in ALLOWED_CATALOG_READ_ROLES:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="catalog read access denied",
-                )
+    if identity.role not in ALLOWED_CATALOG_READ_ROLES and not identity.has_global_business_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="catalog read access denied",
+        )
 
-            scopes = list(await uow.user_access_scopes.list_user_scopes(identity.user_id))
-            scope_by_site_id = {
-                scope.site_id: scope
-                for scope in scopes
-                if scope.is_active and scope.can_view
+    async with uow:
+        sites, _ = await uow.sites.list_sites(
+            filter=SiteFilter(is_active=is_active),
+            user_site_ids=None,
+            page=1,
+            page_size=1000,
+        )
+        site_payload = [
+            {
+                "site_id": site.id,
+                "code": site.code,
+                "name": site.name,
+                "is_active": site.is_active,
+                "permissions": {
+                    "can_view": True,
+                    "can_operate": identity.has_global_business_access or identity.role in {"chief_storekeeper", "storekeeper"},
+                    "can_manage_catalog": identity.has_global_business_access or identity.role == "chief_storekeeper",
+                },
             }
-            site_ids = list(scope_by_site_id.keys())
-            if not site_ids:
-                site_payload = []
-            else:
-                sites, _ = await uow.sites.list_sites(
-                    filter=SiteFilter(is_active=is_active),
-                    user_site_ids=site_ids,
-                    page=1,
-                    page_size=1000,
-                )
-                site_payload = [
-                    {
-                        "site_id": site.id,
-                        "code": site.code,
-                        "name": site.name,
-                        "is_active": site.is_active,
-                        "permissions": {
-                            "can_view": scope_by_site_id[site.id].can_view,
-                            "can_operate": scope_by_site_id[site.id].can_operate,
-                            "can_manage_catalog": scope_by_site_id[site.id].can_manage_catalog,
-                        },
-                    }
-                    for site in sites
-                ]
+            for site in sites
+        ]
 
     logger.info("catalog_sites", request_id=get_request_id(request), returned=len(site_payload))
     return CatalogSitesResponse(sites=site_payload, server_time=datetime.now(UTC))
@@ -228,8 +181,7 @@ async def get_categories_tree(
     uow: UnitOfWork = Depends(get_uow),
 ) -> list[CategoryTreeNode]:
     async with uow:
-        accessible_site_ids = await _resolve_accessible_site_ids(uow, identity)
-        _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
+        _require_catalog_read_access(identity, site_id=site_id)
         categories_tree = await uow.catalog.get_categories_tree()
 
     logger.info("catalog_categories_tree", request_id=get_request_id(request), returned=len(categories_tree))
@@ -306,8 +258,7 @@ async def browse_items(
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogBrowseItemsResponse:
     async with uow:
-        accessible_site_ids = await _resolve_accessible_site_ids(uow, identity)
-        _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
+        _require_catalog_read_access(identity, site_id=site_id)
         items, total_count = await uow.catalog.list_items_page(
             search=search,
             category_id=category_id,
@@ -345,8 +296,7 @@ async def browse_categories(
     include_values = _parse_category_read_includes(include)
 
     async with uow:
-        accessible_site_ids = await _resolve_accessible_site_ids(uow, identity)
-        _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
+        _require_catalog_read_access(identity, site_id=site_id)
         categories, total_count = await _build_browse_categories_response(
             uow=uow,
             search=search,
@@ -383,8 +333,7 @@ async def browse_category_items(
     uow: UnitOfWork = Depends(get_uow),
 ) -> CatalogBrowseItemsResponse:
     async with uow:
-        accessible_site_ids = await _resolve_accessible_site_ids(uow, identity)
-        _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
+        _require_catalog_read_access(identity, site_id=site_id)
         category = await uow.catalog.get_category_by_id(category_id)
         if category is None or not category.is_active:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
@@ -426,8 +375,7 @@ async def browse_category_children(
     include_values = _parse_category_read_includes(include)
 
     async with uow:
-        accessible_site_ids = await _resolve_accessible_site_ids(uow, identity)
-        _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
+        _require_catalog_read_access(identity, site_id=site_id)
         category = await uow.catalog.get_category_by_id(category_id)
         if category is None or not category.is_active:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
@@ -466,8 +414,7 @@ async def browse_category_parent_chain(
     uow: UnitOfWork = Depends(get_uow),
 ) -> CategoryParentChainResponse:
     async with uow:
-        accessible_site_ids = await _resolve_accessible_site_ids(uow, identity)
-        _require_catalog_read_access(identity, accessible_site_ids, site_id=site_id)
+        _require_catalog_read_access(identity, site_id=site_id)
         category = await uow.catalog.get_category_by_id(category_id)
         if category is None or not category.is_active:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")

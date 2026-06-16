@@ -72,8 +72,6 @@ async def list_operations(
 ) -> OperationListResponse:
     async with uow:
         readable_site_ids = await OperationsPolicy.resolve_readable_site_ids(uow, identity)
-        if not readable_site_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="read operations permission required")
         if site_id is not None:
             OperationsPolicy.require_read_site(identity, site_id)
 
@@ -145,9 +143,7 @@ async def create_operation(
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
-    OperationsPolicy.require_operate_site(identity, operation_data.site_id)
-    if operation_data.operation_type == "MOVE":
-        OperationsPolicy.require_move_access(identity, operation_data.source_site_id, operation_data.destination_site_id)
+    OperationsPolicy.require_create_draft(identity, operation_data.site_id)
     if any(line.temporary_item is not None for line in operation_data.lines):
         OperationsPolicy.require_temporary_item_create(identity)
 
