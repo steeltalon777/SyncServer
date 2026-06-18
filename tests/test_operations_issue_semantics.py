@@ -452,6 +452,7 @@ def _base_uow(operation, balance_qty: Decimal | None = None):
         catalog=SimpleNamespace(get_item_by_id=AsyncMock()),
         temporary_items=SimpleNamespace(get_by_id=AsyncMock()),
         session=SimpleNamespace(flush=AsyncMock()),
+        audit_events=SimpleNamespace(insert=AsyncMock()),
     )
 
 
@@ -460,6 +461,7 @@ async def test_cancel_issue_restores_warehouse_and_decrements_issued():
     operation = _operation(operation_type="ISSUE", issue_object_id=77)
     uow = _base_uow(operation)
     await OperationsService.cancel_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
+    uow.audit_events.insert.assert_awaited_once()
     uow.balances.update_balance_quantity.assert_awaited_once_with(
         site_id=1, inventory_subject_id=1010, quantity_delta=Decimal("5"),
     )
@@ -473,6 +475,7 @@ async def test_cancel_issue_return_restores_issued_and_decrements_warehouse():
     operation = _operation(operation_type="ISSUE_RETURN", issue_object_id=77)
     uow = _base_uow(operation)
     await OperationsService.cancel_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
+    uow.audit_events.insert.assert_awaited_once()
     uow.balances.update_balance_quantity.assert_awaited_once_with(
         site_id=1, inventory_subject_id=1010, quantity_delta=Decimal("-5"),
     )
@@ -486,6 +489,7 @@ async def test_cancel_object_write_off_restores_issued():
     operation = _operation(operation_type="WRITE_OFF", issue_object_id=77)
     uow = _base_uow(operation)
     await OperationsService.cancel_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
+    uow.audit_events.insert.assert_awaited_once()
     uow.asset_registers.upsert_issued.assert_awaited_once_with(
         issue_object_id=77, inventory_subject_id=1010, qty_delta=Decimal("5"),
     )
@@ -497,6 +501,7 @@ async def test_cancel_warehouse_write_off_restores_warehouse():
     operation = _operation(operation_type="WRITE_OFF", issue_object_id=None)
     uow = _base_uow(operation)
     await OperationsService.cancel_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
+    uow.audit_events.insert.assert_awaited_once()
     uow.balances.update_balance_quantity.assert_awaited_once_with(
         site_id=1, inventory_subject_id=1010, quantity_delta=Decimal("5"),
     )

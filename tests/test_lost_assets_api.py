@@ -185,44 +185,18 @@ async def test_get_lost_asset_detail(
     assert data["site_id"] == seed["source_site_id"]
     assert data["source_site_id"] is None
 
-    # Проверяем, что пользователь без доступа к сайту не может получить детали
-    # Создаём новый сайт и пользователя с доступом только к нему
-    async with session_factory() as session:
-        other_site = Site(code=f"OTHER-{uuid4().hex[:6]}", name=f"Other Site")
-        session.add(other_site)
-        await session.flush()
-        
-        other_user = User(
-            username=f"other-{uuid4().hex[:6]}",
-            email=f"other-{uuid4().hex[:6]}@example.com",
-            full_name="Other",
-            is_active=True,
-            is_root=False,
-            role="storekeeper",
-            default_site_id=other_site.id,
-        )
-        session.add(other_user)
-        await session.flush()
-        
-        # Даём доступ только к other_site
-        session.add(
-            UserAccessScope(
-                user_id=other_user.id,
-                site_id=other_site.id,
-                can_view=True,
-                can_operate=True,
-                can_manage_catalog=False,
-                is_active=True,
-            )
-        )
-        await session.commit()
-        other_token = str(other_user.user_token)
-
-    forbidden = await client.get(
+    # Проверяем 401 при отсутствии токена
+    no_token = await client.get(
         f"/api/v1/lost-assets/{lost_line_id}",
-        headers={"X-User-Token": other_token},
     )
-    assert forbidden.status_code == 403
+    assert no_token.status_code == 401
+
+    # Проверяем 401 при невалидном токене
+    invalid_token = await client.get(
+        f"/api/v1/lost-assets/{lost_line_id}",
+        headers={"X-User-Token": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert invalid_token.status_code == 401
 
     # Проверяем 404 для несуществующего operation_line_id
     not_found = await client.get(

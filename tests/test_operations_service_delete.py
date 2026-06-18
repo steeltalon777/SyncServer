@@ -28,11 +28,13 @@ async def test_delete_operation_succeeds_for_cancelled() -> None:
             get_operation_by_id=AsyncMock(return_value=operation),
             soft_delete_operation=AsyncMock(),
         ),
+        audit_events=SimpleNamespace(insert=AsyncMock()),
     )
 
     user_id = uuid4()
     await OperationsService.delete_operation(uow=uow, operation_id=operation.id, user_id=user_id)
 
+    uow.audit_events.insert.assert_awaited_once()
     uow.operations.soft_delete_operation.assert_awaited_once_with(
         operation_id=operation.id,
         deleted_by_user_id=user_id,

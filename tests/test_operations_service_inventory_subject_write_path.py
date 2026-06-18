@@ -54,10 +54,12 @@ async def test_submit_receive_updates_balance_by_inventory_subject_id() -> None:
         operations=operations,
         balances=balances,
         asset_registers=SimpleNamespace(upsert_pending=AsyncMock(), upsert_lost=AsyncMock(), upsert_issued=AsyncMock()),
+        audit_events=SimpleNamespace(insert=AsyncMock()),
     )
 
     await OperationsService.submit_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
 
+    uow.audit_events.insert.assert_awaited_once()
     balances.update_balance_quantity.assert_awaited_once_with(
         site_id=10,
         inventory_subject_id=5001,
@@ -91,10 +93,11 @@ async def test_submit_issue_updates_issued_register_by_inventory_subject_id() ->
         upsert_lost=AsyncMock(),
         upsert_issued=AsyncMock(),
     )
-    uow = SimpleNamespace(operations=operations, balances=balances, asset_registers=asset_registers)
+    uow = SimpleNamespace(operations=operations, balances=balances, asset_registers=asset_registers, audit_events=SimpleNamespace(insert=AsyncMock()))
 
     await OperationsService.submit_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
 
+    uow.audit_events.insert.assert_awaited_once()
     balances.get_for_update.assert_awaited_once_with(site_id=10, inventory_subject_id=5001)
     asset_registers.upsert_issued.assert_awaited_once_with(
         issue_object_id=77,
@@ -150,10 +153,12 @@ async def test_submit_receive_materializes_temporary_line_before_balance_update(
         catalog=catalog,
         session=SimpleNamespace(flush=AsyncMock()),
         asset_registers=SimpleNamespace(upsert_pending=AsyncMock(), upsert_lost=AsyncMock(), upsert_issued=AsyncMock()),
+        audit_events=SimpleNamespace(insert=AsyncMock()),
     )
 
     await OperationsService.submit_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
 
+    uow.audit_events.insert.assert_awaited_once()
     catalog.create_item.assert_awaited_once()
     inventory_subjects.get_or_create_for_item.assert_awaited_once_with(item_id=7001)
     balances.update_balance_quantity.assert_awaited_once_with(
