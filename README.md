@@ -67,14 +67,37 @@ Alternative container setup:
 - Container deployment flow is documented in [docs/CONTAINER_DEPLOY.md](docs/CONTAINER_DEPLOY.md).
 
 ## Main Modules
-- `auth` - user bootstrap, session context, available sites
-- `admin` - users, sites, scopes, devices, roles
+- `auth` - user bootstrap, session context, available sites, audit endpoint
+- `admin` - users, sites, scopes, devices, roles, audit log viewer
 - `catalog` - read APIs for items, categories, units, sites
 - `catalog/admin` - catalog mutations
 - `operations` - warehouse operation lifecycle
 - `balances` - read-only inventory balances
 - `sync` - device event synchronization
 - `health` - health and readiness
+
+## Utility Scripts
+
+### `scripts/query_audit.py`
+Query audit events for a user by username or token.
+
+```bash
+# By username (recommended)
+docker compose exec syncserver python scripts/query_audit.py --username ivanov --console
+
+# By token (when username unknown)
+docker compose exec syncserver python scripts/query_audit.py --token <UUID> --console
+
+# Filter by event type and date range
+docker compose exec syncserver python scripts/query_audit.py --username ivanov \
+  --event-type operation.submit --date-from 2026-06-01 --console
+
+# JSON output for piping
+docker compose exec syncserver python scripts/query_audit.py --username ivanov \
+  --format json --console | jq .
+```
+
+See [docs/audit-query-examples.md](docs/audit-query-examples.md) for full documentation.
 
 ## API Overview
 Base prefix: `/api/v1`
