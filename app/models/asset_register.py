@@ -132,7 +132,7 @@ class IssuedAssetBalance(Base):
         ForeignKey("inventory_subjects.id"),
         primary_key=True,
     )
-    item_id: Mapped[int] = mapped_column(
+    item_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("items.id"),
         nullable=True,
