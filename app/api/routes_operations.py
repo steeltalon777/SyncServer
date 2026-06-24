@@ -148,6 +148,7 @@ async def create_operation(
         OperationsPolicy.require_temporary_item_create(identity)
 
     async with uow:
+        await OperationsService._validate_inline_sku_unique(uow, operation_data.lines)
         result = await OperationsService.create_operation(
             uow=uow,
             operation_data=operation_data,
@@ -193,6 +194,9 @@ async def update_operation(
             line.temporary_item is not None for line in update_data.lines
         ):
             OperationsPolicy.require_temporary_item_create(identity)
+
+        if update_data.lines is not None:
+            await OperationsService._validate_inline_sku_unique(uow, update_data.lines)
 
         updated_operation = await OperationsService.update_operation(
             uow=uow,
