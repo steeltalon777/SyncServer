@@ -15,6 +15,7 @@ from app.services.audit_helper import record_audit_event
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 
 logger = structlog.get_logger()
 
@@ -38,6 +39,10 @@ class OperationsService:
     @staticmethod
     def _normalize_name(value: str) -> str:
         return " ".join(value.strip().lower().split())
+
+    @staticmethod
+    def _extract_user_message(exc: IntegrityError) -> str:
+        return str(exc.orig) if exc.orig else str(exc)
 
     @staticmethod
     async def _ensure_item_usable(uow: UnitOfWork, item_id: int):
@@ -106,6 +111,23 @@ class OperationsService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"unsupported operation_type '{operation_type}', supported: {supported}",
             )
+
+    @staticmethod
+    async def _validate_inline_sku_unique(uow: UnitOfWork, lines: list[OperationLineCreate] | None) -> None:
+        if lines is None:
+            return
+        for line in lines:
+            if line.temporary_item is None:
+                continue
+            payload = line.temporary_item
+            if not payload.sku:
+                continue
+            existing = await uow.catalog.get_item_by_sku(payload.sku)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"SKU «{payload.sku}» уже занят товаром «{existing.name}»",
+                )
 
     @staticmethod
     async def _apply_balance_delta(
@@ -776,7 +798,16 @@ class OperationsService:
                 source_system="operation_inline",
                 source_ref=client_key,
             )
-            review_item = await uow.catalog.create_item(review_item)
+            try:
+                review_item = await uow.catalog.create_item(review_item)
+            except IntegrityError as exc:
+                if "items_sku_key" in str(exc):
+                    sku = payload.get("sku") or "(без SKU)"
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"SKU «{sku}» уже занят. Укажите другой SKU или оставьте поле пустым для автоматической генерации.",
+                    )
+                raise
 
             # Create inventory subject for the catalog item
             review_subject = await uow.inventory_subjects.get_or_create_for_item(
@@ -804,246 +835,254 @@ class OperationsService:
         operation_id: UUID,
         user_id: UUID,
     ) -> dict[str, object]:
-        operation = await uow.operations.get_operation_by_id(operation_id)
-        OperationsWorkflowPolicy.require_exists(operation)
-        OperationsWorkflowPolicy.require_draft_for_submit(operation)
+        try:
+            operation = await uow.operations.get_operation_by_id(operation_id)
+            OperationsWorkflowPolicy.require_exists(operation)
+            OperationsWorkflowPolicy.require_draft_for_submit(operation)
 
-        # Materialize deferred temporary lines before balance/register workflow
-        await OperationsService._materialize_deferred_temporary_lines(
-            uow, operation, user_id,
-        )
+            # Materialize deferred temporary lines before balance/register workflow
+            await OperationsService._materialize_deferred_temporary_lines(
+                uow, operation, user_id,
+            )
 
-        for line in operation.lines:
-            await OperationsService._ensure_line_inventory_subject(uow, line)
-            quantity = Decimal(line.qty)
-            if operation.operation_type == "RECEIVE":
-                if operation.acceptance_required:
-                    await OperationsService._upsert_pending(
+            for line in operation.lines:
+                await OperationsService._ensure_line_inventory_subject(uow, line)
+                quantity = Decimal(line.qty)
+                if operation.operation_type == "RECEIVE":
+                    if operation.acceptance_required:
+                        await OperationsService._upsert_pending(
+                            uow,
+                            operation_id=operation.id,
+                            operation_line_id=line.id,
+                            destination_site_id=operation.site_id,
+                            source_site_id=None,
+                            inventory_subject_id=line.inventory_subject_id,
+                            qty_delta=quantity,
+                            error_context="RECEIVE submit",
+                        )
+                    else:
+                        await uow.balances.update_balance_quantity(
+                            site_id=operation.site_id,
+                            inventory_subject_id=line.inventory_subject_id,
+                            quantity_delta=quantity,
+                        )
+                elif operation.operation_type == "WRITE_OFF" and operation.issue_object_id is not None:
+                    # Object write-off: validate issued balance, then decrement issued register
+                    await OperationsService._ensure_sufficient_issued_balance(
                         uow,
-                        operation_id=operation.id,
-                        operation_line_id=line.id,
-                        destination_site_id=operation.site_id,
-                        source_site_id=None,
+                        issue_object_id=operation.issue_object_id,
                         inventory_subject_id=line.inventory_subject_id,
-                        qty_delta=quantity,
-                        error_context="RECEIVE submit",
+                        required_qty=quantity,
+                        error_message=(
+                            f"insufficient issued balance for WRITE_OFF: "
+                            f"issue_object={operation.issue_object_id}, inventory_subject={line.inventory_subject_id}, required={line.qty}"
+                        ),
                     )
-                else:
-                    await uow.balances.update_balance_quantity(
-                        site_id=operation.site_id,
+                    await OperationsService._upsert_issued(
+                        uow,
+                        issue_object_id=operation.issue_object_id,
                         inventory_subject_id=line.inventory_subject_id,
-                        quantity_delta=quantity,
+                        qty_delta=-quantity,
+                        error_context="WRITE_OFF from issue object",
                     )
-            elif operation.operation_type == "WRITE_OFF" and operation.issue_object_id is not None:
-                # Object write-off: validate issued balance, then decrement issued register
-                await OperationsService._ensure_sufficient_issued_balance(
-                    uow,
-                    issue_object_id=operation.issue_object_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    required_qty=quantity,
-                    error_message=(
-                        f"insufficient issued balance for WRITE_OFF: "
-                        f"issue_object={operation.issue_object_id}, inventory_subject={line.inventory_subject_id}, required={line.qty}"
-                    ),
-                )
-                await OperationsService._upsert_issued(
-                    uow,
-                    issue_object_id=operation.issue_object_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    qty_delta=-quantity,
-                    error_context="WRITE_OFF from issue object",
-                )
-            elif operation.operation_type in DECREMENT_OPERATION_TYPES:
-                await OperationsService._ensure_sufficient_balance(
-                    uow,
-                    site_id=operation.site_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    required_qty=quantity,
-                    error_message=(
-                        f"insufficient stock for {operation.operation_type}: inventory_subject={line.inventory_subject_id}, "
-                        f"site={operation.site_id}, required={line.qty}"
-                    ),
-                )
-                await uow.balances.update_balance_quantity(
-                    site_id=operation.site_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    quantity_delta=-quantity,
-                )
-            elif operation.operation_type == "ADJUSTMENT":
-                if quantity < 0:
+                elif operation.operation_type in DECREMENT_OPERATION_TYPES:
                     await OperationsService._ensure_sufficient_balance(
                         uow,
                         site_id=operation.site_id,
                         inventory_subject_id=line.inventory_subject_id,
-                        required_qty=abs(quantity),
+                        required_qty=quantity,
                         error_message=(
-                            f"insufficient stock for ADJUSTMENT: inventory_subject={line.inventory_subject_id}, "
-                            f"site={operation.site_id}, delta={line.qty}"
+                            f"insufficient stock for {operation.operation_type}: inventory_subject={line.inventory_subject_id}, "
+                            f"site={operation.site_id}, required={line.qty}"
                         ),
                     )
-                await uow.balances.update_balance_quantity(
-                    site_id=operation.site_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    quantity_delta=quantity,
-                )
-            elif operation.operation_type == "MOVE":
-                if operation.source_site_id is None or operation.destination_site_id is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="MOVE operation requires source_site_id and destination_site_id",
-                    )
-
-                await OperationsService._ensure_sufficient_balance(
-                    uow,
-                    site_id=operation.source_site_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    required_qty=quantity,
-                    error_message=(
-                        f"insufficient stock for MOVE: inventory_subject={line.inventory_subject_id}, "
-                        f"source_site={operation.source_site_id}, required={line.qty}"
-                    ),
-                )
-                await uow.balances.update_balance_quantity(
-                    site_id=operation.source_site_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    quantity_delta=-quantity,
-                )
-                if operation.acceptance_required:
-                    await OperationsService._upsert_pending(
-                        uow,
-                        operation_id=operation.id,
-                        operation_line_id=line.id,
-                        destination_site_id=operation.destination_site_id,
-                        source_site_id=operation.source_site_id,
-                        inventory_subject_id=line.inventory_subject_id,
-                        qty_delta=quantity,
-                        error_context="MOVE submit",
-                    )
-                else:
                     await uow.balances.update_balance_quantity(
-                        site_id=operation.destination_site_id,
+                        site_id=operation.site_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        quantity_delta=-quantity,
+                    )
+                elif operation.operation_type == "ADJUSTMENT":
+                    if quantity < 0:
+                        await OperationsService._ensure_sufficient_balance(
+                            uow,
+                            site_id=operation.site_id,
+                            inventory_subject_id=line.inventory_subject_id,
+                            required_qty=abs(quantity),
+                            error_message=(
+                                f"insufficient stock for ADJUSTMENT: inventory_subject={line.inventory_subject_id}, "
+                                f"site={operation.site_id}, delta={line.qty}"
+                            ),
+                        )
+                    await uow.balances.update_balance_quantity(
+                        site_id=operation.site_id,
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
                     )
-            elif operation.operation_type == "ISSUE":
-                if operation.issue_object_id is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="ISSUE requires issue_object_id",
+                elif operation.operation_type == "MOVE":
+                    if operation.source_site_id is None or operation.destination_site_id is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="MOVE operation requires source_site_id and destination_site_id",
+                        )
+
+                    await OperationsService._ensure_sufficient_balance(
+                        uow,
+                        site_id=operation.source_site_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        required_qty=quantity,
+                        error_message=(
+                            f"insufficient stock for MOVE: inventory_subject={line.inventory_subject_id}, "
+                            f"source_site={operation.source_site_id}, required={line.qty}"
+                        ),
                     )
-                await OperationsService._ensure_sufficient_balance(
-                    uow,
-                    site_id=operation.site_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    required_qty=quantity,
-                    error_message=(
-                        f"insufficient stock for ISSUE: inventory_subject={line.inventory_subject_id}, "
-                        f"site={operation.site_id}, required={line.qty}"
-                    ),
-                )
-                await uow.balances.update_balance_quantity(
-                    site_id=operation.site_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    quantity_delta=-quantity,
-                )
-                await OperationsService._upsert_issued(
-                    uow,
-                    issue_object_id=operation.issue_object_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    qty_delta=quantity,
-                    error_context="ISSUE submit",
-                )
-            elif operation.operation_type == "ISSUE_RETURN":
-                if operation.issue_object_id is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="ISSUE_RETURN requires issue_object_id",
+                    await uow.balances.update_balance_quantity(
+                        site_id=operation.source_site_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        quantity_delta=-quantity,
                     )
-                await OperationsService._ensure_sufficient_issued_balance(
-                    uow,
-                    issue_object_id=operation.issue_object_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    required_qty=quantity,
-                    error_message=(
-                        f"insufficient issued balance for ISSUE_RETURN: "
-                        f"issue_object={operation.issue_object_id}, inventory_subject={line.inventory_subject_id}, required={line.qty}"
-                    ),
-                )
-                await OperationsService._upsert_issued(
-                    uow,
-                    issue_object_id=operation.issue_object_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    qty_delta=-quantity,
-                    error_context="ISSUE_RETURN submit",
-                )
-                await uow.balances.update_balance_quantity(
-                    site_id=operation.site_id,
-                    inventory_subject_id=line.inventory_subject_id,
-                    quantity_delta=quantity,
-                )
+                    if operation.acceptance_required:
+                        await OperationsService._upsert_pending(
+                            uow,
+                            operation_id=operation.id,
+                            operation_line_id=line.id,
+                            destination_site_id=operation.destination_site_id,
+                            source_site_id=operation.source_site_id,
+                            inventory_subject_id=line.inventory_subject_id,
+                            qty_delta=quantity,
+                            error_context="MOVE submit",
+                        )
+                    else:
+                        await uow.balances.update_balance_quantity(
+                            site_id=operation.destination_site_id,
+                            inventory_subject_id=line.inventory_subject_id,
+                            quantity_delta=quantity,
+                        )
+                elif operation.operation_type == "ISSUE":
+                    if operation.issue_object_id is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="ISSUE requires issue_object_id",
+                        )
+                    await OperationsService._ensure_sufficient_balance(
+                        uow,
+                        site_id=operation.site_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        required_qty=quantity,
+                        error_message=(
+                            f"insufficient stock for ISSUE: inventory_subject={line.inventory_subject_id}, "
+                            f"site={operation.site_id}, required={line.qty}"
+                        ),
+                    )
+                    await uow.balances.update_balance_quantity(
+                        site_id=operation.site_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        quantity_delta=-quantity,
+                    )
+                    await OperationsService._upsert_issued(
+                        uow,
+                        issue_object_id=operation.issue_object_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        qty_delta=quantity,
+                        error_context="ISSUE submit",
+                    )
+                elif operation.operation_type == "ISSUE_RETURN":
+                    if operation.issue_object_id is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="ISSUE_RETURN requires issue_object_id",
+                        )
+                    await OperationsService._ensure_sufficient_issued_balance(
+                        uow,
+                        issue_object_id=operation.issue_object_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        required_qty=quantity,
+                        error_message=(
+                            f"insufficient issued balance for ISSUE_RETURN: "
+                            f"issue_object={operation.issue_object_id}, inventory_subject={line.inventory_subject_id}, required={line.qty}"
+                        ),
+                    )
+                    await OperationsService._upsert_issued(
+                        uow,
+                        issue_object_id=operation.issue_object_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        qty_delta=-quantity,
+                        error_context="ISSUE_RETURN submit",
+                    )
+                    await uow.balances.update_balance_quantity(
+                        site_id=operation.site_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        quantity_delta=quantity,
+                    )
 
-        submitted_operation = await uow.operations.submit_operation(
-            operation_id=operation_id,
-            submitted_by_user_id=user_id,
-        )
-
-        # Автоматически создаём документ для операции (если включено в конфиге)
-        # Пока создаём только для определённых типов операций
-        document_created = None
-        try:
-            # Определяем тип документа на основе типа операции
-            document_type_map = {
-                "RECEIVE": "acceptance_certificate",
-                "MOVE": "waybill",
-                "ISSUE": "waybill",
-                "ISSUE_RETURN": "waybill",
-                "EXPENSE": "act",
-                "WRITE_OFF": "act",
-                "ADJUSTMENT": "act",
-            }
-
-            document_type = document_type_map.get(submitted_operation.operation_type)
-            if document_type:
-                # Генерируем документ с автоматической финализацией
-                result = await DocumentService.generate_from_operation(
-                    uow=uow,
-                    operation_id=operation_id,
-                    document_type=document_type,
-                    auto_finalize=True,
-                    created_by_user_id=user_id,
-                )
-                document_created = result["document"]
-                logger.info(
-                    "auto_generated_document",
-                    document_id=document_created.id,
-                    operation_id=str(operation_id),
-                    operation_type=submitted_operation.operation_type,
-                )
-        except Exception as e:
-            # Логируем ошибку, но не прерываем выполнение
-            logger.warning(
-                "failed_to_auto_generate_document",
-                operation_id=str(operation_id),
-                error=str(e),
+            submitted_operation = await uow.operations.submit_operation(
+                operation_id=operation_id,
+                submitted_by_user_id=user_id,
             )
 
-        await record_audit_event(
-            uow,
-            event_type="operation.submit",
-            actor_user_id=user_id,
-            site_id=submitted_operation.site_id,
-            entity_type="operation",
-            entity_id=str(submitted_operation.id),
-            summary=f"Пользователь подтвердил операцию №{submitted_operation.short_id} ({submitted_operation.operation_type})"
-            if hasattr(submitted_operation, "short_id") and submitted_operation.short_id
-            else f"Операция подтверждена ({submitted_operation.operation_type})",
-        )
+            # Автоматически создаём документ для операции (если включено в конфиге)
+            # Пока создаём только для определённых типов операций
+            document_created = None
+            try:
+                # Определяем тип документа на основе типа операции
+                document_type_map = {
+                    "RECEIVE": "acceptance_certificate",
+                    "MOVE": "waybill",
+                    "ISSUE": "waybill",
+                    "ISSUE_RETURN": "waybill",
+                    "EXPENSE": "act",
+                    "WRITE_OFF": "act",
+                    "ADJUSTMENT": "act",
+                }
 
-        response = {"operation": submitted_operation}
-        if document_created:
-            response["document"] = document_created
+                document_type = document_type_map.get(submitted_operation.operation_type)
+                if document_type:
+                    # Генерируем документ с автоматической финализацией
+                    result = await DocumentService.generate_from_operation(
+                        uow=uow,
+                        operation_id=operation_id,
+                        document_type=document_type,
+                        auto_finalize=True,
+                        created_by_user_id=user_id,
+                    )
+                    document_created = result["document"]
+                    logger.info(
+                        "auto_generated_document",
+                        document_id=document_created.id,
+                        operation_id=str(operation_id),
+                        operation_type=submitted_operation.operation_type,
+                    )
+            except Exception as e:
+                # Логируем ошибку, но не прерываем выполнение
+                logger.warning(
+                    "failed_to_auto_generate_document",
+                    operation_id=str(operation_id),
+                    error=str(e),
+                )
 
-        return response
+            await record_audit_event(
+                uow,
+                event_type="operation.submit",
+                actor_user_id=user_id,
+                site_id=submitted_operation.site_id,
+                entity_type="operation",
+                entity_id=str(submitted_operation.id),
+                summary=f"Пользователь подтвердил операцию №{submitted_operation.short_id} ({submitted_operation.operation_type})"
+                if hasattr(submitted_operation, "short_id") and submitted_operation.short_id
+                else f"Операция подтверждена ({submitted_operation.operation_type})",
+            )
+
+            response = {"operation": submitted_operation}
+            if document_created:
+                response["document"] = document_created
+
+            return response
+        except HTTPException:
+            raise
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Конфликт данных при подтверждении операции: {OperationsService._extract_user_message(exc)}",
+            )
 
     @staticmethod
     async def accept_operation_lines(
