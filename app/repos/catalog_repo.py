@@ -323,6 +323,35 @@ class CatalogRepo:
     async def get_category_by_id(self, category_id: int) -> Category | None:
         result = await self.session.execute(select(Category).where(Category.id == category_id))
         return result.scalar_one_or_none()
+    async def get_item_read_model(self, item_id: int) -> dict | None:
+        stmt = (
+            select(
+                Item.id.label("id"),
+                Item.sku.label("sku"),
+                Item.name.label("name"),
+                Item.category_id.label("category_id"),
+                Category.name.label("category_name"),
+                Item.unit_id.label("unit_id"),
+                Unit.symbol.label("unit_symbol"),
+                Item.description.label("description"),
+                Item.is_active.label("is_active"),
+                Item.hashtags.label("hashtags"),
+                Item.updated_at.label("updated_at"),
+            )
+            .join(Category, Category.id == Item.category_id)
+            .join(Unit, Unit.id == Item.unit_id)
+            .where(
+                Item.id == item_id,
+                Item.is_active.is_(True),
+                Category.is_active.is_(True),
+                Unit.is_active.is_(True),
+            )
+        )
+        result = await self.session.execute(stmt)
+        row = result.first()
+        if row is None:
+            return None
+        return dict(row._mapping)
 
     async def get_category_by_parent_and_name(self, parent_id: int | None, name: str) -> Category | None:
         stmt = select(Category).where(Category.parent_id == parent_id, Category.name == name)

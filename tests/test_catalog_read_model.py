@@ -132,11 +132,15 @@ async def _seed_catalog_read_fixture(
         session.add_all(items)
         await session.commit()
 
+        # Capture the first active item id for read-by-id tests
+        active_item_id = items[0].id
+
         return {
             "token": str(user.user_token),
             "root_id": root.id,
             "milk_id": milk.id,
             "whole_milk_id": whole_milk.id,
+            "active_item_id": active_item_id,
             "root_name": root_name,
             "milk_name": milk_name,
             "cheese_name": cheese_name,
@@ -566,3 +570,132 @@ async def test_categories_tree_inactive_category_is_hidden(
     assert milk_node is not None
     assert len(milk_node["children"]) == 1, "Milk should have only whole_milk child"
     assert milk_node["children"][0]["id"] == seed["whole_milk_id"]
+
+
+# ── Item-by-id read endpoint ───────────────────────────────────────────
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_read_item_by_id_active_returns_200(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /catalog/read/items/{id} returns 200 for an active item."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    response = await client.get(
+        f"/api/v1/catalog/read/items/{seed['active_item_id']}",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # Must have the same shape as a browse item DTO
+    assert body["id"] == seed["active_item_id"]
+    assert "name" in body
+    assert "sku" in body
+    assert "category_id" in body
+    assert "category_name" in body
+    assert "unit_id" in body
+    assert "unit_symbol" in body
+    assert "description" in body
+    assert "is_active" in body
+    assert "hashtags" in body
+    assert "updated_at" in body
+    assert body["is_active"] is True
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_read_item_by_id_missing_returns_404(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /catalog/read/items/{id} returns 404 for a non-existent id."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    response = await client.get(
+        "/api/v1/catalog/read/items/999999",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_read_item_by_id_inactive_returns_404(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /catalog/read/items/{id} returns 404 for an inactive item."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    # The seed already creates an inactive item — find it
+    async with session_factory() as session:
+        from sqlalchemy import select
+        inactive = (await session.execute(
+            select(Item).where(Item.is_active.is_(False))
+        )).scalar_one()
+
+    response = await client.get(
+        f"/api/v1/catalog/read/items/{inactive.id}",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_read_item_by_id_inactive_category_returns_404(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /catalog/read/items/{id} returns 404 when the item's category is inactive."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    # Find the active item created by the seed, deactivate its category
+    async with session_factory() as session:
+        from sqlalchemy import update
+        await session.execute(
+            update(Category)
+            .where(Category.id == seed["whole_milk_id"])
+            .values(is_active=False)
+        )
+        await session.commit()
+
+    # Now the Whole Milk item has an inactive category — should be 404
+    response = await client.get(
+        f"/api/v1/catalog/read/items/{seed['active_item_id']}",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_read_item_by_id_inactive_unit_returns_404(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /catalog/read/items/{id} returns 404 when the item's unit is inactive."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    # Deactivate the unit
+    async with session_factory() as session:
+        from sqlalchemy import update
+        await session.execute(
+            update(Unit)
+            .where(Unit.id == seed["unit_liter_id"])
+            .values(is_active=False)
+        )
+        await session.commit()
+
+    # Now the item has an inactive unit — should be 404
+    response = await client.get(
+        f"/api/v1/catalog/read/items/{seed['active_item_id']}",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]

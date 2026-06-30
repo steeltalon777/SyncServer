@@ -14,6 +14,7 @@ from app.core.identity import Identity
 from app.schemas.admin import SiteFilter
 from app.schemas.catalog import (
     CatalogBrowseCategoriesResponse,
+    CatalogBrowseItemDto,
     CatalogBrowseItemsResponse,
     CatalogCategoriesResponse,
     CatalogItemsResponse,
@@ -279,6 +280,24 @@ async def browse_items(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/read/items/{item_id}", response_model=CatalogBrowseItemDto)
+async def read_item(
+    request: Request,
+    item_id: int,
+    site_id: int | None = Query(default=None),
+    identity: Identity = Depends(require_user_identity),
+    uow: UnitOfWork = Depends(get_uow),
+) -> CatalogBrowseItemDto:
+    async with uow:
+        _require_catalog_read_access(identity, site_id=site_id)
+        item = await uow.catalog.get_item_read_model(item_id)
+        if item is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
+
+    logger.info("catalog_read_item", request_id=get_request_id(request), item_id=item_id)
+    return CatalogBrowseItemDto.model_validate(item)
 
 
 @router.get("/read/categories", response_model=CatalogBrowseCategoriesResponse)
