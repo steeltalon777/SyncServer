@@ -313,3 +313,256 @@ async def test_catalog_read_items_returns_hashtags(
     assert tagged_item is not None, "Tagged item should be found"
     assert "hashtags" in tagged_item, "hashtags field should be present in response"
     assert tagged_item["hashtags"] == ["electronics", "premium", "sale"]
+
+
+# ── Categories tree with active_only ────────────────────────────────────
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_categories_tree_active_only_default_excludes_inactive(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Default active_only=true → inactive categories are excluded from tree."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    response = await client.get(
+        "/api/v1/catalog/categories/tree",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 200
+    tree = response.json()
+
+    # Flatten all category ids in tree
+    def collect_ids(nodes):
+        ids = set()
+        for n in nodes:
+            ids.add(n["id"])
+            ids.update(collect_ids(n.get("children", [])))
+        return ids
+
+    visible_ids = collect_ids(tree)
+
+    # Root + milk + cheese + whole_milk = 4 active categories
+    assert seed["root_id"] in visible_ids
+    assert seed["milk_id"] in visible_ids
+    assert seed["whole_milk_id"] in visible_ids
+
+    # Inactive "archived" category should NOT be in the tree
+    async with session_factory() as session:
+        from sqlalchemy import select
+        archived = (await session.execute(
+            select(Category).where(Category.name.like(f"Archived %"))
+        )).scalar_one()
+        assert archived.id not in visible_ids, f"Inactive category {archived.id} should be excluded"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_categories_tree_active_only_false_returns_inactive(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """active_only=false → inactive categories are included in tree."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    response = await client.get(
+        "/api/v1/catalog/categories/tree",
+        headers={"X-User-Token": seed["token"]},
+        params={"active_only": False},
+    )
+
+    assert response.status_code == 200
+    tree = response.json()
+
+    def collect_ids(nodes):
+        ids = set()
+        for n in nodes:
+            ids.add(n["id"])
+            ids.update(collect_ids(n.get("children", [])))
+        return ids
+
+    visible_ids = collect_ids(tree)
+
+    async with session_factory() as session:
+        from sqlalchemy import select
+        archived = (await session.execute(
+            select(Category).where(Category.name.like(f"Archived %"))
+        )).scalar_one()
+        assert archived.id in visible_ids, f"Inactive category {archived.id} should be included with active_only=false"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_categories_tree_structure_not_broken_by_filter(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """After active_only filter, the tree structure remains correct:
+    whole_milk is still a child of milk, milk is still a child of root."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    response = await client.get(
+        "/api/v1/catalog/categories/tree",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 200
+    tree = response.json()
+    assert len(tree) >= 1  # Root categories
+
+    root = next((n for n in tree if n["id"] == seed["root_id"]), None)
+    assert root is not None, "Root category should be in tree"
+    assert len(root.get("children", [])) >= 2  # milk + cheese
+
+    milk = next((c for c in root["children"] if c["id"] == seed["milk_id"]), None)
+    assert milk is not None, "Milk category should be child of root"
+    assert len(milk.get("children", [])) >= 1  # whole_milk
+
+    whole = next((c for c in milk["children"] if c["id"] == seed["whole_milk_id"]), None)
+    assert whole is not None, "Whole milk should be child of milk"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_categories_tree_inactive_parent_with_active_child(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Active child of inactive parent becomes a root node (no silent hiding)."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    async with session_factory() as session:
+        # Create: inactive_parent → active_child
+        inactive_parent = Category(
+            name=f"Inactive Parent {uuid4().hex[:6]}",
+            code=f"IP-{uuid4().hex[:6]}",
+            is_active=False,
+        )
+        session.add(inactive_parent)
+        await session.flush()
+
+        active_child = Category(
+            name=f"Active Child {uuid4().hex[:6]}",
+            code=f"AC-{uuid4().hex[:6]}",
+            parent_id=inactive_parent.id,
+            is_active=True,
+        )
+        session.add(active_child)
+        await session.commit()
+
+        child_id = active_child.id
+
+    response = await client.get(
+        "/api/v1/catalog/categories/tree",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 200
+    tree = response.json()
+
+    def collect_root_ids(nodes):
+        return {n["id"] for n in nodes}
+
+    root_ids = collect_root_ids(tree)
+    assert child_id in root_ids, (
+        "Active child of inactive parent must appear as root node, not be hidden"
+    )
+
+    # The inactive parent itself should NOT be in tree
+    def collect_all_ids(nodes):
+        ids = set()
+        for n in nodes:
+            ids.add(n["id"])
+            ids.update(collect_all_ids(n.get("children", [])))
+        return ids
+
+    all_ids = collect_all_ids(tree)
+    assert inactive_parent.id not in all_ids, "Inactive parent should not be visible"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_categories_tree_active_only_explicit_true(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Explicit active_only=true behaves identically to default."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    default_resp = await client.get(
+        "/api/v1/catalog/categories/tree",
+        headers={"X-User-Token": seed["token"]},
+    )
+    explicit_resp = await client.get(
+        "/api/v1/catalog/categories/tree",
+        headers={"X-User-Token": seed["token"]},
+        params={"active_only": True},
+    )
+
+    assert default_resp.status_code == 200
+    assert explicit_resp.status_code == 200
+    assert default_resp.json() == explicit_resp.json(), (
+        "Default and explicit active_only=true must return identical trees"
+    )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_categories_tree_all_inactive_returns_empty(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """When all categories are inactive, tree is empty (doesn't crash)."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    # Set ALL categories to inactive
+    async with session_factory() as session:
+        from sqlalchemy import update
+        await session.execute(update(Category).values(is_active=False))
+        await session.commit()
+
+    response = await client.get(
+        "/api/v1/catalog/categories/tree",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 200
+    tree = response.json()
+    assert tree == [], "Empty tree expected when all categories are inactive"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_categories_tree_inactive_category_is_hidden(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """An inactive category is excluded from tree but does not affect siblings."""
+    seed = await _seed_catalog_read_fixture(session_factory)
+
+    response = await client.get(
+        "/api/v1/catalog/categories/tree",
+        headers={"X-User-Token": seed["token"]},
+    )
+
+    assert response.status_code == 200
+
+    def find_by_id(nodes, target_id):
+        for n in nodes:
+            if n["id"] == target_id:
+                return n
+            found = find_by_id(n.get("children", []), target_id)
+            if found:
+                return found
+        return None
+
+    # Archived is inactive — must be absent from tree
+    async with session_factory() as session:
+        from sqlalchemy import select
+        archived = (await session.execute(
+            select(Category).where(Category.name.like(f"Archived %"))
+        )).scalar_one()
+
+    archived_node = find_by_id(response.json(), archived.id)
+    assert archived_node is None, "Inactive archived category must be absent from tree"
+
+    # Milk is active — must have exactly one child (whole_milk, not archived)
+    milk_node = find_by_id(response.json(), seed["milk_id"])
+    assert milk_node is not None
+    assert len(milk_node["children"]) == 1, "Milk should have only whole_milk child"
+    assert milk_node["children"][0]["id"] == seed["whole_milk_id"]

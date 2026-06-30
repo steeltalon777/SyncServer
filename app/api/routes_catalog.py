@@ -176,13 +176,14 @@ async def list_sites(
 @router.get("/categories/tree", response_model=list[CategoryTreeNode])
 async def get_categories_tree(
     request: Request,
+    active_only: bool = Query(default=True),
     site_id: int | None = Query(default=None),
     identity: Identity = Depends(require_user_identity),
     uow: UnitOfWork = Depends(get_uow),
 ) -> list[CategoryTreeNode]:
     async with uow:
         _require_catalog_read_access(identity, site_id=site_id)
-        categories_tree = await uow.catalog.get_categories_tree()
+        categories_tree = await uow.catalog.get_categories_tree(active_only=active_only)
 
     logger.info("catalog_categories_tree", request_id=get_request_id(request), returned=len(categories_tree))
     return [CategoryTreeNode.model_validate(node) for node in categories_tree]

@@ -279,8 +279,11 @@ class CatalogRepo:
             chains[category.id] = chain
         return chains
 
-    async def get_all_categories(self) -> list[Category]:
-        stmt = select(Category).where(Category.deleted_at.is_(None)).order_by(Category.sort_order, Category.name)
+    async def get_all_categories(self, active_only: bool = False) -> list[Category]:
+        stmt = select(Category).where(Category.deleted_at.is_(None))
+        if active_only:
+            stmt = stmt.where(Category.is_active.is_(True))
+        stmt = stmt.order_by(Category.sort_order, Category.name)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -414,8 +417,8 @@ class CatalogRepo:
             node["path"] = parent_path + [node["name"]]
             self.build_paths(node["children"], node["path"])
 
-    async def get_categories_tree(self) -> list[dict]:
-        categories = await self.get_all_categories()
+    async def get_categories_tree(self, active_only: bool = False) -> list[dict]:
+        categories = await self.get_all_categories(active_only=active_only)
         tree = self.build_category_tree(categories)
         self.build_paths(tree)
         return tree
