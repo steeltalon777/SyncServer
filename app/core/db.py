@@ -9,7 +9,9 @@ settings = get_settings()
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.LOG_SQL,
-    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+    pool_recycle=3600,
 )
 
 SessionFactory = async_sessionmaker(

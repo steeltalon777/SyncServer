@@ -7,7 +7,27 @@ from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMBaseModel
 
-ReasonCode = Literal["uuid_collision", "processing_error", "validation_error"]
+# ---------------------------------------------------------------------------
+# Push response taxonomy (ADR-0016)
+# ---------------------------------------------------------------------------
+# Status of an individual event in a push batch:
+# - "accepted":          event applied, server_seq assigned, advance cursor
+# - "duplicate_same_payload": event_uuid + payload_hash already present (idempotent retry)
+# - "uuid_collision":    event_uuid present with a different payload (conflict)
+# - "processing_error":  internal exception while applying the event
+# - "rejected":          server-side business rule violation (e.g. inactive item,
+#                        insufficient balance, role not permitted) — framework
+#                        ready, see ADR-0016; reserved for upcoming validation
+#                        policy work
+# HTTP-level statuses (not part of reason_code taxonomy, but documented here
+# for completeness):
+# - 401: auth_error      — invalid or missing token
+# - 422: validation_error — payload fails schema validation
+ReasonCode = Literal[
+    "uuid_collision",
+    "processing_error",
+    "rejected",
+]
 
 
 class EventLine(BaseModel):
@@ -60,6 +80,17 @@ class PushResponse(ORMBaseModel):
     rejected: list[RejectedEvent] = Field(default_factory=list)
     server_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
     server_seq_upto: int = 0
+    # Counters used by the route layer to update sync_state.
+    # Keys: accepted_count, duplicate_count, rejected_count, conflict_count,
+    # last_error, max_server_seq. None when produced outside SyncService.
+    summary: dict | None = None
+
+    # See module docstring and ReasonCode for the full taxonomy. Client
+    # behaviour per status:
+    # - accepted       → drop from outbox, advance last_sequence_number
+    # - duplicates[]   → drop from outbox (already applied)
+    # - rejected[*]    → surface to user, drop from outbox, log last_error
+    # - conflict (uuid_collision) → keep in outbox, ask user to resolve
 
 
 class PingRequest(BaseModel):
@@ -121,3 +152,20 @@ class BootstrapSyncResponse(ORMBaseModel):
     device_registered: bool = False
     message: str = ""
     bootstrap_data: BootstrapData | None = None
+
+
+class SyncStatusResponse(ORMBaseModel):
+    """Per-device sync state snapshot (ADR-0016).
+
+    Returned by ``GET /api/v1/sync/status/{device_id}``.
+
+    ``behind_by = max(0, server_seq_upto - last_sequence_number)`` measures
+    how many events the device has not yet pulled.
+    """
+
+    device_id: int
+    last_sequence_number: int
+    last_sync_at: datetime | None
+    status: str
+    server_seq_upto: int
+    behind_by: int

@@ -16,6 +16,7 @@ from app.repos.issue_object_categories_repo import IssueObjectCategoriesRepo
 from app.repos.issue_objects_repo import IssueObjectsRepo
 from app.repos.reports_repo import ReportsRepo
 from app.repos.sites_repo import SitesRepo
+from app.repos.sync_state_repo import SyncStateRepo
 from app.repos.temporary_items_repo import TemporaryItemsRepo
 from app.repos.user_access_scopes_repo import UserAccessScopesRepo
 from app.repos.users_repo import UsersRepo
@@ -44,6 +45,7 @@ class UnitOfWork:
         self.users = UsersRepo(session)
         self.documents = DocumentsRepo(session)
         self.temporary_items = TemporaryItemsRepo(session)
+        self.sync_state = SyncStateRepo(session)
 
     async def __aenter__(self) -> "UnitOfWork":
         return self

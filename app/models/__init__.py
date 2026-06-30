@@ -18,6 +18,7 @@ from app.models.operation import Operation, OperationLine
 from app.models.issue_object import IssueObject, IssueObjectAlias
 from app.models.issue_object_category import IssueObjectCategory
 from app.models.site import Site
+from app.models.sync_state import SyncState
 from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
 from app.models.user import User
@@ -50,6 +51,7 @@ __all__ = [
     "OperationLine",
     "User",
     "UserAccessScope",
+    "SyncState",
     "Document",
     "DocumentOperation",
     "DocumentSource",

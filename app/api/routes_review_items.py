@@ -74,9 +74,11 @@ async def list_review_items(
             page=page,
             page_size=page_size,
         )
+        # Build response inside UOW context to avoid lazy-load outside session
+        resp_items = [_build_review_item_response(item) for item in items]
 
     return ReviewItemListResponse(
-        items=[_build_review_item_response(item) for item in items],
+        items=resp_items,
         total_count=total_count,
         page=page,
         page_size=page_size,
@@ -183,7 +185,9 @@ async def confirm_review_item(
             payload=payload,
         )
         item = await uow.catalog.get_item_by_id(item_id)
-    return _build_review_item_response(item)
+        # Build response inside UOW context to avoid lazy-load issues
+        resp = _build_review_item_response(item)
+    return resp
 
 
 @router.post("/{item_id}/merge", response_model=ReviewItemResponse)
@@ -207,7 +211,8 @@ async def merge_review_item(
             resolution_note=payload.comment,
         )
         item = await uow.catalog.get_item_by_id(item_id)
-    return _build_review_item_response(item)
+        resp = _build_review_item_response(item)
+    return resp
 
 
 @router.delete("/{item_id}", response_model=ReviewItemResponse)
@@ -229,4 +234,5 @@ async def delete_review_item(
             resolution_note="Удалён пользователем",
         )
         item = await uow.catalog.get_item_by_id(item_id)
-    return _build_review_item_response(item)
+        resp = _build_review_item_response(item)
+    return resp

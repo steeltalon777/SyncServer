@@ -357,14 +357,20 @@ class CatalogAdminService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="category cycle detected")
 
     async def _validate_unit_exists(self, uow: UnitOfWork, unit_id: int) -> None:
-        if await uow.catalog.get_unit_by_id(unit_id) is None:
+        unit = await uow.catalog.get_unit_by_id(unit_id)
+        if unit is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unit not found")
+        if not unit.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unit is not active")
 
     async def _resolve_item_category(self, uow: UnitOfWork, category_id: int | None) -> Category:
         if category_id is not None:
             category = await uow.catalog.get_category_by_id(category_id)
-            if category is not None and category.is_active:
-                return category
+            if category is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
+            if not category.is_active:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="category is not active")
+            return category
         return await self._get_or_create_uncategorized_category(uow)
 
     async def _get_or_create_uncategorized_category(self, uow: UnitOfWork) -> Category:

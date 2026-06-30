@@ -117,9 +117,8 @@ async def test_create_item_falls_back_to_uncategorized_for_missing_or_invalid_ca
         },
     )
 
-    assert invalid_category_response.status_code == 200
-    invalid_body = invalid_category_response.json()
-    assert invalid_body["category_id"] == uncategorized_category.id
+    assert invalid_category_response.status_code == 404
+    assert "not found" in invalid_category_response.json()["detail"]
 
     browse_response = await client.get(
         "/api/v1/catalog/read/items",
@@ -129,8 +128,9 @@ async def test_create_item_falls_back_to_uncategorized_for_missing_or_invalid_ca
 
     assert browse_response.status_code == 200
     browse_body = browse_response.json()
-    assert browse_body["total_count"] == 2
-    assert {item["name"] for item in browse_body["items"]} == {"Loose item", "Ghost category item"}
+    # Only the first null-category item should be in uncategorized
+    assert browse_body["total_count"] == 1
+    assert {item["name"] for item in browse_body["items"]} == {"Loose item"}
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -189,3 +189,185 @@ async def test_update_item_category_patch_semantics_and_protect_system_category(
     categories_body = categories_response.json()
     assert categories_body["total_count"] == 1
     assert categories_body["categories"][0]["code"] == UNCATEGORIZED_CATEGORY_CODE
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_create_item_with_active_unit_and_category_ok(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Sanity: item creation succeeds with active unit and category."""
+    seed = await _seed_catalog_admin_fixture(session_factory)
+
+    response = await client.post(
+        "/api/v1/catalog/admin/items",
+        headers={"X-User-Token": seed["token"]},
+        json={
+            "name": "Active unit+category item",
+            "category_id": seed["category_id"],
+            "unit_id": seed["unit_id"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Active unit+category item"
+    assert body["category_id"] == seed["category_id"]
+    assert body["unit_id"] == seed["unit_id"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_create_item_with_inactive_unit_rejected(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Item creation with an inactive unit must raise 400."""
+    seed = await _seed_catalog_admin_fixture(session_factory)
+
+    # Deactivate the existing unit via PATCH
+    deactivate_response = await client.patch(
+        f"/api/v1/catalog/admin/units/{seed['unit_id']}",
+        headers={"X-User-Token": seed["token"]},
+        json={"is_active": False},
+    )
+    assert deactivate_response.status_code == 200
+
+    # Try creating an item with the now-inactive unit
+    response = await client.post(
+        "/api/v1/catalog/admin/items",
+        headers={"X-User-Token": seed["token"]},
+        json={
+            "name": "Item with inactive unit",
+            "category_id": seed["category_id"],
+            "unit_id": seed["unit_id"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "unit is not active" in response.json()["detail"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_create_item_with_inactive_category_rejected(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Item creation with an inactive category must raise 400."""
+    seed = await _seed_catalog_admin_fixture(session_factory)
+
+    # Deactivate the existing category via PATCH
+    deactivate_response = await client.patch(
+        f"/api/v1/catalog/admin/categories/{seed['category_id']}",
+        headers={"X-User-Token": seed["token"]},
+        json={"is_active": False},
+    )
+    assert deactivate_response.status_code == 200
+
+    # Try creating an item with the now-inactive category
+    response = await client.post(
+        "/api/v1/catalog/admin/items",
+        headers={"X-User-Token": seed["token"]},
+        json={
+            "name": "Item with inactive category",
+            "category_id": seed["category_id"],
+            "unit_id": seed["unit_id"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "category is not active" in response.json()["detail"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_update_item_to_inactive_unit_rejected(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Updating item to use an inactive unit must raise 400."""
+    seed = await _seed_catalog_admin_fixture(session_factory)
+
+    # Create a second unit and deactivate it
+    suffix = str(seed["unit_id"])
+    create_response = await client.post(
+        "/api/v1/catalog/admin/units",
+        headers={"X-User-Token": seed["token"]},
+        json={"name": f"Deactivated-{suffix}", "symbol": f"dx{suffix[:3]}"},
+    )
+    assert create_response.status_code == 200
+    second_unit_id = create_response.json()["id"]
+
+    deactivate_response = await client.patch(
+        f"/api/v1/catalog/admin/units/{second_unit_id}",
+        headers={"X-User-Token": seed["token"]},
+        json={"is_active": False},
+    )
+    assert deactivate_response.status_code == 200
+
+    # Try updating the item to use the inactive unit
+    response = await client.patch(
+        f"/api/v1/catalog/admin/items/{seed['item_id']}",
+        headers={"X-User-Token": seed["token"]},
+        json={"unit_id": second_unit_id},
+    )
+
+    assert response.status_code == 400
+    assert "unit is not active" in response.json()["detail"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_update_item_to_inactive_category_rejected(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Updating item to use an inactive category must raise 400."""
+    seed = await _seed_catalog_admin_fixture(session_factory)
+
+    # Create a second category and deactivate it
+    suffix = str(seed["category_id"])
+    create_response = await client.post(
+        "/api/v1/catalog/admin/categories",
+        headers={"X-User-Token": seed["token"]},
+        json={"name": f"DeactivatedCat-{suffix}", "code": f"DX{suffix[:5]}"},
+    )
+    assert create_response.status_code == 200
+    second_cat_id = create_response.json()["id"]
+
+    deactivate_response = await client.patch(
+        f"/api/v1/catalog/admin/categories/{second_cat_id}",
+        headers={"X-User-Token": seed["token"]},
+        json={"is_active": False},
+    )
+    assert deactivate_response.status_code == 200
+
+    # Try updating the item to use the inactive category
+    response = await client.patch(
+        f"/api/v1/catalog/admin/items/{seed['item_id']}",
+        headers={"X-User-Token": seed["token"]},
+        json={"category_id": second_cat_id},
+    )
+
+    assert response.status_code == 400
+    assert "category is not active" in response.json()["detail"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_create_item_without_category_falls_back_to_uncategorized(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """category_id=None still falls back to uncategorized (unchanged behaviour)."""
+    seed = await _seed_catalog_admin_fixture(session_factory)
+
+    response = await client.post(
+        "/api/v1/catalog/admin/items",
+        headers={"X-User-Token": seed["token"]},
+        json={
+            "name": "No category item",
+            "category_id": None,
+            "unit_id": seed["unit_id"],
+        },
+    )
+
+    assert response.status_code == 200
+    uncategorized = await _get_uncategorized_category(session_factory)
+    assert response.json()["category_id"] == uncategorized.id

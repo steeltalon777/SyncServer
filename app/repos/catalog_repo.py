@@ -5,7 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, selectinload
 
 from app.models.category import Category
 from app.models.item import Item
@@ -354,7 +354,11 @@ class CatalogRepo:
         return item
 
     async def get_item_by_id(self, item_id: int) -> Item | None:
-        result = await self.session.execute(select(Item).where(Item.id == item_id))
+        stmt = select(Item).where(Item.id == item_id).options(
+            selectinload(Item.category),
+            selectinload(Item.unit),
+        )
+        result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def get_item_by_sku(self, sku: str) -> Item | None:
@@ -602,5 +606,6 @@ class CatalogRepo:
         total_count = int((await self.session.execute(count_stmt)).scalar_one())
         stmt = stmt.order_by(Item.created_at.desc(), Item.id.desc())
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+        stmt = stmt.options(selectinload(Item.category), selectinload(Item.unit))
         items = list((await self.session.execute(stmt)).scalars().all())
         return items, total_count

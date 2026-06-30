@@ -1,5 +1,7 @@
 # SyncServer
 
+Quartermaster — система складского учёта. Этот компонент: authoritative backend.
+
 SyncServer is the backend source of truth for warehouse data: users, site access, catalog, operations, balances, and device sync events.
 
 ## Project Overview
