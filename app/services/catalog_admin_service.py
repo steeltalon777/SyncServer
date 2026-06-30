@@ -27,6 +27,7 @@ from app.schemas.catalog import (
     BatchChangeUpdate,
     BatchChangeDeactivate,
     BatchChangeDelete,
+    BatchChangeMerge,
     BatchChangeResult,
     BatchChangeUnitPayload,
     BatchChangeCategoryPayload,
@@ -777,7 +778,7 @@ class CatalogAdminService:
         # Build local_id -> entity_id mapping for created entities
         local_id_map: dict[str, int] = {}
         results: list[BatchChangeResult] = []
-        summary: dict[str, int] = {"create": 0, "update": 0, "deactivate": 0, "delete": 0, "error": 0}
+        summary: dict[str, int] = {"create": 0, "update": 0, "deactivate": 0, "delete": 0, "merge": 0, "error": 0}
         
         # Process changes in dependency order:
         # 1. Units (create/update/deactivate/delete)
@@ -833,6 +834,18 @@ class CatalogAdminService:
                 summary[change.action] += 1
                 if change.action == "create" and result.entity_id:
                     local_id_map[change.local_id] = result.entity_id
+            else:
+                summary["error"] += 1
+
+        # Process merges: items first, then categories
+        item_merges = [c for c in payload.changes if c.entity_type == "item" and c.action == "merge"]
+        category_merges = [c for c in payload.changes if c.entity_type == "category" and c.action == "merge"]
+
+        for change in item_merges + category_merges:
+            result = await self._apply_merge_change(uow, change, local_id_map, identity.user_id)
+            results.append(result)
+            if result.status == "applied":
+                summary["merge"] += 1
             else:
                 summary["error"] += 1
         
@@ -1212,3 +1225,45 @@ class CatalogAdminService:
             error_code="invalid_payload",
             error_message="Invalid payload for item change",
         )
+
+    async def _apply_merge_change(
+        self,
+        uow: UnitOfWork,
+        change: BatchChangeMerge,
+        local_id_map: dict[str, int],
+        user_id: UUID,
+    ) -> BatchChangeResult:
+        try:
+            payload = change.payload
+            if change.entity_type == "item":
+                await self.merge_items(
+                    uow,
+                    source_item_id=change.entity_id,
+                    target_item_id=payload.target_entity_id,
+                    comment=payload.comment,
+                    resolved_by_user_id=user_id,
+                )
+            elif change.entity_type == "category":
+                await self.merge_categories(
+                    uow,
+                    source_category_id=change.entity_id,
+                    target_category_id=payload.target_entity_id,
+                    comment=payload.comment,
+                    resolved_by_user_id=user_id,
+                )
+            return BatchChangeResult(
+                local_id=change.local_id,
+                entity_type=change.entity_type,
+                action="merge",
+                status="applied",
+                entity_id=change.entity_id,
+            )
+        except HTTPException as exc:
+            return BatchChangeResult(
+                local_id=change.local_id,
+                entity_type=change.entity_type,
+                action="merge",
+                status="error",
+                error_code=str(exc.status_code),
+                error_message=exc.detail,
+            )

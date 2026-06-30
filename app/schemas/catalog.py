@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+from typing import Literal
+
 from app.schemas.common import ORMBaseModel
 from pydantic import BaseModel, Field, field_validator
 
@@ -453,8 +455,21 @@ class BatchChangeDelete(BatchChangeBase):
             raise ValueError("entity_id is required for delete action")
 
 
+class BatchChangeMergePayload(BaseModel):
+    target_entity_id: int
+    comment: str | None = None
+
+class BatchChangeMerge(BatchChangeBase):
+    action: Literal["merge"] = "merge"
+    entity_id: int  # source entity id
+    payload: BatchChangeMergePayload
+
+    def model_post_init(self, __context) -> None:
+        if self.entity_id is None:
+            raise ValueError("entity_id is required for merge action")
+
 # Union type for batch changes
-BatchChange = BatchChangeCreate | BatchChangeUpdate | BatchChangeDeactivate | BatchChangeDelete
+BatchChange = BatchChangeCreate | BatchChangeUpdate | BatchChangeDeactivate | BatchChangeDelete | BatchChangeMerge
 
 
 class CatalogBatchRequest(BaseModel):
