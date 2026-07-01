@@ -740,6 +740,18 @@ class OperationsService:
             # Refresh operation to avoid stale line data from identity map cache
             await uow.session.refresh(updated)
 
+        # H1: Auto-regenerate waybill for draft operations
+        if operation.status == "draft":
+            try:
+                await DocumentService.generate_from_operation(
+                    uow=uow,
+                    operation_id=operation_id,
+                    auto_finalize=False,
+                )
+            except Exception as exc:
+                logger.warning("waybill_auto_update_failed", operation_id=str(operation.id), error=str(exc))
+                # Don't abort update_operation due to waybill error
+
         return await uow.operations.get_operation_by_id(updated.id)
 
     @staticmethod
