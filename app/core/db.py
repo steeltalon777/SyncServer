@@ -1,18 +1,28 @@
 ﻿from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.LOG_SQL,
-    pool_size=5,
-    max_overflow=10,
-    pool_recycle=3600,
-)
+# В тестовом режиме отключаем пул соединений, чтобы избежать конфликтов
+# asyncpg Future'ов между разными event loop'ами TestClient'ов.
+# В проде используем пул с pool_pre_ping для проверки жизнеспособности коннектов.
+engine_kwargs: dict[str, object] = {
+    "echo": settings.LOG_SQL,
+}
+
+if settings.TESTING:
+    engine_kwargs["poolclass"] = NullPool
+else:
+    engine_kwargs["pool_size"] = 5
+    engine_kwargs["max_overflow"] = 10
+    engine_kwargs["pool_pre_ping"] = True
+    engine_kwargs["pool_recycle"] = 3600
+
+engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
 
 SessionFactory = async_sessionmaker(
     bind=engine,

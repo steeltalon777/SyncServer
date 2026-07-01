@@ -7,16 +7,19 @@ from fastapi.testclient import TestClient
 from app.schemas.health import HealthStatus
 from main import create_app
 
-app = create_app(enable_startup_migrations=False)
+
+@pytest.fixture(scope="module")
+def _app():
+    return create_app(enable_startup_migrations=False)
 
 
 class TestHealthEndpoints:
     """Тесты для health endpoints."""
 
     @pytest.fixture
-    def client(self):
+    def client(self, _app):
         """Фикстура для тестового клиента."""
-        return TestClient(app)
+        return TestClient(_app)
 
     def test_health_basic(self, client):
         """Тест базового health endpoint."""

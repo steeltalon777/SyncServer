@@ -9,6 +9,11 @@ from uuid import uuid4
 # Добавляем корень проекта в sys.path для корректного импорта app при прямом запуске pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Должен быть установлен до импорта app.core.db — engine создаётся на уровне модуля,
+# и мы хотим, чтобы он использовал NullPool (без переиспользования asyncpg connections
+# между разными event loop'ами TestClient'ов).
+os.environ["TESTING"] = "true"
+
 import pytest
 from app.api.deps import rate_limiter
 from app.core.db import get_db

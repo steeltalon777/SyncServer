@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     DEFAULT_ADMIN_PAGE_SIZE: int = Field(default=50, ge=1, le=100, description="Default page size for admin endpoints")
     MAX_OPERATION_LINES: int = Field(default=100, ge=1, le=500, description="Maximum lines per operation")
 
+    # Testing mode — disables connection pooling to avoid asyncpg
+    # event loop conflicts between TestClient instances
+    TESTING: bool = False
+
     # Health check settings
     HEALTH_CHECK_TIMEOUT: float = Field(default=5.0, ge=0.5, le=30.0, description="Timeout for health checks in seconds")
     HEALTH_CHECK_ENABLE_REDIS: bool = Field(default=False, description="Enable Redis health check")
