@@ -29,18 +29,22 @@ DEFAULT_TEMPLATES: dict[DocumentType, str] = {
 }
 
 
-# TZ-V3.1I rev. 2 (I3.1, closes blocker #1):
-# Карта draft-документов ограничена типами, чей финальный документ тоже waybill.
-# EXPENSE/WRITE_OFF/RECEIVE/ADJUSTMENT исключены намеренно: финальный act /
-# acceptance_certificate не рендерится Django PDF renderer-ом
-# (Warehouse_web/apps/documents/services.py:110-111), и попадание draft "act" в
-# submit привело бы к _find_reusable_document, финализирующему осиротевший draft
-# in-place без пересборки payload (потеря правок черновика — см.
-# architecture-review-v3.1i #1). Финальные документы для них появятся на submit.
+# rev. 3: расширено до всех операций движения ТМЦ кроме корректировки.
+# ADJUSTMENT — служебная операция (Functional §II.5.5: «корректировка - служебная операция
+# которая позволит изменить количество или саму ТМЦ»; OPERATIONS_SCREEN_SCENARIOS.md:530,1285-1286:
+# «submit корректировки только root/chief»). Используется для transfer balances
+# (temporary_items_resolution_service.py), review items (review_items_service.py), merge batches
+# (catalog_admin_service.py). Накладной не имеет по определению.
+# Все остальные типы получают draft waybill при create и на каждом update; при submit
+# draft waybills войдируются (I3.3 в operations_service.py), а финальный
+# acceptance_certificate/act создаётся с актуальным payload.
 DRAFT_DOCUMENT_TYPE_BY_OPERATION: dict[str, DocumentType] = {
     "MOVE": "waybill",
     "ISSUE": "waybill",
     "ISSUE_RETURN": "waybill",
+    "RECEIVE": "waybill",
+    "EXPENSE": "waybill",
+    "WRITE_OFF": "waybill",
 }
 
 
