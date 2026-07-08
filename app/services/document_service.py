@@ -29,6 +29,44 @@ DEFAULT_TEMPLATES: dict[DocumentType, str] = {
 }
 
 
+# TZ-V3.1I rev. 2 (I3.1, closes blocker #1):
+# Карта draft-документов ограничена типами, чей финальный документ тоже waybill.
+# EXPENSE/WRITE_OFF/RECEIVE/ADJUSTMENT исключены намеренно: финальный act /
+# acceptance_certificate не рендерится Django PDF renderer-ом
+# (Warehouse_web/apps/documents/services.py:110-111), и попадание draft "act" в
+# submit привело бы к _find_reusable_document, финализирующему осиротевший draft
+# in-place без пересборки payload (потеря правок черновика — см.
+# architecture-review-v3.1i #1). Финальные документы для них появятся на submit.
+DRAFT_DOCUMENT_TYPE_BY_OPERATION: dict[str, DocumentType] = {
+    "MOVE": "waybill",
+    "ISSUE": "waybill",
+    "ISSUE_RETURN": "waybill",
+}
+
+
+def draft_document_type_for_operation(operation_type: str) -> DocumentType | None:
+    """Вернуть draft-документ для операции, или None, если draft не нужен."""
+    return DRAFT_DOCUMENT_TYPE_BY_OPERATION.get(operation_type)
+
+
+# TZ-V3.1I rev. 2 (I3.2/I3.5): submit-карта шире draft-карты — содержит
+# финальный document_type для всех поддерживаемых типов операций.
+SUBMIT_DOCUMENT_TYPE_BY_OPERATION: dict[str, DocumentType] = {
+    "RECEIVE": "acceptance_certificate",
+    "MOVE": "waybill",
+    "ISSUE": "waybill",
+    "ISSUE_RETURN": "waybill",
+    "EXPENSE": "act",
+    "WRITE_OFF": "act",
+    "ADJUSTMENT": "act",
+}
+
+
+def submit_document_type_for_operation(operation_type: str) -> DocumentType | None:
+    """Вернуть финальный document_type для операции, или None."""
+    return SUBMIT_DOCUMENT_TYPE_BY_OPERATION.get(operation_type)
+
+
 def _compute_payload_hash(payload: dict[str, Any]) -> str:
     """Вычисляет SHA-256 хэш payload для контроля неизменности."""
     payload_bytes = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")

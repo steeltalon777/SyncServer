@@ -13,10 +13,10 @@ async def test_update_draft_operation_auto_generates_waybill(
     uow: UnitOfWork,
     test_site,
     test_user,
-    test_operation_with_lines: Operation,
+    test_move_operation_with_lines: Operation,
 ):
     """Updating a draft operation should auto-generate a waybill document (H1)."""
-    operation = test_operation_with_lines
+    operation = test_move_operation_with_lines
     assert operation.status == "draft"
     await uow.session.commit()
 
@@ -45,10 +45,10 @@ async def test_update_draft_operation_twice_recreates_waybill(
     uow: UnitOfWork,
     test_site,
     test_user,
-    test_operation_with_lines: Operation,
+    test_move_operation_with_lines: Operation,
 ):
     """Updating a draft operation twice should void old waybill and create new one."""
-    operation = test_operation_with_lines
+    operation = test_move_operation_with_lines
     assert operation.status == "draft"
     await uow.session.commit()
 
@@ -87,10 +87,10 @@ async def test_update_draft_operation_without_lines_still_generates_waybill(
     uow: UnitOfWork,
     test_site,
     test_user,
-    test_operation_with_lines: Operation,
+    test_move_operation_with_lines: Operation,
 ):
     """Updating draft metadata (notes only, no lines) should still generate waybill."""
-    operation = test_operation_with_lines
+    operation = test_move_operation_with_lines
     assert operation.status == "draft"
     await uow.session.commit()
 
@@ -112,11 +112,11 @@ async def test_update_draft_operation_waybill_error_does_not_abort(
     uow: UnitOfWork,
     test_site,
     test_user,
-    test_operation_with_lines: Operation,
+    test_move_operation_with_lines: Operation,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A waybill generation error should not abort the update_operation."""
-    operation = test_operation_with_lines
+    operation = test_move_operation_with_lines
     assert operation.status == "draft"
     await uow.session.commit()
 

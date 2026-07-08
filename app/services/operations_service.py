@@ -10,7 +10,7 @@ from app.models.category import Category
 from app.models.item import Item
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
-from app.services.document_service import DocumentService
+from app.services.document_service import DocumentService, draft_document_type_for_operation, submit_document_type_for_operation
 from app.services.audit_helper import record_audit_event
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
@@ -530,6 +530,33 @@ class OperationsService:
                 )
 
         created_operation = await uow.operations.get_operation_by_id(operation.id)
+
+        # TZ-V3.1I rev. 2 (I3.2, closes warning #8/#9): auto-generate draft
+        # waybill для типов с waybill-документом. Вставка ПОСЛЕ
+        # get_operation_by_id (см. warning #9) — иначе waybill получит нулевые
+        # строки. Savepoint (begin_nested) — иначе DB-ошибка отравляет
+        # транзакцию create_operation. created_by_user_id=user_id — audit
+        # parity с submit_operation (warning #9).
+        draft_doc_type = draft_document_type_for_operation(created_operation.operation_type)
+        if draft_doc_type:
+            try:
+                async with uow.session.begin_nested():
+                    await DocumentService.generate_from_operation(
+                        uow=uow,
+                        operation_id=created_operation.id,
+                        document_type=draft_doc_type,
+                        auto_finalize=False,
+                        created_by_user_id=user_id,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "waybill_auto_create_failed",
+                    operation_id=str(created_operation.id),
+                    operation_type=created_operation.operation_type,
+                    error=str(exc),
+                )
+                # savepoint уже откатил генерацию; create_operation продолжается
+
         await record_audit_event(
             uow,
             event_type="operation.create",
@@ -760,17 +787,26 @@ class OperationsService:
             # Refresh operation to avoid stale line data from identity map cache
             await uow.session.refresh(updated)
 
-        # H1: Auto-regenerate waybill for draft operations
+        # TZ-V3.1I rev. 2 (I3.3, closes warning #2): H1 теперь идёт через
+        # helper — create и update согласованы. Для типов, чей финальный
+        # документ — не waybill (EXPENSE/WRITE_OFF/RECEIVE/ADJUSTMENT),
+        # helper возвращает None и waybill НЕ создаётся (что и требуется
+        # после I3.1). Savepoint (begin_nested) — иначе DB-ошибка в
+        # generate_from_operation отравит транзакцию update_operation.
         if operation.status == "draft":
-            try:
-                await DocumentService.generate_from_operation(
-                    uow=uow,
-                    operation_id=operation_id,
-                    auto_finalize=False,
-                )
-            except Exception as exc:
-                logger.warning("waybill_auto_update_failed", operation_id=str(operation.id), error=str(exc))
-                # Don't abort update_operation due to waybill error
+            draft_doc_type = draft_document_type_for_operation(operation.operation_type)
+            if draft_doc_type:
+                try:
+                    async with uow.session.begin_nested():
+                        await DocumentService.generate_from_operation(
+                            uow=uow,
+                            operation_id=operation_id,
+                            document_type=draft_doc_type,
+                            auto_finalize=False,
+                        )
+                except Exception as exc:
+                    logger.warning("waybill_auto_update_failed", operation_id=str(operation.id), error=str(exc))
+                    # не абортим update_operation
 
         return await uow.operations.get_operation_by_id(updated.id)
 
@@ -1055,24 +1091,26 @@ class OperationsService:
             # Пока создаём только для определённых типов операций
             document_created = None
             try:
-                # Определяем тип документа на основе типа операции
-                document_type_map = {
-                    "RECEIVE": "acceptance_certificate",
-                    "MOVE": "waybill",
-                    "ISSUE": "waybill",
-                    "ISSUE_RETURN": "waybill",
-                    "EXPENSE": "act",
-                    "WRITE_OFF": "act",
-                    "ADJUSTMENT": "act",
-                }
+                # TZ-V3.1I rev. 2 (I3.5, closes warning #10): войдировать draft
+                # waybills, если финальный тип — не waybill. Иначе draft waybills
+                # от H1 (MOVE/ISSUE/ISSUE_RETURN до сужения карты) или от старого
+                # кода болтаются как осиротевшие после submit.
+                submit_doc_type = submit_document_type_for_operation(submitted_operation.operation_type)
+                if submit_doc_type and submit_doc_type != "waybill":
+                    await DocumentService._void_existing_documents(
+                        uow=uow,
+                        operation_id=operation_id,
+                        document_type="waybill",
+                        template_name="waybill_v1",
+                    )
 
-                document_type = document_type_map.get(submitted_operation.operation_type)
-                if document_type:
+                # TZ-V3.1I rev. 2 (I3.4): submit-карта — submit_document_type_for_operation
+                if submit_doc_type:
                     # Генерируем документ с автоматической финализацией
                     result = await DocumentService.generate_from_operation(
                         uow=uow,
                         operation_id=operation_id,
-                        document_type=document_type,
+                        document_type=submit_doc_type,
                         auto_finalize=True,
                         created_by_user_id=user_id,
                     )
