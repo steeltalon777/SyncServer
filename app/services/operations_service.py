@@ -574,6 +574,26 @@ class OperationsService:
         OperationsWorkflowPolicy.require_exists(operation)
         OperationsWorkflowPolicy.require_draft_for_update(operation)
 
+        # При смене типа: валидировать, что operation_type допустим
+        if "operation_type" in update_data.model_fields_set and update_data.operation_type is not None:
+            new_type = update_data.operation_type
+
+            if new_type in ISSUE_OPERATION_TYPES and not operation.issue_object_id:
+                if operation.operation_type not in ISSUE_OPERATION_TYPES:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"cannot change type to {new_type} without an issue object",
+                    )
+
+            if new_type != "RECEIVE" and update_data.lines is not None:
+                if any(line.temporary_item is not None for line in update_data.lines):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="temporary items are only allowed for RECEIVE operations",
+                    )
+
+            operation.operation_type = new_type
+
         source_site_id = operation.source_site_id
         destination_site_id = operation.destination_site_id
         if "source_site_id" in update_data.model_fields_set:
@@ -1552,6 +1572,24 @@ class OperationsService:
 
         logger.info("cancelled operation=%s by user=%s reason=%s", operation_id, user_id, reason)
         return {"operation": cancelled_operation}
+
+    @staticmethod
+    async def restore_operation(
+        uow: UnitOfWork,
+        operation_id: UUID,
+        user_id: UUID,
+    ) -> dict:
+        operation = await uow.operations.get_operation_by_id(operation_id)
+        OperationsWorkflowPolicy.require_exists(operation)
+        OperationsWorkflowPolicy.require_cancelled_for_restore(operation)
+
+        restored = await uow.operations.restore_operation(
+            operation_id=operation_id,
+            restored_by_user_id=user_id,
+        )
+
+        logger.info("restore_operation", operation_id=str(operation_id), user_id=str(user_id))
+        return {"operation": restored}
 
     @staticmethod
     async def _delete_temporary_items_of_operation(

@@ -186,6 +186,23 @@ class OperationsRepo:
             await self.session.flush()
         return await self.get_operation_by_id(operation_id)
 
+    async def restore_operation(
+        self,
+        operation_id: UUID,
+        restored_by_user_id: UUID,
+        restored_at: datetime | None = None,
+    ) -> Operation | None:
+        operation = await self.get_operation_by_id(operation_id)
+        if operation and operation.status == "cancelled":
+            operation.status = "draft"
+            operation.cancelled_by_user_id = None
+            operation.cancelled_at = None
+            operation.cancel_reason = None
+            operation.version = int(operation.version) + 1
+            operation.updated_at = restored_at or datetime.now(UTC)
+            await self.session.flush()
+        return await self.get_operation_by_id(operation_id)
+
     async def set_operation_acceptance_state(
         self,
         *,

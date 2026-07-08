@@ -149,6 +149,10 @@ class OperationUpdate(BaseModel):
         max_length=255,
     )
     lines: list[OperationLineCreate] | None = None
+    operation_type: OperationType | None = Field(
+        default=None,
+        validation_alias=AliasChoices("operation_type", "type"),
+    )
 
     @field_validator("issue_object_name_snapshot", "issued_to_name", "notes", mode="before")
     @classmethod
@@ -169,6 +173,10 @@ class OperationSubmit(BaseModel):
 class OperationCancel(BaseModel):
     cancel: bool = True
     reason: str | None = Field(default=None, max_length=500)
+
+
+class OperationRestore(BaseModel):
+    restore: bool = True
 
 
 class OperationLineResponse(ORMBaseModel):

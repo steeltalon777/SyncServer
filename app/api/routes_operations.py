@@ -17,6 +17,7 @@ from app.schemas.operation import (
     OperationFilter,
     OperationListResponse,
     OperationResponse,
+    OperationRestore,
     OperationStatus,
     OperationSubmit,
     OperationType,
@@ -190,6 +191,15 @@ async def update_operation(
             )
             OperationsPolicy.require_move_access(identity, source_site_id, destination_site_id)
 
+        # Если меняется тип, нужно перепроверить права доступа к складам
+        if "operation_type" in update_data.model_fields_set and update_data.operation_type is not None:
+            new_type = update_data.operation_type
+            if new_type == "MOVE":
+                src = update_data.source_site_id or operation.source_site_id
+                dst = update_data.destination_site_id or operation.destination_site_id
+                if src and dst:
+                    OperationsPolicy.require_move_access(identity, src, dst)
+
         if update_data.lines is not None and any(
             line.temporary_item is not None for line in update_data.lines
         ):
@@ -323,6 +333,27 @@ async def cancel_operation(
         )
 
     logger.info("cancel_operation", request_id=get_request_id(request), id=operation_id, user=identity.user_id)
+    return OperationResponse.model_validate(result["operation"])
+
+
+@router.post("/{operation_id}/restore", response_model=OperationResponse)
+async def restore_operation(
+    operation_id: UUID,
+    body: OperationRestore,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> OperationResponse:
+    OperationsPolicy.require_root_for_restore(identity)
+
+    async with uow:
+        result = await OperationsService.restore_operation(
+            uow=uow,
+            operation_id=operation_id,
+            user_id=identity.user_id,
+        )
+
+    logger.info("restore_operation", request_id=get_request_id(request), id=operation_id, user=identity.user_id)
     return OperationResponse.model_validate(result["operation"])
 
 

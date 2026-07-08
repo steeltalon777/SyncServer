@@ -169,6 +169,14 @@ class OperationsPolicy:
         )
 
     @staticmethod
+    def require_root_for_restore(identity: Identity) -> None:
+        if identity.role != "root":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only root can restore cancelled operations",
+            )
+
+    @staticmethod
     def require_operation_effective_at_permission(identity: Identity, operation=None) -> None:
         if identity.has_global_business_access:
             return
