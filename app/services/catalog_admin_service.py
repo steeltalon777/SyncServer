@@ -10,6 +10,7 @@ from app.core.catalog_defaults import (
     UNCATEGORIZED_CATEGORY_CODE,
     UNCATEGORIZED_CATEGORY_NAME,
 )
+from app.core.search_utils import normalize_for_storage
 from app.models.category import Category
 from app.models.item import Item
 from app.models.unit import Unit
@@ -42,12 +43,6 @@ from app.services.uow import UnitOfWork
 logger = structlog.get_logger()
 
 
-def _normalize_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    return " ".join(value.strip().lower().split())
-
-
 class CatalogAdminService:
     async def create_unit(self, uow: UnitOfWork, payload: UnitCreateRequest, created_by_user_id: UUID | None = None) -> Unit:
         await self._ensure_unit_unique(uow, name=payload.name, symbol=payload.symbol)
@@ -76,8 +71,8 @@ class CatalogAdminService:
         seen_names: set[str] = set()
         seen_symbols: set[str] = set()
         for item in payload.items:
-            normalized_name = _normalize_text(item.name)
-            normalized_symbol = _normalize_text(item.symbol)
+            normalized_name = normalize_for_storage(item.name)
+            normalized_symbol = normalize_for_storage(item.symbol)
             if normalized_name in seen_names:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="duplicate unit name in payload")
             if normalized_symbol in seen_symbols:
@@ -152,7 +147,7 @@ class CatalogAdminService:
 
         category = Category(
             name=payload.name,
-            normalized_name=_normalize_text(payload.name),
+            normalized_name=normalize_for_storage(payload.name),
             code=payload.code,
             parent_id=payload.parent_id,
             sort_order=payload.sort_order,
@@ -212,7 +207,7 @@ class CatalogAdminService:
         if payload.name is not None:
             changes["name"] = {"old": category.name, "new": payload.name}
             category.name = payload.name
-            category.normalized_name = _normalize_text(payload.name)
+            category.normalized_name = normalize_for_storage(payload.name)
         if "code" in payload.model_fields_set:
             changes["code"] = {"old": category.code, "new": payload.code}
             category.code = payload.code
@@ -258,7 +253,7 @@ class CatalogAdminService:
         item = Item(
             sku=payload.sku,
             name=payload.name,
-            normalized_name=_normalize_text(payload.name),
+            normalized_name=normalize_for_storage(payload.name),
             category_id=category.id,
             unit_id=payload.unit_id,
             description=payload.description,
@@ -313,7 +308,7 @@ class CatalogAdminService:
         if payload.name is not None:
             changes["name"] = {"old": item.name, "new": payload.name}
             item.name = payload.name
-            item.normalized_name = _normalize_text(payload.name)
+            item.normalized_name = normalize_for_storage(payload.name)
         if "category_id" in payload.model_fields_set:
             changes["category_id"] = {"old": item.category_id, "new": category_id}
             item.category_id = category_id
@@ -390,7 +385,7 @@ class CatalogAdminService:
 
         category = Category(
             name=UNCATEGORIZED_CATEGORY_NAME,
-            normalized_name=_normalize_text(UNCATEGORIZED_CATEGORY_NAME),
+            normalized_name=normalize_for_storage(UNCATEGORIZED_CATEGORY_NAME),
             code=UNCATEGORIZED_CATEGORY_CODE,
             parent_id=None,
             sort_order=None,

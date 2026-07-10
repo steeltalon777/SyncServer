@@ -12,6 +12,7 @@ class Device(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     device_code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     device_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     device_token: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
         nullable=False,
@@ -50,4 +51,5 @@ class Device(Base):
         Index("ix_devices_site_id", "site_id"),
         Index("ix_devices_last_seen_at", "last_seen_at"),
         Index("ix_devices_updated_at", "updated_at"),
+        Index("ix_devices_normalized_name", "normalized_name"),
     )

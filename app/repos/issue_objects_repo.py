@@ -1,23 +1,13 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import and_, false, func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.search_utils import normalize_search_text, build_normalized_like_term, build_raw_like_term
 from app.models.issue_object import IssueObject, IssueObjectAlias
-
-_NON_WORD_RE = re.compile(r"[^\w\s]+", flags=re.UNICODE)
-_SPACES_RE = re.compile(r"\s+", flags=re.UNICODE)
-
-
-def normalize_issue_object_name(value: str) -> str:
-    text = (value or "").strip().lower().replace("ё", "е")
-    text = _NON_WORD_RE.sub(" ", text)
-    text = _SPACES_RE.sub(" ", text).strip()
-    return text
 
 
 class IssueObjectsRepo:
@@ -60,7 +50,7 @@ class IssueObjectsRepo:
         comment: str | None = None,
         category_id: int | None = None,
     ) -> IssueObject:
-        normalized_key = normalize_issue_object_name(display_name)
+        normalized_key = normalize_search_text(display_name)
         if not normalized_key:
             raise ValueError("issue_object display_name is empty after normalization")
 
@@ -95,7 +85,7 @@ class IssueObjectsRepo:
         comment: str | None = None,
         category_id: int | None = None,
     ) -> IssueObject:
-        normalized_key = normalize_issue_object_name(display_name)
+        normalized_key = normalize_search_text(display_name)
         if not normalized_key:
             raise ValueError("issue_object display_name is empty after normalization")
 
@@ -133,23 +123,18 @@ class IssueObjectsRepo:
             count_stmt = count_stmt.where(IssueObject.object_type == object_type)
 
         if search:
-            normalized = normalize_issue_object_name(search)
-            term = f"%{search.strip()}%"
-            normalized_term = f"%{normalized}%"
-            stmt = stmt.where(
-                or_(
-                    IssueObject.display_name.ilike(term),
-                    IssueObject.code.ilike(term) if IssueObject.code is not None else false(),
-                    IssueObject.normalized_key.ilike(normalized_term),
-                )
-            )
-            count_stmt = count_stmt.where(
-                or_(
-                    IssueObject.display_name.ilike(term),
-                    IssueObject.code.ilike(term) if IssueObject.code is not None else false(),
-                    IssueObject.normalized_key.ilike(normalized_term),
-                )
-            )
+            n_term = build_normalized_like_term(search)
+            r_term = build_raw_like_term(search)
+            conditions = []
+            if r_term is not None:
+                conditions.append(IssueObject.display_name.ilike(r_term, escape="\\"))
+                code_cond = IssueObject.code.ilike(r_term, escape="\\")
+                conditions.append(code_cond)
+            if n_term is not None:
+                conditions.append(IssueObject.normalized_key.ilike(n_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
+                count_stmt = count_stmt.where(or_(*conditions))
 
         total_count = (await self.session.execute(count_stmt)).scalar_one()
         stmt = (
@@ -166,18 +151,17 @@ class IssueObjectsRepo:
         display_name: str,
         limit: int = 5,
     ) -> list[IssueObject]:
-        normalized = normalize_issue_object_name(display_name)
-        if not normalized:
+        n_term = build_normalized_like_term(display_name)
+        if n_term is None:
             return []
 
-        term = f"%{normalized}%"
         stmt = (
             select(IssueObject)
             .where(
                 and_(
                     IssueObject.merged_into_id.is_(None),
                     IssueObject.is_active.is_(True),
-                    IssueObject.normalized_key.ilike(term),
+                    IssueObject.normalized_key.ilike(n_term, escape="\\"),
                 )
             )
             .order_by(IssueObject.display_name, IssueObject.id)
@@ -229,7 +213,7 @@ class IssueObjectsRepo:
             raise ValueError(f"IssueObject {issue_object_id} is deleted")
         if display_name is not None:
             issue_object.display_name = display_name.strip()
-            issue_object.normalized_key = normalize_issue_object_name(display_name)
+            issue_object.normalized_key = normalize_search_text(display_name)
         if object_type is not None:
             issue_object.object_type = object_type
         if code is not None:
@@ -275,15 +259,19 @@ class IssueObjectsRepo:
             stmt = stmt.where(IssueObject.is_active.is_(True))
 
         if search:
-            search_term = f"%{search.lower()}%"
-            stmt = stmt.where(
-                or_(
-                    IssueObject.display_name.ilike(search_term),
-                    IssueObject.normalized_key.ilike(search_term),
-                    IssueObject.code.ilike(search_term) if IssueObject.code is not None else false(),
-                    IssueObject.comment.ilike(search_term) if IssueObject.comment is not None else false(),
-                )
-            )
+            n_term = build_normalized_like_term(search)
+            r_term = build_raw_like_term(search)
+            conditions = []
+            if r_term is not None:
+                conditions.append(IssueObject.display_name.ilike(r_term, escape="\\"))
+                code_cond = IssueObject.code.ilike(r_term, escape="\\")
+                conditions.append(code_cond)
+                comment_cond = IssueObject.comment.ilike(r_term, escape="\\")
+                conditions.append(comment_cond)
+            if n_term is not None:
+                conditions.append(IssueObject.normalized_key.ilike(n_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
 
         if object_type:
             stmt = stmt.where(IssueObject.object_type == object_type)
@@ -330,12 +318,13 @@ class IssueObjectsRepo:
         if not include_inactive:
             stmt = stmt.where(IssueObject.is_active.is_(True))
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(
-                    IssueObject.display_name.ilike(term),
-                    IssueObject.comment.ilike(term),
+            r_term = build_raw_like_term(search)
+            if r_term is not None:
+                stmt = stmt.where(
+                    or_(
+                        IssueObject.display_name.ilike(r_term, escape="\\"),
+                        IssueObject.comment.ilike(r_term, escape="\\"),
+                    )
                 )
-            )
         stmt = stmt.order_by(IssueObject.display_name)
         return list((await self.session.execute(stmt)).scalars().all())

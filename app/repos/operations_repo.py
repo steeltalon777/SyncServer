@@ -14,6 +14,7 @@ from app.models.item import Item
 from app.models.operation import Operation, OperationLine
 from app.models.temporary_item import TemporaryItem
 from app.schemas.operation import OperationFilter
+from app.core.search_utils import build_normalized_like_term, build_raw_like_term
 
 
 class OperationsRepo:
@@ -278,23 +279,24 @@ class OperationsRepo:
             where_clauses.append(Operation.updated_at <= filter.updated_before)
         search_conditions = []
         if filter.search:
-            term = f"%{filter.search.strip()}%"
-            search_conditions.extend([
-                Operation.notes.ilike(term),
-                exists(
-                    select(1)
-                    .select_from(OperationLine)
-                    .outerjoin(Item, OperationLine.item_id == Item.id)
-                    .where(
-                        OperationLine.operation_id == Operation.id,
-                        or_(
-                            OperationLine.item_name_snapshot.ilike(term),
-                            OperationLine.item_sku_snapshot.ilike(term),
-                            cast(Item.hashtags, Text).ilike(term),
-                        ),
-                    )
-                ),
-            ])
+            raw_term = build_raw_like_term(filter.search)
+            if raw_term is not None:
+                search_conditions.extend([
+                    Operation.notes.ilike(raw_term, escape="\\"),
+                    exists(
+                        select(1)
+                        .select_from(OperationLine)
+                        .outerjoin(Item, OperationLine.item_id == Item.id)
+                        .where(
+                            OperationLine.operation_id == Operation.id,
+                            or_(
+                                OperationLine.item_name_snapshot.ilike(raw_term, escape="\\"),
+                                OperationLine.item_sku_snapshot.ilike(raw_term, escape="\\"),
+                                cast(Item.hashtags, Text).ilike(raw_term, escape="\\"),
+                            ),
+                        )
+                    ),
+                ])
         if filter.item_ids:
             search_conditions.append(
                 exists(

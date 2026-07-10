@@ -11,6 +11,7 @@ from app.models.operation import Operation, OperationLine
 from app.models.site import Site
 from app.models.temporary_item import TemporaryItem
 from app.models.unit import Unit
+from app.core.search_utils import build_normalized_like_term, build_raw_like_term
 
 
 class ReportsRepo:
@@ -177,15 +178,17 @@ class ReportsRepo:
             base_stmt = base_stmt.where(movement_rows.c.operation_at <= filter.date_to)
 
         if filter.search:
-            term = f"%{filter.search.strip()}%"
-            base_stmt = base_stmt.where(
-                or_(
-                    Item.name.ilike(term),
-                    Item.sku.ilike(term),
-                    Category.name.ilike(term),
-                    Site.name.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(filter.search)
+            raw_term = build_raw_like_term(filter.search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(Item.normalized_name.ilike(normalized_term, escape="\\"))
+                conditions.append(Category.normalized_name.ilike(normalized_term, escape="\\"))
+                conditions.append(Site.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(Item.sku.ilike(raw_term, escape="\\"))
+            if conditions:
+                base_stmt = base_stmt.where(or_(*conditions))
 
         base_stmt = base_stmt.group_by(
             movement_rows.c.site_id,
@@ -271,15 +274,17 @@ class ReportsRepo:
             base_stmt = base_stmt.where(Balance.qty > 0)
 
         if filter.search:
-            term = f"%{filter.search.strip()}%"
-            base_stmt = base_stmt.where(
-                or_(
-                    Item.name.ilike(term),
-                    Item.sku.ilike(term),
-                    Category.name.ilike(term),
-                    Site.name.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(filter.search)
+            raw_term = build_raw_like_term(filter.search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(Item.normalized_name.ilike(normalized_term, escape="\\"))
+                conditions.append(Category.normalized_name.ilike(normalized_term, escape="\\"))
+                conditions.append(Site.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(Item.sku.ilike(raw_term, escape="\\"))
+            if conditions:
+                base_stmt = base_stmt.where(or_(*conditions))
 
         base_stmt = base_stmt.group_by(
             Balance.site_id,

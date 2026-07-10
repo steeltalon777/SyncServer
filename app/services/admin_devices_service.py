@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
 
+from app.core.search_utils import build_normalized_like_term, build_raw_like_term
 from app.models.device import Device
 from app.services.uow import UnitOfWork
 
@@ -56,13 +57,15 @@ class AdminDevicesService:
         if is_active is not None:
             stmt = stmt.where(Device.is_active == is_active)
         if search:
-            token = f"%{search}%"
-            stmt = stmt.where(
-                or_(
-                    Device.device_code.ilike(token),
-                    Device.device_name.ilike(token),
-                )
-            )
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            device_conditions = []
+            if normalized_term is not None:
+                device_conditions.append(Device.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                device_conditions.append(Device.device_code.ilike(raw_term, escape="\\"))
+            if device_conditions:
+                stmt = stmt.where(or_(*device_conditions))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await uow.session.execute(count_stmt)).scalar_one()

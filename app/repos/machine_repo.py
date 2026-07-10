@@ -9,17 +9,12 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
+from app.core.search_utils import normalize_for_storage
 from app.models.category import Category
 from app.models.item import Item
 from app.models.machine import MachineBatch, MachineReport, MachineSnapshot
 from app.models.operation import Operation
 from app.models.unit import Unit
-
-
-def normalize_text(value: str | None) -> str:
-    if not value:
-        return ""
-    return " ".join(value.strip().lower().split())
 
 
 class MachineRepo:
@@ -210,7 +205,7 @@ class MachineRepo:
                     "id": int(row.id),
                     "sku": row.sku,
                     "name": row.name,
-                    "normalized_name": row.normalized_name or normalize_text(row.name),
+                    "normalized_name": row.normalized_name or normalize_for_storage(row.name),
                     "unit_id": int(row.unit_id),
                     "unit_code": row.unit_code or row.unit_symbol,
                     "unit_name": row.unit_name,
@@ -264,7 +259,7 @@ class MachineRepo:
                     "id": int(row.id),
                     "code": row.code,
                     "name": row.name,
-                    "normalized_name": row.normalized_name or normalize_text(row.name),
+                    "normalized_name": row.normalized_name or normalize_for_storage(row.name),
                     "parent_id": int(row.parent_id) if row.parent_id is not None else None,
                     "parent_code": row.parent_code,
                     "path": path,
@@ -376,7 +371,7 @@ class MachineRepo:
         rows = (await self.session.execute(stmt)).all()
         groups: dict[tuple[str, int, int], list[dict]] = defaultdict(list)
         for row in rows:
-            normalized_name = row.normalized_name or normalize_text(row.name)
+            normalized_name = row.normalized_name or normalize_for_storage(row.name)
             key = (normalized_name, int(row.unit_id), int(row.category_id))
             groups[key].append(
                 {
@@ -429,7 +424,7 @@ class MachineRepo:
         rows = (await self.session.execute(stmt)).all()
         groups: dict[tuple[str, int | None], list[dict]] = defaultdict(list)
         for row in rows:
-            normalized_name = row.normalized_name or normalize_text(row.name)
+            normalized_name = row.normalized_name or normalize_for_storage(row.name)
             key = (normalized_name, int(row.parent_id) if row.parent_id is not None else None)
             groups[key].append(
                 {

@@ -6,6 +6,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
+from app.core.search_utils import normalize_for_storage
 from app.models.category import Category
 from app.models.item import Item
 from app.schemas.asset_register import OperationAcceptLinePayload
@@ -35,10 +36,6 @@ ISSUE_OPERATION_TYPES: set[OperationType] = {"ISSUE", "ISSUE_RETURN"}
 
 class OperationsService:
     """Operation domain service with strict server-side validation."""
-
-    @staticmethod
-    def _normalize_name(value: str) -> str:
-        return " ".join(value.strip().lower().split())
 
     @staticmethod
     def _extract_user_message(exc: IntegrityError) -> str:
@@ -854,7 +851,7 @@ class OperationsService:
             review_item = Item(
                 sku=payload.get("sku"),
                 name=payload["name"].strip(),
-                normalized_name=OperationsService._normalize_name(payload["name"]),
+                normalized_name=normalize_for_storage(payload["name"]),
                 category_id=category_id_value,
                 unit_id=unit_id_value,
                 description=payload.get("description"),

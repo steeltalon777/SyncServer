@@ -4,9 +4,9 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
+from app.core.search_utils import normalize_search_text
 from app.models.issue_object import IssueObject
 from app.models.issue_object_category import IssueObjectCategory
-from app.repos.issue_object_categories_repo import normalize_category_name
 from app.schemas.issue_object import IssueObjectCreate, IssueObjectUpdate
 from app.schemas.issue_object_category import TreeResponse
 from app.services.uow import UnitOfWork
@@ -180,7 +180,7 @@ class IssueObjectCategoriesService:
         sort_order: int = 0,
         is_active: bool = True,
     ) -> IssueObjectCategory:
-        normalized_key = normalize_category_name(name)
+        normalized_key = normalize_search_text(name)
         if not normalized_key:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -254,7 +254,7 @@ class IssueObjectCategoriesService:
 
         effective_normalized_key = category.normalized_key
         if name is not None:
-            effective_normalized_key = normalize_category_name(name)
+            effective_normalized_key = normalize_search_text(name)
             if not effective_normalized_key:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -275,7 +275,7 @@ class IssueObjectCategoriesService:
             update_kwargs: dict[str, object] = dict(
                 category_id=category_id,
                 name=name,
-                normalized_key=normalize_category_name(name) if name else None,
+                normalized_key=normalize_search_text(name) if name else None,
                 sort_order=sort_order,
                 is_active=is_active,
             )

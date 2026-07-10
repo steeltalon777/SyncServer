@@ -24,6 +24,10 @@ from app.models.unit import Unit
 from app.models.user import User
 from app.models.user_access_scope import UserAccessScope
 
+# Register SQLAlchemy event listeners for auto-computing normalized_name
+# This import must come after all model imports
+import app.models.events  # noqa: F401, E402
+
 
 __all__ = [
     "AuditEvent",

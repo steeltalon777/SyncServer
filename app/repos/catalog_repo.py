@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
+from app.core.search_utils import build_normalized_like_term, build_raw_like_term
 from app.models.category import Category
 from app.models.item import Item
 from app.models.unit import Unit
@@ -75,14 +76,16 @@ class CatalogRepo:
             stmt = stmt.where(Item.category_id == category_id)
 
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(
-                    Item.name.ilike(term),
-                    Item.sku.ilike(term),
-                    Item.description.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(Item.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(Item.sku.ilike(raw_term, escape="\\"))
+                conditions.append(Item.description.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
@@ -152,13 +155,15 @@ class CatalogRepo:
             stmt = stmt.where(Category.parent_id == parent_id)
 
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(
-                    Category.name.ilike(term),
-                    Category.code.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(Category.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(Category.code.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
@@ -625,14 +630,16 @@ class CatalogRepo:
         if created_by_user_id is not None:
             stmt = stmt.where(Item.review_created_by_user_id == created_by_user_id)
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(
-                    Item.name.ilike(term),
-                    Item.sku.ilike(term),
-                    Item.description.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(Item.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(Item.sku.ilike(raw_term, escape="\\"))
+                conditions.append(Item.description.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = int((await self.session.execute(count_stmt)).scalar_one())

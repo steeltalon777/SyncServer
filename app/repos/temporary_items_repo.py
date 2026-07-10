@@ -7,6 +7,7 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.search_utils import build_normalized_like_term, build_raw_like_term
 from app.models.temporary_item import TemporaryItem
 
 
@@ -89,14 +90,16 @@ class TemporaryItemsRepo:
         if created_before is not None:
             stmt = stmt.where(TemporaryItem.created_at <= created_before)
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(
-                    TemporaryItem.name.ilike(term),
-                    TemporaryItem.sku.ilike(term),
-                    TemporaryItem.description.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(TemporaryItem.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(TemporaryItem.sku.ilike(raw_term, escape="\\"))
+                conditions.append(TemporaryItem.description.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = int((await self.session.execute(count_stmt)).scalar_one())

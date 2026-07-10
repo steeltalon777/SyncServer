@@ -14,6 +14,7 @@ class Site(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
@@ -65,4 +66,5 @@ class Site(Base):
 
     __table_args__ = (
         Index("ux_sites_code", "code", unique=True),
+        Index("ix_sites_normalized_name", "normalized_name"),
     )

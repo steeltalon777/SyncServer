@@ -3,6 +3,7 @@
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.search_utils import build_normalized_like_term, build_raw_like_term
 from app.models.site import Site
 from app.models.user_access_scope import UserAccessScope
 from app.schemas.admin import SiteFilter
@@ -81,14 +82,16 @@ class SitesRepo:
         if filter.is_active is not None:
             where_clauses.append(Site.is_active == filter.is_active)
         if filter.search:
-            search_term = f"%{filter.search}%"
-            where_clauses.append(
-                or_(
-                    Site.name.ilike(search_term),
-                    Site.code.ilike(search_term),
-                    Site.description.ilike(search_term),
-                )
-            )
+            normalized_term = build_normalized_like_term(filter.search)
+            raw_term = build_raw_like_term(filter.search)
+            site_conditions = []
+            if normalized_term is not None:
+                site_conditions.append(Site.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                site_conditions.append(Site.code.ilike(raw_term, escape="\\"))
+                site_conditions.append(Site.description.ilike(raw_term, escape="\\"))
+            if site_conditions:
+                where_clauses.append(or_(*site_conditions))
 
         if where_clauses:
             stmt = stmt.where(and_(*where_clauses))

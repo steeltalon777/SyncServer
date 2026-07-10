@@ -1,26 +1,16 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.search_utils import normalize_search_text, build_normalized_like_term, build_raw_like_term
 from app.models.issue_object import IssueObject
 from app.models.issue_object_category import IssueObjectCategory
 
 _UNSET = object()
-
-_NON_WORD_RE = re.compile(r"[^\w\s]+", flags=re.UNICODE)
-_SPACES_RE = re.compile(r"\s+", flags=re.UNICODE)
-
-
-def normalize_category_name(value: str) -> str:
-    text = (value or "").strip().lower().replace("ё", "е")
-    text = _NON_WORD_RE.sub(" ", text)
-    text = _SPACES_RE.sub(" ", text).strip()
-    return text
 
 
 class IssueObjectCategoriesRepo:
@@ -59,19 +49,16 @@ class IssueObjectCategoriesRepo:
             count_stmt = count_stmt.where(IssueObjectCategory.parent_id.is_(None))
 
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(
-                    IssueObjectCategory.name.ilike(term),
-                    IssueObjectCategory.normalized_key.ilike(term),
-                )
-            )
-            count_stmt = count_stmt.where(
-                or_(
-                    IssueObjectCategory.name.ilike(term),
-                    IssueObjectCategory.normalized_key.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(IssueObjectCategory.normalized_key.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(IssueObjectCategory.name.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
+                count_stmt = count_stmt.where(or_(*conditions))
 
         total_count = (await self.session.execute(count_stmt)).scalar_one()
         stmt = (
@@ -123,7 +110,7 @@ class IssueObjectCategoriesRepo:
             if normalized_key is not None:
                 category.normalized_key = normalized_key
             else:
-                category.normalized_key = normalize_category_name(name)
+                category.normalized_key = normalize_search_text(name)
         if parent_id is not _UNSET:
             category.parent_id = parent_id  # type: ignore[assignment]
         if sort_order is not None:

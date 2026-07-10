@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 
 from app.api.exceptions import SyncServerException
 from app.core.identity import Identity
+from app.core.search_utils import normalize_for_storage
 from app.models.category import Category
 from app.models.item import Item
 from app.models.operation import Operation
@@ -26,14 +27,8 @@ SNAPSHOT_DATASETS = [
     "operations",
 ]
 
-READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
+READ_ROLES = {"chief_storekeeper", "storekeeper"}
 WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
-
-
-def normalize_text(value: str | None) -> str:
-    if not value:
-        return ""
-    return " ".join(value.strip().lower().split())
 
 
 def make_snapshot_id() -> str:
@@ -673,7 +668,7 @@ class MachineService:
                             details={"batch_id": batch.batch_id, "plan_id": batch.plan_id},
                         )
                     category.name = data.get("name")
-                    category.normalized_name = normalize_text(category.name)
+                    category.normalized_name = normalize_for_storage(category.name)
                     category.code = data.get("code")
                     category.parent_id = ref_to_category_id.get(parent_ref) if parent_ref else None
                     category.machine_last_batch_id = batch.batch_id
@@ -682,7 +677,7 @@ class MachineService:
                 else:
                     category = Category(
                         name=data.get("name"),
-                        normalized_name=normalize_text(data.get("name")),
+                        normalized_name=normalize_for_storage(data.get("name")),
                         code=data.get("code"),
                         parent_id=ref_to_category_id.get(parent_ref) if parent_ref else None,
                         is_active=True,
@@ -749,7 +744,7 @@ class MachineService:
                     )
                 item.sku = data.get("sku")
                 item.name = data.get("name")
-                item.normalized_name = normalize_text(data.get("name"))
+                item.normalized_name = normalize_for_storage(data.get("name"))
                 item.category_id = category_id
                 item.unit_id = unit.id
                 item.is_active = bool(data.get("is_active", True))
@@ -764,7 +759,7 @@ class MachineService:
                 item = Item(
                     sku=data.get("sku"),
                     name=data.get("name"),
-                    normalized_name=normalize_text(data.get("name")),
+                    normalized_name=normalize_for_storage(data.get("name")),
                     category_id=category_id,
                     unit_id=unit.id,
                     is_active=bool(data.get("is_active", True)),

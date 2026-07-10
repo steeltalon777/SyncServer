@@ -11,6 +11,8 @@ from app.models.unit import Unit
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.search_utils import build_normalized_like_term, build_raw_like_term
+
 
 class BalancesRepo:
     """Balance rows access with row-level locking support."""
@@ -122,15 +124,17 @@ class BalancesRepo:
             stmt = stmt.where(Item.category_id == filter.category_id)
 
         if filter.search:
-            term = f"%{filter.search.strip()}%"
-            stmt = stmt.where(
-                or_(
-                    Item.name.ilike(term),
-                    Item.sku.ilike(term),
-                    Category.name.ilike(term),
-                    Site.name.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(filter.search)
+            raw_term = build_raw_like_term(filter.search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(Item.normalized_name.ilike(normalized_term, escape="\\"))
+                conditions.append(Category.normalized_name.ilike(normalized_term, escape="\\"))
+                conditions.append(Site.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(Item.sku.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
 
         if filter.only_positive:
             stmt = stmt.where(Balance.qty > 0)

@@ -7,6 +7,8 @@ from uuid import UUID
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.search_utils import build_normalized_like_term, build_raw_like_term
+
 from app.models.asset_register import (
     IssuedAssetBalance,
     LostAssetBalance,
@@ -253,8 +255,16 @@ class AssetRegistersRepo:
         if item_id is not None:
             stmt = stmt.where(InventorySubject.item_id == item_id)
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(or_(Item.name.ilike(term), Item.sku.ilike(term), Site.name.ilike(term)))
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(Item.normalized_name.ilike(normalized_term, escape="\\"))
+                conditions.append(Site.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(Item.sku.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
@@ -324,15 +334,17 @@ class AssetRegistersRepo:
         if item_id is not None:
             stmt = stmt.where(InventorySubject.item_id == item_id)
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(
-                    Item.name.ilike(term),
-                    Item.sku.ilike(term),
-                    destination.name.ilike(term),
-                    source.c.name.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(Item.normalized_name.ilike(normalized_term, escape="\\"))
+                conditions.append(destination.normalized_name.ilike(normalized_term, escape="\\"))
+                conditions.append(source.c.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(Item.sku.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
         if updated_after is not None:
             stmt = stmt.where(LostAssetBalance.updated_at >= updated_after)
         if updated_before is not None:
@@ -394,15 +406,18 @@ class AssetRegistersRepo:
         if category_id is not None:
             stmt = stmt.where(IssueObject.category_id == category_id)
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(
-                    IssueObject.display_name.ilike(term),
-                    IssueObject.comment.ilike(term),
-                    Item.name.ilike(term),
-                    Item.sku.ilike(term),
-                )
-            )
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(IssueObject.normalized_key.ilike(normalized_term, escape="\\"))
+                conditions.append(Item.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(IssueObject.display_name.ilike(raw_term, escape="\\"))
+                conditions.append(IssueObject.comment.ilike(raw_term, escape="\\"))
+                conditions.append(Item.sku.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
@@ -452,8 +467,15 @@ class AssetRegistersRepo:
         if item_id is not None:
             stmt = stmt.where(InventorySubject.item_id == item_id)
         if search:
-            term = f"%{search.strip()}%"
-            stmt = stmt.where(Item.name.ilike(term))
+            normalized_term = build_normalized_like_term(search)
+            raw_term = build_raw_like_term(search)
+            conditions = []
+            if normalized_term is not None:
+                conditions.append(Item.normalized_name.ilike(normalized_term, escape="\\"))
+            if raw_term is not None:
+                conditions.append(Item.sku.ilike(raw_term, escape="\\"))
+            if conditions:
+                stmt = stmt.where(or_(*conditions))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
