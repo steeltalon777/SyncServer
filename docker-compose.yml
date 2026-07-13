@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - TZ=Asia/Chita
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - backend
 
@@ -14,6 +18,10 @@ services:
       - tools
     env_file:
       - .env
+    environment:
+      - TZ=Asia/Chita
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
     command: ["python", "-m", "alembic", "upgrade", "head"]
     networks:
       - backend
