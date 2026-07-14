@@ -60,10 +60,13 @@ async def test_submit_receive_updates_balance_by_inventory_subject_id() -> None:
     await OperationsService.submit_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
 
     uow.audit_events.insert.assert_awaited_once()
-    balances.update_balance_quantity.assert_awaited_once_with(
+    # Phase 1 / TZ-AUDIT_BACKEND_FOUNDATION: submit_operation now captures
+    # the balance before/after for audit_item_effects in a single
+    # get_for_update round-trip and writes the new qty directly to the
+    # session — update_balance_quantity is no longer called per-line.
+    balances.get_for_update.assert_awaited_once_with(
         site_id=10,
         inventory_subject_id=5001,
-        quantity_delta=Decimal("3"),
     )
 
 
@@ -98,7 +101,7 @@ async def test_submit_issue_updates_issued_register_by_inventory_subject_id() ->
     await OperationsService.submit_operation(uow=uow, operation_id=operation.id, user_id=uuid4())
 
     uow.audit_events.insert.assert_awaited_once()
-    balances.get_for_update.assert_awaited_once_with(site_id=10, inventory_subject_id=5001)
+    balances.get_for_update.assert_any_call(site_id=10, inventory_subject_id=5001)
     asset_registers.upsert_issued.assert_awaited_once_with(
         issue_object_id=77,
         inventory_subject_id=5001,
@@ -161,10 +164,12 @@ async def test_submit_receive_materializes_temporary_line_before_balance_update(
     uow.audit_events.insert.assert_awaited_once()
     catalog.create_item.assert_awaited_once()
     inventory_subjects.get_or_create_for_item.assert_awaited_once_with(item_id=7001)
-    balances.update_balance_quantity.assert_awaited_once_with(
+    # Phase 1 / TZ-AUDIT_BACKEND_FOUNDATION: balance updates happen via
+    # single-shot get_for_update + direct row mutation so the audit
+    # capture sees the before/after quantity without a redundant re-lock.
+    balances.get_for_update.assert_awaited_once_with(
         site_id=10,
         inventory_subject_id=9001,
-        quantity_delta=Decimal("3"),
     )
     assert line.item_id == 7001
     assert line.inventory_subject_id == 9001

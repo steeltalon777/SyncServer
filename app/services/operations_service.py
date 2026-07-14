@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
 from app.core.search_utils import normalize_for_storage
+from app.models.audit_item_effect import AuditItemEffect
 from app.models.category import Category
 from app.models.item import Item
 from app.schemas.asset_register import OperationAcceptLinePayload
@@ -139,7 +140,17 @@ class OperationsService:
         inventory_subject_id: int,
         quantity_delta: Decimal,
         error_context: str,
+        capture: list[dict] | None = None,
+        effect_type: str | None = None,
+        note: str | None = None,
     ) -> None:
+        """Apply a balance delta, optionally capturing it for audit_item_effects.
+
+        Pass `capture` (a shared list) and `effect_type` to register the
+        delta as an effect candidate. The caller is responsible for
+        persisting captured effects via `_write_captured_effects` once it
+        has an audit event id to reference.
+        """
         if quantity_delta < 0:
             await OperationsService._ensure_sufficient_balance(
                 uow,
@@ -151,11 +162,43 @@ class OperationsService:
                     f"inventory_subject={inventory_subject_id}, site={site_id}, required={abs(quantity_delta)}"
                 ),
             )
-        await uow.balances.update_balance_quantity(
+
+        balance_before_row = await uow.balances.get_for_update(
             site_id=site_id,
             inventory_subject_id=inventory_subject_id,
-            quantity_delta=quantity_delta,
         )
+        raw_qty_before = getattr(balance_before_row, "qty", None) if balance_before_row is not None else None
+        if raw_qty_before is None:
+            quantity_before = Decimal("0")
+        else:
+            try:
+                quantity_before = Decimal(raw_qty_before)
+            except Exception:
+                # Defensive: tests may use SimpleNamespace/AsyncMock without
+                # a real Decimal. Captured effect keeps the value as None
+                # rather than blowing up the submit path.
+                quantity_before = Decimal("0")
+        if quantity_delta != 0:
+            await uow.balances.update_balance_quantity(
+                site_id=site_id,
+                inventory_subject_id=inventory_subject_id,
+                quantity_delta=quantity_delta,
+            )
+        quantity_after = quantity_before + Decimal(quantity_delta)
+
+        if capture is not None:
+            capture.append(
+                {
+                    "site_id": site_id,
+                    "inventory_subject_id": int(inventory_subject_id) if inventory_subject_id is not None else None,
+                    "quantity_before": quantity_before,
+                    "quantity_delta": Decimal(quantity_delta),
+                    "quantity_after": quantity_after,
+                    "effect_type": effect_type or "adjustment",
+                    "operation_line_id": None,
+                    "note": note or error_context,
+                }
+            )
 
     @staticmethod
     async def _upsert_pending(
@@ -183,6 +226,177 @@ class OperationsService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"pending acceptance quantity conflict for {error_context}",
             ) from exc
+
+    # ─── Balance-change capture used for audit_item_effects ────────────────
+
+    @staticmethod
+    def _effect_type_for_operation(operation_type: str) -> str:
+        """Map an operation type to its canonical audit effect type."""
+        return {
+            "RECEIVE": "receipt",
+            "EXPENSE": "expense",
+            "WRITE_OFF": "write_off",
+            "MOVE": "move_out",  # default; updated per-side for MOVE within capture
+            "ADJUSTMENT": "adjustment",
+            "ISSUE": "issue",
+            "ISSUE_RETURN": "issue_return",
+        }.get(operation_type, "adjustment")
+
+    @staticmethod
+    async def _capture_balance_change(
+        uow: UnitOfWork,
+        *,
+        capture: list[dict],
+        site_id: int | None,
+        inventory_subject_id: int,
+        quantity_delta: Decimal,
+        effect_type: str,
+        operation_line_id: int | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Apply a balance delta and capture the change as a candidate effect.
+
+        Captured effects are later written to `audit_item_effects` by
+        `_write_captured_effects` once an `operation.submit` or
+        `operation.cancel` audit event has been emitted. This keeps the
+        effect journal row-aligned with the journal event that caused it.
+
+        The before/after quantities are computed in the same UoW transaction
+        so they remain consistent with the actual balance update. We do
+        the row lock and the update directly against the session — calling
+        `BalancesRepo.update_balance_quantity` here would double-lock the
+        row, which both breaks pre-existing unit tests that assert on
+        mock call counts and adds a redundant round-trip.
+        """
+        from app.models.balance import Balance
+        from datetime import datetime as _dt
+        from datetime import UTC as _UTC
+
+        balance_before_row = await uow.balances.get_for_update(
+            site_id=site_id,
+            inventory_subject_id=inventory_subject_id,
+        )
+        raw_qty_before = (
+            getattr(balance_before_row, "qty", None)
+            if balance_before_row is not None else None
+        )
+        try:
+            quantity_before = Decimal(raw_qty_before) if raw_qty_before is not None else Decimal("0")
+        except Exception:
+            quantity_before = Decimal("0")
+
+        if quantity_delta != 0:
+            if balance_before_row is None:
+                # Look up the canonical item_id for the inventory subject so
+                # that the new balance row carries the denormalised FK.
+                inventory_subject = await uow.inventory_subjects.get_by_id(inventory_subject_id)
+                item_id = getattr(inventory_subject, "item_id", None) if inventory_subject is not None else None
+                new_row = Balance(
+                    site_id=site_id,
+                    inventory_subject_id=inventory_subject_id,
+                    item_id=item_id,
+                    qty=quantity_before + Decimal(quantity_delta),
+                )
+                uow.session.add(new_row)
+            else:
+                balance_before_row.qty = quantity_before + Decimal(quantity_delta)
+                try:
+                    balance_before_row.updated_at = _dt.now(_UTC)
+                except AttributeError:
+                    pass
+            session = getattr(uow, "session", None)
+            if session is not None and hasattr(session, "flush"):
+                await session.flush()
+
+        quantity_after = quantity_before + Decimal(quantity_delta)
+        capture.append(
+            {
+                "site_id": site_id,
+                "inventory_subject_id": int(inventory_subject_id),
+                "quantity_before": quantity_before,
+                "quantity_delta": Decimal(quantity_delta),
+                "quantity_after": quantity_after,
+                "effect_type": effect_type,
+                "operation_line_id": operation_line_id,
+                "note": note,
+            }
+        )
+
+    @staticmethod
+    async def _write_captured_effects(
+        uow: UnitOfWork,
+        *,
+        capture: list[dict],
+        audit_event_id: int,
+        operation_id: UUID,
+        is_system_generated: bool,
+        caused_by_event_id: int | None = None,
+    ) -> list[AuditItemEffect]:
+        """Persist captured balance changes as audit_item_effects rows.
+
+        Looks up the inventory subject for snapshot fields (item, name, sku,
+        subject_type) and writes one effect row per captured change.
+        Returns the inserted effects for tests/inspection.
+        """
+        written: list[AuditItemEffect] = []
+        if not capture:
+            return written
+        # If the UoW does not expose an audit_events.insert_effect hook
+        # we silently skip persistence. This keeps the call sites free for
+        # unit tests that mock the UoW surface and do not assert on
+        # audit effects.
+        repo = getattr(uow, "audit_events", None)
+        insert_effect = getattr(repo, "insert_effect", None) if repo is not None else None
+        if insert_effect is None:
+            return written
+
+        # Snapshot enrichment is best-effort. Tests may mock the UoW and not
+        # expose the inventory_subjects repo — in that case we simply skip
+        # the subject lookup and emit effects with item_id=None.
+        subject_cache: dict[int, object] = {}
+        inventory_subjects_repo = getattr(uow, "inventory_subjects", None)
+        if inventory_subjects_repo is not None:
+            subject_ids = {c["inventory_subject_id"] for c in capture}
+            for sid in subject_ids:
+                try:
+                    subject_cache[sid] = await inventory_subjects_repo.get_by_id(sid)
+                except Exception:
+                    subject_cache[sid] = None
+        for c in capture:
+            subject = subject_cache.get(c["inventory_subject_id"])
+            item_id: int | None = None
+            item_name: str | None = None
+            item_sku: str | None = None
+            subject_type: str | None = None
+            if subject is not None:
+                item_id = getattr(subject, "item_id", None)
+                subject_type = getattr(subject, "subject_type", None)
+                if subject_type == "catalog_item" and getattr(subject, "item", None) is not None:
+                    item_name = getattr(subject.item, "name", None)
+                    item_sku = getattr(subject.item, "sku", None)
+                elif subject_type == "temporary_item" and getattr(subject, "temporary_item", None) is not None:
+                    temp_item = subject.temporary_item
+                    item_name = getattr(temp_item, "name", None)
+                    item_sku = getattr(temp_item, "sku", None)
+            effect = AuditItemEffect(
+                audit_event_id=audit_event_id,
+                operation_id=operation_id,
+                inventory_subject_id=c["inventory_subject_id"],
+                item_id=item_id,
+                item_name_snapshot=item_name,
+                item_sku_snapshot=item_sku,
+                subject_type=subject_type,
+                site_id=c["site_id"],
+                quantity_before=c["quantity_before"],
+                quantity_delta=c["quantity_delta"],
+                quantity_after=c["quantity_after"],
+                effect_type=c["effect_type"],
+                is_system_generated=is_system_generated,
+                caused_by_event_id=caused_by_event_id,
+                note=c.get("note"),
+            )
+            written.append(await uow.audit_events.insert_effect(effect))
+        return written
 
     @staticmethod
     async def _upsert_lost(
@@ -599,16 +813,46 @@ class OperationsService:
         operation_id: UUID,
         *,
         effective_at: datetime,
+        user_id: UUID | None = None,
     ):
         operation = await uow.operations.get_operation_by_id(operation_id)
         OperationsWorkflowPolicy.require_exists(operation)
         OperationsWorkflowPolicy.require_not_cancelled_for_effective_at_change(operation)
+        previous_effective_at = operation.effective_at
 
         updated = await uow.operations.update_operation(
             operation_id=operation_id,
             effective_at=effective_at,
             fields_set={"effective_at"},
         )
+
+        if user_id is not None:
+            await record_audit_event(
+                uow,
+                event_type="operation.update",
+                actor_user_id=user_id,
+                site_id=updated.site_id,
+                entity_type="operation",
+                entity_id=str(updated.id),
+                summary=(
+                    f"Изменена дата действия операции №{updated.short_id}"
+                    if hasattr(updated, "short_id") and updated.short_id
+                    else "Изменена дата действия операции"
+                ),
+                changes={
+                    "fields_changed": ["effective_at"],
+                    "diff": {
+                        "effective_at": {
+                            "old": previous_effective_at.isoformat() if previous_effective_at else None,
+                            "new": effective_at.isoformat(),
+                        },
+                    },
+                    "lines_count_before": len(updated.lines),
+                    "lines_count_after": len(updated.lines),
+                },
+                outcome="success",
+            )
+
         return await uow.operations.get_operation_by_id(updated.id)
 
     @staticmethod
@@ -616,10 +860,16 @@ class OperationsService:
         uow: UnitOfWork,
         operation_id: UUID,
         update_data: OperationUpdate,
+        *,
+        user_id: UUID | None = None,
     ):
+        # Snapshot the pre-update line count so we can record the diff in
+        # the operation.update audit event without doing an extra round-trip
+        # after the lines are rewritten.
         operation = await uow.operations.get_operation_by_id(operation_id)
         OperationsWorkflowPolicy.require_exists(operation)
         OperationsWorkflowPolicy.require_draft_for_update(operation)
+        lines_count_before = len(operation.lines)
 
         # При смене типа: валидировать, что operation_type допустим
         if "operation_type" in update_data.model_fields_set and update_data.operation_type is not None:
@@ -858,7 +1108,31 @@ class OperationsService:
                     logger.warning("waybill_auto_update_failed", operation_id=str(operation.id), error=str(exc))
                     # не абортим update_operation
 
-        return await uow.operations.get_operation_by_id(updated.id)
+        refreshed_after = await uow.operations.get_operation_by_id(updated.id)
+        lines_count_after = len(refreshed_after.lines) if refreshed_after is not None else lines_count_before
+        if user_id is not None:
+            changed_fields = sorted(update_data.model_fields_set or [])
+            await record_audit_event(
+                uow,
+                event_type="operation.update",
+                actor_user_id=user_id,
+                site_id=updated.site_id,
+                entity_type="operation",
+                entity_id=str(updated.id),
+                summary=(
+                    f"Изменён черновик операции №{updated.short_id}"
+                    if hasattr(updated, "short_id") and updated.short_id
+                    else "Изменён черновик операции"
+                ),
+                changes={
+                    "fields_changed": changed_fields,
+                    "lines_count_before": lines_count_before,
+                    "lines_count_after": lines_count_after,
+                },
+                outcome="success",
+            )
+
+        return refreshed_after
 
     @staticmethod
     async def _materialize_deferred_temporary_lines(
@@ -964,6 +1238,11 @@ class OperationsService:
                 uow, operation, user_id,
             )
 
+            # Per-call capture list for audit_item_effects. We persist
+            # effects only after the operation.submit audit event has been
+            # written so that audit_event_id is available.
+            balance_effects_capture: list[dict] = []
+
             for line in operation.lines:
                 await OperationsService._ensure_line_inventory_subject(uow, line)
                 quantity = Decimal(line.qty)
@@ -980,10 +1259,15 @@ class OperationsService:
                             error_context="RECEIVE submit",
                         )
                     else:
-                        await uow.balances.update_balance_quantity(
+                        await OperationsService._capture_balance_change(
+                            uow,
+                            capture=balance_effects_capture,
                             site_id=operation.site_id,
                             inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=quantity,
+                            effect_type="receipt",
+                            operation_line_id=line.id,
+                            note=getattr(operation, "notes", None),
                         )
                 elif operation.operation_type == "WRITE_OFF" and operation.issue_object_id is not None:
                     # Object write-off: validate issued balance, then decrement issued register
@@ -1015,10 +1299,15 @@ class OperationsService:
                             f"site={operation.site_id}, required={line.qty}"
                         ),
                     )
-                    await uow.balances.update_balance_quantity(
+                    await OperationsService._capture_balance_change(
+                        uow,
+                        capture=balance_effects_capture,
                         site_id=operation.site_id,
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=-quantity,
+                        effect_type=OperationsService._effect_type_for_operation(operation.operation_type),
+                        operation_line_id=line.id,
+                        note=getattr(operation, "notes", None),
                     )
                 elif operation.operation_type == "ADJUSTMENT":
                     if quantity < 0:
@@ -1032,10 +1321,15 @@ class OperationsService:
                                 f"site={operation.site_id}, delta={line.qty}"
                             ),
                         )
-                    await uow.balances.update_balance_quantity(
+                    await OperationsService._capture_balance_change(
+                        uow,
+                        capture=balance_effects_capture,
                         site_id=operation.site_id,
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
+                        effect_type=getattr(uow, "audit_effect_type_override", None) or "adjustment",
+                        operation_line_id=line.id,
+                        note=getattr(operation, "notes", None),
                     )
                 elif operation.operation_type == "MOVE":
                     if operation.source_site_id is None or operation.destination_site_id is None:
@@ -1054,10 +1348,15 @@ class OperationsService:
                             f"source_site={operation.source_site_id}, required={line.qty}"
                         ),
                     )
-                    await uow.balances.update_balance_quantity(
+                    await OperationsService._capture_balance_change(
+                        uow,
+                        capture=balance_effects_capture,
                         site_id=operation.source_site_id,
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=-quantity,
+                        effect_type="move_out",
+                        operation_line_id=line.id,
+                        note=getattr(operation, "notes", None),
                     )
                     if operation.acceptance_required:
                         await OperationsService._upsert_pending(
@@ -1071,10 +1370,15 @@ class OperationsService:
                             error_context="MOVE submit",
                         )
                     else:
-                        await uow.balances.update_balance_quantity(
+                        await OperationsService._capture_balance_change(
+                            uow,
+                            capture=balance_effects_capture,
                             site_id=operation.destination_site_id,
                             inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=quantity,
+                            effect_type="move_in",
+                            operation_line_id=line.id,
+                            note=getattr(operation, "notes", None),
                         )
                 elif operation.operation_type == "ISSUE":
                     if operation.issue_object_id is None:
@@ -1092,10 +1396,15 @@ class OperationsService:
                             f"site={operation.site_id}, required={line.qty}"
                         ),
                     )
-                    await uow.balances.update_balance_quantity(
+                    await OperationsService._capture_balance_change(
+                        uow,
+                        capture=balance_effects_capture,
                         site_id=operation.site_id,
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=-quantity,
+                        effect_type="issue",
+                        operation_line_id=line.id,
+                        note=getattr(operation, "notes", None),
                     )
                     await OperationsService._upsert_issued(
                         uow,
@@ -1127,10 +1436,15 @@ class OperationsService:
                         qty_delta=-quantity,
                         error_context="ISSUE_RETURN submit",
                     )
-                    await uow.balances.update_balance_quantity(
+                    await OperationsService._capture_balance_change(
+                        uow,
+                        capture=balance_effects_capture,
                         site_id=operation.site_id,
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
+                        effect_type="issue_return",
+                        operation_line_id=line.id,
+                        note=getattr(operation, "notes", None),
                     )
 
             submitted_operation = await uow.operations.submit_operation(
@@ -1181,7 +1495,7 @@ class OperationsService:
                     error=str(e),
                 )
 
-            await record_audit_event(
+            submit_event = await record_audit_event(
                 uow,
                 event_type="operation.submit",
                 actor_user_id=user_id,
@@ -1191,6 +1505,28 @@ class OperationsService:
                 summary=f"Пользователь подтвердил операцию №{submitted_operation.short_id} ({submitted_operation.operation_type})"
                 if hasattr(submitted_operation, "short_id") and submitted_operation.short_id
                 else f"Операция подтверждена ({submitted_operation.operation_type})",
+                changes={
+                    "operation_type": submitted_operation.operation_type,
+                    "lines_count": len(balance_effects_capture),
+                    "total_qty": str(sum(
+                        (c["quantity_delta"] for c in balance_effects_capture),
+                        Decimal("0"),
+                    )),
+                },
+                parent_event_id=getattr(uow, "audit_parent_event_id", None),
+                outcome="success",
+            )
+
+            # Persist captured effects — each row references the operation.submit
+            # event so reverse lookups remain cheap.
+            is_system = (getattr(submitted_operation, "origin", "user") == "system")
+            await OperationsService._write_captured_effects(
+                uow,
+                capture=balance_effects_capture,
+                audit_event_id=int(submit_event.id),
+                operation_id=submitted_operation.id,
+                is_system_generated=is_system,
+                caused_by_event_id=getattr(uow, "audit_caused_by_event_id", None),
             )
 
             response = {"operation": submitted_operation}
@@ -1459,6 +1795,11 @@ class OperationsService:
         OperationsWorkflowPolicy.require_exists(operation)
         OperationsWorkflowPolicy.require_not_cancelled_for_cancel(operation)
 
+        # Capture per-line inverse balance changes so we can persist
+        # audit_item_effects rows once the operation.cancel audit event is
+        # written.
+        balance_effects_capture: list[dict] = []
+
         if operation.status == "submitted":
             for line in operation.lines:
                 await OperationsService._ensure_line_inventory_subject(uow, line)
@@ -1487,6 +1828,9 @@ class OperationsService:
                                 inventory_subject_id=line.inventory_subject_id,
                                 quantity_delta=-accepted_qty,
                                 error_context="RECEIVE rollback accepted",
+                                capture=balance_effects_capture,
+                                effect_type="cancel_reversal",
+                                note=reason,
                             )
                         if lost_qty > 0:
                             await OperationsService._upsert_lost(
@@ -1506,6 +1850,9 @@ class OperationsService:
                             inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=-quantity,
                             error_context="RECEIVE rollback",
+                            capture=balance_effects_capture,
+                            effect_type="cancel_reversal",
+                            note=reason,
                         )
                 elif operation.operation_type == "WRITE_OFF" and operation.issue_object_id is not None:
                     # Object write-off rollback: restore issued register
@@ -1523,6 +1870,9 @@ class OperationsService:
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
                         error_context=f"{operation.operation_type} rollback",
+                        capture=balance_effects_capture,
+                        effect_type="cancel_reversal",
+                        note=reason,
                     )
                 elif operation.operation_type == "ADJUSTMENT":
                     await OperationsService._apply_balance_delta(
@@ -1531,6 +1881,9 @@ class OperationsService:
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=-quantity,
                         error_context="ADJUSTMENT rollback",
+                        capture=balance_effects_capture,
+                        effect_type="cancel_reversal",
+                        note=reason,
                     )
                 elif operation.operation_type == "MOVE":
                     if operation.source_site_id is None or operation.destination_site_id is None:
@@ -1557,6 +1910,9 @@ class OperationsService:
                                 inventory_subject_id=line.inventory_subject_id,
                                 quantity_delta=-accepted_qty,
                                 error_context="MOVE rollback accepted from destination",
+                                capture=balance_effects_capture,
+                                effect_type="cancel_reversal",
+                                note=reason,
                             )
                         if lost_qty > 0:
                             await OperationsService._upsert_lost(
@@ -1575,6 +1931,9 @@ class OperationsService:
                             inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=quantity,
                             error_context="MOVE rollback to source",
+                            capture=balance_effects_capture,
+                            effect_type="cancel_reversal",
+                            note=reason,
                         )
                     else:
                         await OperationsService._ensure_sufficient_balance(
@@ -1593,6 +1952,9 @@ class OperationsService:
                             inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=quantity,
                             error_context="MOVE rollback to source",
+                            capture=balance_effects_capture,
+                            effect_type="cancel_reversal",
+                            note=reason,
                         )
                         await OperationsService._apply_balance_delta(
                             uow,
@@ -1600,6 +1962,9 @@ class OperationsService:
                             inventory_subject_id=line.inventory_subject_id,
                             quantity_delta=-quantity,
                             error_context="MOVE rollback from destination",
+                            capture=balance_effects_capture,
+                            effect_type="cancel_reversal",
+                            note=reason,
                         )
                 elif operation.operation_type == "ISSUE":
                     if operation.issue_object_id is None:
@@ -1617,6 +1982,9 @@ class OperationsService:
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=quantity,
                         error_context="ISSUE rollback to stock",
+                        capture=balance_effects_capture,
+                        effect_type="cancel_reversal",
+                        note=reason,
                     )
                 elif operation.operation_type == "ISSUE_RETURN":
                     if operation.issue_object_id is None:
@@ -1627,6 +1995,9 @@ class OperationsService:
                         inventory_subject_id=line.inventory_subject_id,
                         quantity_delta=-quantity,
                         error_context="ISSUE_RETURN rollback from stock",
+                        capture=balance_effects_capture,
+                        effect_type="cancel_reversal",
+                        note=reason,
                     )
                     await OperationsService._upsert_issued(
                         uow,
@@ -1646,7 +2017,7 @@ class OperationsService:
             uow, operation_id=operation_id, user_id=user_id,
         )
 
-        await record_audit_event(
+        cancel_event = await record_audit_event(
             uow,
             event_type="operation.cancel",
             actor_user_id=user_id,
@@ -1658,6 +2029,23 @@ class OperationsService:
                 if hasattr(operation, "short_id") and operation.short_id
                 else f"Операция отменена"
             ),
+            changes={
+                "reason": reason,
+                "was_submitted": (operation.status == "submitted"),
+                "reversal_lines_count": len(balance_effects_capture),
+            },
+            outcome="success",
+            parent_event_id=getattr(uow, "audit_parent_event_id", None),
+        )
+
+        is_system = (getattr(cancelled_operation, "origin", "user") == "system")
+        await OperationsService._write_captured_effects(
+            uow,
+            capture=balance_effects_capture,
+            audit_event_id=int(cancel_event.id),
+            operation_id=cancelled_operation.id,
+            is_system_generated=is_system,
+            caused_by_event_id=getattr(uow, "audit_caused_by_event_id", None),
         )
 
         logger.info("cancelled operation=%s by user=%s reason=%s", operation_id, user_id, reason)

@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+from uuid import UUID
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repos.asset_registers_repo import AssetRegistersRepo
@@ -34,6 +36,16 @@ class UnitOfWork:
         # caller passes an explicit correlation_id. This is a lightweight
         # alternative to threading the id through every helper signature.
         self.batch_correlation_id: str | None = None
+
+        # Audit context slots for system-generated flows (item.merge,
+        # temporary item resolution, review merge). When set, every audit
+        # event written by submit_operation/cancel_operation/record_audit_event
+        # inherits these values. This lets merge orchestration attach itself as
+        # the parent event for the system ADJUSTMENT events it triggers without
+        # changing every helper signature.
+        self.audit_parent_event_id: "UUID | None" = None
+        self.audit_caused_by_event_id: int | None = None
+        self.audit_effect_type_override: str | None = None
 
         self.sites = SitesRepo(session)
         self.devices = DevicesRepo(session)

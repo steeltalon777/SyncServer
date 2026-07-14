@@ -206,6 +206,7 @@ async def update_operation(
             uow=uow,
             operation_id=operation_id,
             update_data=update_data,
+            user_id=identity.user_id,
         )
 
     logger.info("update_operation", request_id=get_request_id(request), id=operation_id, user=identity.user_id)
@@ -232,6 +233,7 @@ async def update_operation_effective_at(
             uow=uow,
             operation_id=operation_id,
             effective_at=payload.effective_at,
+            user_id=identity.user_id,
         )
 
     logger.info(
