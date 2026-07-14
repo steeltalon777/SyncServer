@@ -519,15 +519,28 @@ class CatalogAdminService:
     ) -> Item:
         """Merge source item into target item.
 
-        Steps:
-        1. Load source + target, validate existence and no self-merge.
-        2. Check not deleted, target is active.
-        3. Assert neither item is frozen (lost assets).
-        4. Transfer balances via ADJUSTMENT operations (write-off source, receipt target).
-        5. Update all operation lines referencing source to point to target.
-        6. Archive source inventory subject.
-        7. Deactivate source, set merge audit fields.
+        TZ-AUDIT_BACKEND_FOUNDATION §10.3 — Storage Foundation ordering:
+
+        1. Validate.
+        2. INSERT parent AuditEvent(item.merge). FLUSH so event_id is
+           available for the system ADJUSTMENT sub-events.
+        3. Transfer balances via system ADJUSTMENT ops. Each op has
+           origin="system", system_reason="item_merge",
+           initiated_by_user_id = resolved_by_user_id. submit_operation
+           inherits parent_event_id from uow.audit_parent_event_id, so
+           the resulting operation.submit events become children of the
+           merge event in audit_events.parent_event_id.
+        4. Insert audit_item_effects rows (effect_type=merge_write_off /
+           merge_receipt) for each balance change. These are produced
+           inside submit_operation.
+        5. Reassign all OperationLine.item_id rows — the destructive
+           mutation is now safe because the effect journal already
+           preserves the source-item reference.
+        6. Archive inventory subject + deactivate source item.
+        7. Insert audit_event_resources: merge_source, merge_target,
+           generated → each system ADJUSTMENT operation.
         """
+        # ── Validation ───────────────────────────────────────────────
         source = await uow.catalog.get_item_by_id(source_item_id)
         if source is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source item not found")
@@ -552,97 +565,11 @@ class CatalogAdminService:
         await self._assert_item_not_frozen(uow, source_item_id)
         await self._assert_item_not_frozen(uow, target_item_id)
 
-        # Get inventory subjects
-        source_subject = await uow.inventory_subjects.get_by_item_id(source_item_id)
-        target_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=target_item_id)
-
-        # Transfer balances via ADJUSTMENT operations
-        if source_subject is not None and source_subject.archived_at is None:
-            source_balances = await uow.balances.get_all_by_inventory_subject(int(source_subject.id))
-            for balance_row in source_balances:
-                qty = balance_row.qty
-                if qty == 0:
-                    continue
-
-                site_id = int(balance_row.site_id)
-                note = (
-                    f"[catalog merge] item={source_item_id} -> item={target_item_id}: "
-                    f"balance transfer site={site_id} qty={qty}"
-                )
-
-                # Write-off from source
-                write_off = await uow.operations.create_operation(
-                    site_id=site_id,
-                    operation_type="ADJUSTMENT",
-                    created_by_user_id=resolved_by_user_id,
-                    notes=note,
-                    effective_at=datetime.now(UTC),
-                )
-                await uow.operations.create_operation_line(
-                    operation_id=write_off.id,
-                    line_number=1,
-                    inventory_subject_id=int(source_subject.id),
-                    item_id=source_item_id,
-                    qty=-Decimal(str(qty)),
-                    comment=note,
-                )
-                from app.services.operations_service import OperationsService
-
-                await OperationsService.submit_operation(
-                    uow=uow,
-                    operation_id=write_off.id,
-                    user_id=resolved_by_user_id,
-                )
-
-                # Receipt to target
-                receipt_op = await uow.operations.create_operation(
-                    site_id=site_id,
-                    operation_type="ADJUSTMENT",
-                    created_by_user_id=resolved_by_user_id,
-                    notes=note,
-                    effective_at=datetime.now(UTC),
-                )
-                await uow.operations.create_operation_line(
-                    operation_id=receipt_op.id,
-                    line_number=1,
-                    inventory_subject_id=int(target_subject.id),
-                    item_id=target_item_id,
-                    qty=Decimal(str(qty)),
-                    comment=note,
-                )
-                await OperationsService.submit_operation(
-                    uow=uow,
-                    operation_id=receipt_op.id,
-                    user_id=resolved_by_user_id,
-                )
-
-        # Update operation lines: all operation_lines referencing source → target
-        from app.models.operation import OperationLine
-        from sqlalchemy import update as sa_update
-
-        await uow.session.execute(
-            sa_update(OperationLine.__table__)
-            .where(OperationLine.__table__.c.item_id == source_item_id)
-            .values(item_id=target_item_id)
-        )
-
-        # Archive source inventory subject
-        if source_subject is not None and source_subject.archived_at is None:
-            await uow.inventory_subjects.archive(int(source_subject.id))
-
-        # Deactivate source and set merge audit fields
-        now = datetime.now(UTC)
-        source.is_active = False
-        source.merged_into_id = target_item_id
-        source.merged_at = now
-        source.merged_by_user_id = resolved_by_user_id
-        source.merge_comment = comment
-
-        await uow.catalog.update_item(source)
-
-        await record_audit_event(
+        # ── Step 1: parent audit event ────────────────────────────────
+        merge_event = await record_audit_event(
             uow,
             event_type="item.merge",
+            event_version=2,
             actor_user_id=resolved_by_user_id,
             entity_type="item",
             entity_id=str(target_item_id),
@@ -650,13 +577,170 @@ class CatalogAdminService:
                 f"Слияние: ТМЦ {source_item_id} → {target_item_id}"
                 + (f" ({comment})" if comment else "")
             ),
+            changes={
+                "source_item_id": source_item_id,
+                "target_item_id": target_item_id,
+                "comment": comment,
+                "balances_transferred": [],
+                "op_lines_reassigned_count": 0,
+            },
+            outcome="success",
         )
+
+        # Set up UoW context for system ADJUSTMENT submits that follow.
+        previous_parent_event_id = getattr(uow, "audit_parent_event_id", None)
+        previous_caused_by_event_id = getattr(uow, "audit_caused_by_event_id", None)
+        uow.audit_parent_event_id = merge_event.event_id
+        uow.audit_caused_by_event_id = int(merge_event.id)
+
+        generated_adjustment_ids: list[UUID] = []
+        balances_transferred_summary: list[dict[str, object]] = []
+
+        try:
+            # ── Step 2: system ADJUSTMENT balance transfer ────────────
+            source_subject = await uow.inventory_subjects.get_by_item_id(source_item_id)
+            target_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=target_item_id)
+
+            if source_subject is not None and source_subject.archived_at is None:
+                from app.services.operations_service import OperationsService
+
+                source_balances = await uow.balances.get_all_by_inventory_subject(int(source_subject.id))
+                for balance_row in source_balances:
+                    qty = Decimal(balance_row.qty)
+                    if qty == 0:
+                        continue
+
+                    site_id = int(balance_row.site_id)
+                    note = (
+                        f"[catalog merge] item={source_item_id} -> item={target_item_id}: "
+                        f"balance transfer site={site_id} qty={qty}"
+                    )
+
+                    # Write-off from source — effect_type override per side
+                    uow.audit_effect_type_override = "merge_write_off"
+                    write_off = await uow.operations.create_operation(
+                        site_id=site_id,
+                        operation_type="ADJUSTMENT",
+                        created_by_user_id=resolved_by_user_id,
+                        notes=note,
+                        effective_at=datetime.now(UTC),
+                        origin="system",
+                        system_reason="item_merge",
+                        initiated_by_user_id=resolved_by_user_id,
+                    )
+                    await uow.operations.create_operation_line(
+                        operation_id=write_off.id,
+                        line_number=1,
+                        inventory_subject_id=int(source_subject.id),
+                        item_id=source_item_id,
+                        qty=-qty,
+                        comment=note,
+                    )
+                    await OperationsService.submit_operation(
+                        uow=uow,
+                        operation_id=write_off.id,
+                        user_id=resolved_by_user_id,
+                    )
+                    generated_adjustment_ids.append(write_off.id)
+
+                    # Receipt to target
+                    uow.audit_effect_type_override = "merge_receipt"
+                    receipt_op = await uow.operations.create_operation(
+                        site_id=site_id,
+                        operation_type="ADJUSTMENT",
+                        created_by_user_id=resolved_by_user_id,
+                        notes=note,
+                        effective_at=datetime.now(UTC),
+                        origin="system",
+                        system_reason="item_merge",
+                        initiated_by_user_id=resolved_by_user_id,
+                    )
+                    await uow.operations.create_operation_line(
+                        operation_id=receipt_op.id,
+                        line_number=1,
+                        inventory_subject_id=int(target_subject.id),
+                        item_id=target_item_id,
+                        qty=qty,
+                        comment=note,
+                    )
+                    await OperationsService.submit_operation(
+                        uow=uow,
+                        operation_id=receipt_op.id,
+                        user_id=resolved_by_user_id,
+                    )
+                    generated_adjustment_ids.append(receipt_op.id)
+                    balances_transferred_summary.append({"site_id": site_id, "qty": str(qty)})
+
+            # ── Step 3: reassign OperationLine rows ──────────────────
+            from app.models.operation import OperationLine
+            from sqlalchemy import update as sa_update
+
+            reassign_result = await uow.session.execute(
+                sa_update(OperationLine.__table__)
+                .where(OperationLine.__table__.c.item_id == source_item_id)
+                .values(item_id=target_item_id)
+                .returning(OperationLine.__table__.c.id)
+            )
+            op_lines_count = len(list(reassign_result)) if reassign_result else 0
+
+            # ── Step 4: archive + deactivate ─────────────────────────
+            if source_subject is not None and source_subject.archived_at is None:
+                await uow.inventory_subjects.archive(int(source_subject.id))
+
+            now = datetime.now(UTC)
+            source.is_active = False
+            source.merged_into_id = target_item_id
+            source.merged_at = now
+            source.merged_by_user_id = resolved_by_user_id
+            source.merge_comment = comment
+
+            await uow.catalog.update_item(source)
+
+            # ── Step 5: extend parent changes with the discovered facts
+            change_payload = merge_event.changes if isinstance(merge_event.changes, dict) else {}
+            change_payload["op_lines_reassigned_count"] = op_lines_count
+            change_payload["balances_transferred"] = balances_transferred_summary
+            merge_event.changes = change_payload
+
+            # ── Step 6: resource links ───────────────────────────────
+            # merge_source points at the source item — its snapshot is taken
+            # AFTER deactivate so the snapshot reflects the merged state.
+            await uow.audit_events.insert_resource(
+                audit_event_id=int(merge_event.id),
+                resource_type="item",
+                resource_id=str(source_item_id),
+                relation="merge_source",
+                snapshot_before={"name": source.name, "sku": source.sku, "is_active": True},
+                snapshot_after={"is_active": False, "merged_into_id": target_item_id},
+            )
+            await uow.audit_events.insert_resource(
+                audit_event_id=int(merge_event.id),
+                resource_type="item",
+                resource_id=str(target_item_id),
+                relation="merge_target",
+                snapshot_before={"name": target.name, "sku": target.sku},
+                snapshot_after={"name": target.name, "sku": target.sku},
+            )
+            for op_id in generated_adjustment_ids:
+                await uow.audit_events.insert_resource(
+                    audit_event_id=int(merge_event.id),
+                    resource_type="operation",
+                    resource_id=str(op_id),
+                    relation="generated",
+                )
+        finally:
+            # Always restore UoW context so any later calls do not inherit
+            # the merge orchestration tags.
+            uow.audit_parent_event_id = previous_parent_event_id
+            uow.audit_caused_by_event_id = previous_caused_by_event_id
+            uow.audit_effect_type_override = None
 
         logger.info(
             "merge_items",
             source_item_id=source_item_id,
             target_item_id=target_item_id,
             user_id=str(resolved_by_user_id),
+            generated_adjustments=len(generated_adjustment_ids),
         )
 
         return target
@@ -672,14 +756,15 @@ class CatalogAdminService:
     ) -> Category:
         """Merge source category into target category.
 
-        Steps:
-        1. Load source + target, validate existence and no self-merge.
-        2. Check not deleted, target is active.
-        3. Check no cyclic dependency (target is not a descendant of source).
-        4. Move all items from source category to target category.
-        5. Move all subcategories from source to target.
-        6. Deactivate source, set merge audit fields.
+        TZ-AUDIT_BACKEND_FOUNDATION §10.2 — emits a category.merge audit
+        event with merge_source/merge_target resource links plus
+        category_changed rows for each moved item and reparented rows
+        for each moved subcategory.
         """
+        from app.models.item import Item as ItemModel
+        from app.models.category import Category as CategoryModel
+        from sqlalchemy import update as sa_update
+
         source = await uow.catalog.get_category_by_id(source_category_id)
         if source is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source category not found")
@@ -709,11 +794,12 @@ class CatalogAdminService:
                 detail="target category is a descendant of source category; would create cycle",
             )
 
-        # Move all items from source category to target category
-        from app.models.item import Item as ItemModel
-        from app.models.category import Category as CategoryModel
-        from sqlalchemy import update as sa_update
+        # Capture the affected items/subcategories BEFORE they are moved so
+        # the resource edges point at the right entities.
+        items_moved = await uow.catalog.list_items_by_category(source_category_id)
+        subcats_moved = await uow.catalog.list_categories_by_parent(source_category_id)
 
+        # Move all items from source category to target category
         await uow.session.execute(
             sa_update(ItemModel.__table__)
             .where(ItemModel.__table__.c.category_id == source_category_id)
@@ -739,6 +825,60 @@ class CatalogAdminService:
 
         await uow.catalog.update_category(source)
 
+        # ── Audit event (Phase 1) ────────────────────────────────────
+        merge_event = await record_audit_event(
+            uow,
+            event_type="category.merge",
+            event_version=2,
+            actor_user_id=resolved_by_user_id,
+            entity_type="category",
+            entity_id=str(target_category_id),
+            summary=(
+                f"Слияние категории {source_category_id} → {target_category_id}"
+                + (f" ({comment})" if comment else "")
+            ),
+            changes={
+                "source_category_id": source_category_id,
+                "target_category_id": target_category_id,
+                "comment": comment,
+                "items_moved_count": len(items_moved),
+                "subcategories_reparented_count": len(subcats_moved),
+            },
+            outcome="success",
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(merge_event.id),
+            resource_type="category",
+            resource_id=str(source_category_id),
+            relation="merge_source",
+            snapshot_before={"name": source.name, "is_active": True},
+            snapshot_after={"is_active": False, "merged_into_id": target_category_id},
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(merge_event.id),
+            resource_type="category",
+            resource_id=str(target_category_id),
+            relation="merge_target",
+        )
+        for item in items_moved:
+            await uow.audit_events.insert_resource(
+                audit_event_id=int(merge_event.id),
+                resource_type="item",
+                resource_id=str(item.id),
+                relation="category_changed",
+                snapshot_before={"category_id": source_category_id},
+                snapshot_after={"category_id": target_category_id},
+            )
+        for subcat in subcats_moved:
+            await uow.audit_events.insert_resource(
+                audit_event_id=int(merge_event.id),
+                resource_type="category",
+                resource_id=str(subcat.id),
+                relation="reparented",
+                snapshot_before={"parent_id": source_category_id},
+                snapshot_after={"parent_id": target_category_id},
+            )
+
         logger.info(
             "merge_categories",
             source_category_id=source_category_id,
@@ -758,98 +898,142 @@ class CatalogAdminService:
     ) -> tuple[list[BatchChangeResult], dict[str, int]]:
         """
         Apply a mixed batch of catalog changes atomically.
-        
+
         All changes are applied within a single UnitOfWork transaction.
         Any failure rolls back the entire batch.
-        
-        Args:
-            uow: UnitOfWork instance for transactional operations
-            payload: Batch request with changes to apply
-            identity: User identity for permission checks and audit
-            
-        Returns:
-            Tuple of (list of change results, summary counts)
-            
-        Raises:
-            HTTPException: On validation or application failure
+
+        TZ-AUDIT_BACKEND_FOUNDATION §10.6 — at the start of the batch we
+        stamp `uow.batch_correlation_id` so every audit event recorded by
+        the sub-helpers (create_item, update_item, merge_items, ...)
+        inherits the same correlation id. After the last change has been
+        applied, we emit one summary event with outcome=success (no
+        errors) or outcome=partial (some errors).
         """
         # Validate batch structure
         await self._validate_batch(payload)
-        
+
         # Build local_id -> entity_id mapping for created entities
         local_id_map: dict[str, int] = {}
         results: list[BatchChangeResult] = []
         summary: dict[str, int] = {"create": 0, "update": 0, "deactivate": 0, "delete": 0, "merge": 0, "error": 0}
-        
-        # Process changes in dependency order:
-        # 1. Units (create/update/deactivate/delete)
-        # 2. Categories (create in topological order, then update/deactivate/delete)
-        # 3. Items (create/update/deactivate/delete)
-        
-        # Separate changes by entity type and action
-        unit_creates = [c for c in payload.changes if c.entity_type == "unit" and c.action == "create"]
-        unit_updates = [c for c in payload.changes if c.entity_type == "unit" and c.action == "update"]
-        unit_deactivates = [c for c in payload.changes if c.entity_type == "unit" and c.action == "deactivate"]
-        unit_deletes = [c for c in payload.changes if c.entity_type == "unit" and c.action == "delete"]
-        
-        category_creates = [c for c in payload.changes if c.entity_type == "category" and c.action == "create"]
-        category_updates = [c for c in payload.changes if c.entity_type == "category" and c.action == "update"]
-        category_deactivates = [c for c in payload.changes if c.entity_type == "category" and c.action == "deactivate"]
-        category_deletes = [c for c in payload.changes if c.entity_type == "category" and c.action == "delete"]
-        
-        item_creates = [c for c in payload.changes if c.entity_type == "item" and c.action == "create"]
-        item_updates = [c for c in payload.changes if c.entity_type == "item" and c.action == "update"]
-        item_deactivates = [c for c in payload.changes if c.entity_type == "item" and c.action == "deactivate"]
-        item_deletes = [c for c in payload.changes if c.entity_type == "item" and c.action == "delete"]
-        
-        # Sort category creates by parent dependencies (topological sort)
-        sorted_category_creates = self._topological_sort_categories(category_creates)
-        
-        # Process units
-        for change in unit_creates + unit_updates + unit_deactivates + unit_deletes:
-            result = await self._apply_unit_change(uow, change, local_id_map, identity.user_id)
-            results.append(result)
-            if result.status == "applied":
-                summary[change.action] += 1
-                if change.action == "create" and result.entity_id:
-                    local_id_map[change.local_id] = result.entity_id
-            else:
-                summary["error"] += 1
-        
-        # Process categories
-        for change in sorted_category_creates + category_updates + category_deactivates + category_deletes:
-            result = await self._apply_category_change(uow, change, local_id_map, identity.user_id)
-            results.append(result)
-            if result.status == "applied":
-                summary[change.action] += 1
-                if change.action == "create" and result.entity_id:
-                    local_id_map[change.local_id] = result.entity_id
-            else:
-                summary["error"] += 1
-        
-        # Process items
-        for change in item_creates + item_updates + item_deactivates + item_deletes:
-            result = await self._apply_item_change(uow, change, local_id_map, identity.user_id)
-            results.append(result)
-            if result.status == "applied":
-                summary[change.action] += 1
-                if change.action == "create" and result.entity_id:
-                    local_id_map[change.local_id] = result.entity_id
-            else:
-                summary["error"] += 1
 
-        # Process merges: items first, then categories
-        item_merges = [c for c in payload.changes if c.entity_type == "item" and c.action == "merge"]
-        category_merges = [c for c in payload.changes if c.entity_type == "category" and c.action == "merge"]
+        # Stamp correlation_id BEFORE any audit-producing child call so the
+        # helper picks it up automatically.
+        from uuid import uuid4 as _uuid4
+        correlation_id = str(_uuid4())
+        previous_correlation = getattr(uow, "batch_correlation_id", None)
+        uow.batch_correlation_id = correlation_id
 
-        for change in item_merges + category_merges:
-            result = await self._apply_merge_change(uow, change, local_id_map, identity.user_id)
-            results.append(result)
-            if result.status == "applied":
-                summary["merge"] += 1
-            else:
-                summary["error"] += 1
-        
+        try:
+            # Process changes in dependency order:
+            # 1. Units (create/update/deactivate/delete)
+            # 2. Categories (create in topological order, then update/deactivate/delete)
+            # 3. Items (create/update/deactivate/delete)
+
+            # Separate changes by entity type and action
+            unit_creates = [c for c in payload.changes if c.entity_type == "unit" and c.action == "create"]
+            unit_updates = [c for c in payload.changes if c.entity_type == "unit" and c.action == "update"]
+            unit_deactivates = [c for c in payload.changes if c.entity_type == "unit" and c.action == "deactivate"]
+            unit_deletes = [c for c in payload.changes if c.entity_type == "unit" and c.action == "delete"]
+
+            category_creates = [c for c in payload.changes if c.entity_type == "category" and c.action == "create"]
+            category_updates = [c for c in payload.changes if c.entity_type == "category" and c.action == "update"]
+            category_deactivates = [c for c in payload.changes if c.entity_type == "category" and c.action == "deactivate"]
+            category_deletes = [c for c in payload.changes if c.entity_type == "category" and c.action == "delete"]
+
+            item_creates = [c for c in payload.changes if c.entity_type == "item" and c.action == "create"]
+            item_updates = [c for c in payload.changes if c.entity_type == "item" and c.action == "update"]
+            item_deactivates = [c for c in payload.changes if c.entity_type == "item" and c.action == "deactivate"]
+            item_deletes = [c for c in payload.changes if c.entity_type == "item" and c.action == "delete"]
+
+            # Sort category creates by parent dependencies (topological sort)
+            sorted_category_creates = self._topological_sort_categories(category_creates)
+
+            # Process units
+            for change in unit_creates + unit_updates + unit_deactivates + unit_deletes:
+                result = await self._apply_unit_change(uow, change, local_id_map, identity.user_id)
+                results.append(result)
+                if result.status == "applied":
+                    summary[change.action] += 1
+                    if change.action == "create" and result.entity_id:
+                        local_id_map[change.local_id] = result.entity_id
+                else:
+                    summary["error"] += 1
+
+            # Process categories
+            for change in sorted_category_creates + category_updates + category_deactivates + category_deletes:
+                result = await self._apply_category_change(uow, change, local_id_map, identity.user_id)
+                results.append(result)
+                if result.status == "applied":
+                    summary[change.action] += 1
+                    if change.action == "create" and result.entity_id:
+                        local_id_map[change.local_id] = result.entity_id
+                else:
+                    summary["error"] += 1
+
+            # Process items
+            for change in item_creates + item_updates + item_deactivates + item_deletes:
+                result = await self._apply_item_change(uow, change, local_id_map, identity.user_id)
+                results.append(result)
+                if result.status == "applied":
+                    summary[change.action] += 1
+                    if change.action == "create" and result.entity_id:
+                        local_id_map[change.local_id] = result.entity_id
+                else:
+                    summary["error"] += 1
+
+            # Process merges: items first, then categories
+            item_merges = [c for c in payload.changes if c.entity_type == "item" and c.action == "merge"]
+            category_merges = [c for c in payload.changes if c.entity_type == "category" and c.action == "merge"]
+
+            for change in item_merges + category_merges:
+                result = await self._apply_merge_change(uow, change, local_id_map, identity.user_id)
+                results.append(result)
+                if result.status == "applied":
+                    summary["merge"] += 1
+                else:
+                    summary["error"] += 1
+        finally:
+            uow.batch_correlation_id = previous_correlation
+
+        # Summary event — outcome depends on whether anything errored.
+        batch_outcome = "success" if summary["error"] == 0 else "partial"
+        batch_event = await record_audit_event(
+            uow,
+            event_type="catalog.batch.apply",
+            event_version=2,
+            actor_user_id=identity.user_id,
+            entity_type="batch",
+            entity_id=correlation_id,
+            summary=(
+                f"Пакетное изменение каталога: {len(results)} операций"
+                + (" (без ошибок)" if batch_outcome == "success" else f" ({summary['error']} ошибок)")
+            ),
+            changes={
+                "total_changes": len(results),
+                "results": [
+                    {
+                        "local_id": r.local_id,
+                        "entity_type": r.entity_type,
+                        "action": r.action,
+                        "status": r.status,
+                        "entity_id": r.entity_id,
+                        "error_code": r.error_code,
+                        "error_message": r.error_message,
+                    }
+                    for r in results
+                ],
+            },
+            outcome=batch_outcome,
+            correlation_id=correlation_id,
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(batch_event.id),
+            resource_type="batch",
+            resource_id=correlation_id,
+            relation="primary",
+        )
+
         return results, summary
 
     async def _validate_batch(self, payload: CatalogBatchRequest) -> None:

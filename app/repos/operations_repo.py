@@ -40,6 +40,9 @@ class OperationsRepo:
         client_request_id: str | None = None,
         client_request_hash: str | None = None,
         display_number: str | None = None,
+        origin: str = "user",
+        system_reason: str | None = None,
+        initiated_by_user_id: UUID | None = None,
     ) -> Operation:
         operation = Operation(
             site_id=site_id,
@@ -61,6 +64,9 @@ class OperationsRepo:
             client_request_id=client_request_id,
             client_request_hash=client_request_hash,
             display_number=display_number,
+            origin=origin,
+            system_reason=system_reason,
+            initiated_by_user_id=initiated_by_user_id or created_by_user_id,
         )
         self.session.add(operation)
         await self.session.flush()

@@ -676,3 +676,43 @@ class CatalogRepo:
         for item in result.scalars().all():
             items_map[item.id] = item
         return [items_map[iid] for iid in deduped if iid in items_map]
+
+    async def list_items_by_category(
+        self,
+        category_id: int,
+        *,
+        include_deleted: bool = False,
+    ) -> list[Item]:
+        """All items belonging to a category, optionally including soft-deleted ones."""
+        stmt = select(Item).where(Item.category_id == category_id)
+        if not include_deleted:
+            stmt = stmt.where(Item.deleted_at.is_(None))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_categories_by_parent(
+        self,
+        parent_id: int | None,
+        *,
+        include_deleted: bool = False,
+    ) -> list[Category]:
+        """Direct child categories of `parent_id` (None for roots)."""
+        stmt = select(Category)
+        if parent_id is None:
+            stmt = stmt.where(Category.parent_id.is_(None))
+        else:
+            stmt = stmt.where(Category.parent_id == parent_id)
+        if not include_deleted:
+            stmt = stmt.where(Category.deleted_at.is_(None))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_items_merged_into(self, target_item_id: int) -> list[Item]:
+        """All Items whose merged_into_id equals target_item_id.
+
+        Used by the merge closure algorithm (TZ-AUDIT_BACKEND_FOUNDATION §9)
+        when reconstructing the history of a canonical item.
+        """
+        stmt = select(Item).where(Item.merged_into_id == target_item_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())

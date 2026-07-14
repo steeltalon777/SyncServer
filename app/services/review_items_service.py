@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import structlog
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from app.schemas.review_item import (
     ReviewItemConfirmRequest,
 )
+from app.services.audit_helper import record_audit_event
+from app.services.operations_service import OperationsService
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
 
@@ -90,6 +93,30 @@ class ReviewItemsService:
 
         await uow.session.flush()
 
+        # TZ-AUDIT_BACKEND_FOUNDATION §8.3 — record a review_item.confirm
+        # audit event so the chronicle distinguishes review confirmations
+        # from regular item updates.
+        await record_audit_event(
+            uow,
+            event_type="review_item.confirm",
+            event_version=2,
+            actor_user_id=resolved_by_user_id,
+            entity_type="item",
+            entity_id=str(item_id),
+            summary=f"ТМЦ #{item_id} подтверждён после проверки",
+            changes={
+                "item_id": item_id,
+                "resolution_type": "confirmed",
+                "corrections": {
+                    "name": payload.name is not None,
+                    "sku": payload.sku is not None,
+                    "category_id": payload.category_id is not None,
+                    "unit_id": payload.unit_id is not None,
+                },
+            },
+            outcome="success",
+        )
+
         logger.info(
             "review_item_confirmed",
             item_id=item_id,
@@ -153,66 +180,97 @@ class ReviewItemsService:
             item_id=target_item_id,
         )
 
-        # Transfer balances via service operations
-        source_balances = await uow.balances.get_all_by_inventory_subject(int(source_subject.id))
-        for balance_row in source_balances:
-            qty = balance_row.qty
-            if qty == 0:
-                continue
+        # ── Audit: parent event first so transfers can attach ─────
+        parent_event = await record_audit_event(
+            uow,
+            event_type="review_item.merge",
+            event_version=2,
+            actor_user_id=resolved_by_user_id,
+            entity_type="item",
+            entity_id=str(target_item_id),
+            summary=f"Review item #{item_id} слит с ТМЦ #{target_item_id}",
+            changes={
+                "item_id": item_id,
+                "target_item_id": target_item_id,
+                "resolution_note": resolution_note,
+            },
+            outcome="success",
+        )
+        saved_parent = getattr(uow, "audit_parent_event_id", None)
+        saved_caused = getattr(uow, "audit_caused_by_event_id", None)
+        uow.audit_parent_event_id = parent_event.event_id
+        uow.audit_caused_by_event_id = int(parent_event.id)
+        generated_ids: list = []
+        try:
+            # Transfer balances via service operations
+            source_balances = await uow.balances.get_all_by_inventory_subject(int(source_subject.id))
+            for balance_row in source_balances:
+                qty = balance_row.qty
+                if qty == 0:
+                    continue
 
-            from decimal import Decimal
+                qty_dec = Decimal(str(qty))
+                site_id = int(balance_row.site_id)
+                note = (
+                    f"[review merge] item={item_id} -> item={target_item_id}: "
+                    f"balance transfer site={site_id} qty={qty}"
+                )
 
-            site_id = int(balance_row.site_id)
-            note = (
-                f"[review merge] item={item_id} -> item={target_item_id}: "
-                f"balance transfer site={site_id} qty={qty}"
-            )
+                uow.audit_effect_type_override = "review_write_off"
+                write_off = await uow.operations.create_operation(
+                    site_id=site_id,
+                    operation_type="ADJUSTMENT",
+                    created_by_user_id=resolved_by_user_id,
+                    notes=note,
+                    effective_at=datetime.now(UTC),
+                    origin="system",
+                    system_reason="review_merge",
+                    initiated_by_user_id=resolved_by_user_id,
+                )
+                await uow.operations.create_operation_line(
+                    operation_id=write_off.id,
+                    line_number=1,
+                    inventory_subject_id=int(source_subject.id),
+                    item_id=item_id,
+                    qty=-qty_dec,
+                    comment=note,
+                )
+                await OperationsService.submit_operation(
+                    uow=uow,
+                    operation_id=write_off.id,
+                    user_id=resolved_by_user_id,
+                )
+                generated_ids.append(write_off.id)
 
-            # Write-off from source
-            write_off = await uow.operations.create_operation(
-                site_id=site_id,
-                operation_type="ADJUSTMENT",
-                created_by_user_id=resolved_by_user_id,
-                notes=note,
-                effective_at=datetime.now(UTC),
-            )
-            await uow.operations.create_operation_line(
-                operation_id=write_off.id,
-                line_number=1,
-                inventory_subject_id=int(source_subject.id),
-                item_id=item_id,
-                qty=-Decimal(str(qty)),
-                comment=note,
-            )
-            from app.services.operations_service import OperationsService
-
-            await OperationsService.submit_operation(
-                uow=uow,
-                operation_id=write_off.id,
-                user_id=resolved_by_user_id,
-            )
-
-            # Receipt to target
-            receipt_op = await uow.operations.create_operation(
-                site_id=site_id,
-                operation_type="ADJUSTMENT",
-                created_by_user_id=resolved_by_user_id,
-                notes=note,
-                effective_at=datetime.now(UTC),
-            )
-            await uow.operations.create_operation_line(
-                operation_id=receipt_op.id,
-                line_number=1,
-                inventory_subject_id=int(target_subject.id),
-                item_id=target_item_id,
-                qty=Decimal(str(qty)),
-                comment=note,
-            )
-            await OperationsService.submit_operation(
-                uow=uow,
-                operation_id=receipt_op.id,
-                user_id=resolved_by_user_id,
-            )
+                uow.audit_effect_type_override = "review_receipt"
+                receipt_op = await uow.operations.create_operation(
+                    site_id=site_id,
+                    operation_type="ADJUSTMENT",
+                    created_by_user_id=resolved_by_user_id,
+                    notes=note,
+                    effective_at=datetime.now(UTC),
+                    origin="system",
+                    system_reason="review_merge",
+                    initiated_by_user_id=resolved_by_user_id,
+                )
+                await uow.operations.create_operation_line(
+                    operation_id=receipt_op.id,
+                    line_number=1,
+                    inventory_subject_id=int(target_subject.id),
+                    item_id=target_item_id,
+                    qty=qty_dec,
+                    comment=note,
+                )
+                await OperationsService.submit_operation(
+                    uow=uow,
+                    operation_id=receipt_op.id,
+                    user_id=resolved_by_user_id,
+                )
+                generated_ids.append(receipt_op.id)
+        finally:
+            uow.audit_parent_event_id = saved_parent
+            uow.audit_caused_by_event_id = saved_caused
+            uow.audit_effect_type_override = None
 
         # Archive source inventory subject
         await uow.inventory_subjects.archive(int(source_subject.id))
@@ -228,6 +286,27 @@ class ReviewItemsService:
         item.review_note = resolution_note or f"Merged into item {target_item_id}"
 
         await uow.session.flush()
+
+        # Resource links for the parent merge event
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(parent_event.id),
+            resource_type="item",
+            resource_id=str(item_id),
+            relation="merge_source",
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(parent_event.id),
+            resource_type="item",
+            resource_id=str(target_item_id),
+            relation="merge_target",
+        )
+        for op_id in generated_ids:
+            await uow.audit_events.insert_resource(
+                audit_event_id=int(parent_event.id),
+                resource_type="operation",
+                resource_id=str(op_id),
+                relation="generated",
+            )
 
         logger.info(
             "review_item_merged",

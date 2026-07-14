@@ -6,6 +6,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from app.models.item import Item
+from app.services.audit_helper import record_audit_event
 from app.services.operations_service import OperationsService
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
@@ -46,71 +47,98 @@ class TemporaryItemsResolutionService:
         resolved_by_user_id: UUID,
         resolution_type: str,
         temporary_item_id: int,
-    ) -> None:
+        parent_event=None,
+    ) -> list:
         """Transfer current balances from source subject to target subject using service ADJUSTMENT operations.
 
         For each site with non-zero balance on the source subject, creates a pair of
         ADJUSTMENT operations: one negative (write-off from source) and one positive (receipt to target).
         Both operations are submitted immediately to update balance projections.
+
+        Each generated ADJUSTMENT is system-originated (origin='system',
+        system_reason='temporary_merge') and submitted under the parent
+        audit event so the chronicle can answer "which temporary merge
+        caused this balance delta?". Returns the list of generated
+        operation ids.
         """
-        source_balances = await uow.balances.get_all_by_inventory_subject(source_inventory_subject_id)
+        generated_ids: list = []
+        saved_parent_event = getattr(uow, "audit_parent_event_id", None)
+        saved_caused_by = getattr(uow, "audit_caused_by_event_id", None)
+        if parent_event is not None:
+            uow.audit_parent_event_id = parent_event.event_id
+            uow.audit_caused_by_event_id = int(parent_event.id)
+        try:
+            source_balances = await uow.balances.get_all_by_inventory_subject(source_inventory_subject_id)
 
-        for balance_row in source_balances:
-            qty = Decimal(str(balance_row.qty))
-            if qty == 0:
-                continue
+            for balance_row in source_balances:
+                qty = Decimal(str(balance_row.qty))
+                if qty == 0:
+                    continue
 
-            site_id = int(balance_row.site_id)
-            resolution_note = (
-                f"[resolution] {resolution_type} temporary_item={temporary_item_id}: "
-                f"balance transfer site={site_id} qty={qty}"
-            )
+                site_id = int(balance_row.site_id)
+                resolution_note = (
+                    f"[resolution] {resolution_type} temporary_item={temporary_item_id}: "
+                    f"balance transfer site={site_id} qty={qty}"
+                )
 
-            # 1. Service write-off from source subject
-            write_off_op = await uow.operations.create_operation(
-                site_id=site_id,
-                operation_type="ADJUSTMENT",
-                created_by_user_id=resolved_by_user_id,
-                notes=resolution_note,
-                effective_at=datetime.now(UTC),
-            )
-            await uow.operations.create_operation_line(
-                operation_id=write_off_op.id,
-                line_number=1,
-                inventory_subject_id=source_inventory_subject_id,
-                item_id=source_item_id,
-                qty=-qty,
-                comment=resolution_note,
-            )
-            # Use OperationsService.submit_operation to trigger balance updates
-            await OperationsService.submit_operation(
-                uow=uow,
-                operation_id=write_off_op.id,
-                user_id=resolved_by_user_id,
-            )
+                # 1. Service write-off from source subject
+                uow.audit_effect_type_override = "temporary_write_off"
+                write_off_op = await uow.operations.create_operation(
+                    site_id=site_id,
+                    operation_type="ADJUSTMENT",
+                    created_by_user_id=resolved_by_user_id,
+                    notes=resolution_note,
+                    effective_at=datetime.now(UTC),
+                    origin="system",
+                    system_reason="temporary_merge",
+                    initiated_by_user_id=resolved_by_user_id,
+                )
+                await uow.operations.create_operation_line(
+                    operation_id=write_off_op.id,
+                    line_number=1,
+                    inventory_subject_id=source_inventory_subject_id,
+                    item_id=source_item_id,
+                    qty=-qty,
+                    comment=resolution_note,
+                )
+                await OperationsService.submit_operation(
+                    uow=uow,
+                    operation_id=write_off_op.id,
+                    user_id=resolved_by_user_id,
+                )
+                generated_ids.append(write_off_op.id)
 
-            # 2. Service receipt to target subject
-            receipt_op = await uow.operations.create_operation(
-                site_id=site_id,
-                operation_type="ADJUSTMENT",
-                created_by_user_id=resolved_by_user_id,
-                notes=resolution_note,
-                effective_at=datetime.now(UTC),
-            )
-            await uow.operations.create_operation_line(
-                operation_id=receipt_op.id,
-                line_number=1,
-                inventory_subject_id=target_inventory_subject_id,
-                item_id=target_item_id,
-                qty=qty,
-                comment=resolution_note,
-            )
-            # Use OperationsService.submit_operation to trigger balance updates
-            await OperationsService.submit_operation(
-                uow=uow,
-                operation_id=receipt_op.id,
-                user_id=resolved_by_user_id,
-            )
+                # 2. Service receipt to target subject
+                uow.audit_effect_type_override = "temporary_receipt"
+                receipt_op = await uow.operations.create_operation(
+                    site_id=site_id,
+                    operation_type="ADJUSTMENT",
+                    created_by_user_id=resolved_by_user_id,
+                    notes=resolution_note,
+                    effective_at=datetime.now(UTC),
+                    origin="system",
+                    system_reason="temporary_merge",
+                    initiated_by_user_id=resolved_by_user_id,
+                )
+                await uow.operations.create_operation_line(
+                    operation_id=receipt_op.id,
+                    line_number=1,
+                    inventory_subject_id=target_inventory_subject_id,
+                    item_id=target_item_id,
+                    qty=qty,
+                    comment=resolution_note,
+                )
+                await OperationsService.submit_operation(
+                    uow=uow,
+                    operation_id=receipt_op.id,
+                    user_id=resolved_by_user_id,
+                )
+                generated_ids.append(receipt_op.id)
+        finally:
+            uow.audit_parent_event_id = saved_parent_event
+            uow.audit_caused_by_event_id = saved_caused_by
+            uow.audit_effect_type_override = None
+        return generated_ids
 
     @staticmethod
     async def approve_as_item(
@@ -177,7 +205,27 @@ class TemporaryItemsResolutionService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="temporary item has no backing item",
             )
-        await TemporaryItemsResolutionService._transfer_balances_via_service_operations(
+
+        # ── Audit: emit parent event first so transfers can attach ───
+        parent_event = await record_audit_event(
+            uow,
+            event_type="temporary_item.approve",
+            event_version=2,
+            actor_user_id=resolved_by_user_id,
+            entity_type="item",
+            entity_id=str(new_item.id),
+            summary=(
+                f"Temporary item #{temporary_item_id} утверждён как ТМЦ «{new_item.name}»"
+            ),
+            changes={
+                "temporary_item_id": temporary_item_id,
+                "new_item_id": new_item.id,
+                "inventory_subject_id": int(temp_subject.id),
+            },
+            outcome="success",
+        )
+
+        generated_ids = await TemporaryItemsResolutionService._transfer_balances_via_service_operations(
             uow,
             source_inventory_subject_id=int(temp_subject.id),
             source_item_id=temp_item.item_id,
@@ -186,6 +234,7 @@ class TemporaryItemsResolutionService:
             resolved_by_user_id=resolved_by_user_id,
             resolution_type="approve_as_item",
             temporary_item_id=temporary_item_id,
+            parent_event=parent_event,
         )
 
         # Resolve the temporary item
@@ -196,6 +245,27 @@ class TemporaryItemsResolutionService:
             resolution_type="approve_as_item",
             resolution_note="Stage 3A approve: new catalog item created, balances transferred",
         )
+
+        # Resources for the approve event
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(parent_event.id),
+            resource_type="item",
+            resource_id=str(new_item.id),
+            relation="primary",
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(parent_event.id),
+            resource_type="temporary_item",
+            resource_id=str(temporary_item_id),
+            relation="merge_source",
+        )
+        for op_id in generated_ids:
+            await uow.audit_events.insert_resource(
+                audit_event_id=int(parent_event.id),
+                resource_type="operation",
+                resource_id=str(op_id),
+                relation="generated",
+            )
 
         return {"resolved_item_id": new_item.id, "resolution_type": "approve_as_item"}
 
@@ -262,7 +332,27 @@ class TemporaryItemsResolutionService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="temporary item has no backing item",
             )
-        await TemporaryItemsResolutionService._transfer_balances_via_service_operations(
+
+        parent_event = await record_audit_event(
+            uow,
+            event_type="temporary_item.merge",
+            event_version=2,
+            actor_user_id=resolved_by_user_id,
+            entity_type="item",
+            entity_id=str(target_item_id),
+            summary=(
+                f"Temporary item #{temporary_item_id} слит с ТМЦ #{target_item_id}"
+            ),
+            changes={
+                "temporary_item_id": temporary_item_id,
+                "target_item_id": target_item_id,
+                "inventory_subject_id": int(temp_subject.id),
+                "comment": resolution_note,
+            },
+            outcome="success",
+        )
+
+        generated_ids = await TemporaryItemsResolutionService._transfer_balances_via_service_operations(
             uow,
             source_inventory_subject_id=int(temp_subject.id),
             source_item_id=temp_item.item_id,
@@ -271,6 +361,7 @@ class TemporaryItemsResolutionService:
             resolved_by_user_id=resolved_by_user_id,
             resolution_type="merge",
             temporary_item_id=temporary_item_id,
+            parent_event=parent_event,
         )
 
         # Archive the temporary inventory subject
@@ -287,6 +378,26 @@ class TemporaryItemsResolutionService:
             resolved_by_user_id=resolved_by_user_id,
             resolution_note=resolution_note or "Stage 3A merge: balances transferred to target item",
         )
+
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(parent_event.id),
+            resource_type="item",
+            resource_id=str(target_item_id),
+            relation="merge_target",
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(parent_event.id),
+            resource_type="temporary_item",
+            resource_id=str(temporary_item_id),
+            relation="merge_source",
+        )
+        for op_id in generated_ids:
+            await uow.audit_events.insert_resource(
+                audit_event_id=int(parent_event.id),
+                resource_type="operation",
+                resource_id=str(op_id),
+                relation="generated",
+            )
 
         return {"resolved_item_id": target_item_id, "resolution_type": "merge"}
 

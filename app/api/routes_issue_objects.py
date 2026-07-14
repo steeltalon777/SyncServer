@@ -19,6 +19,7 @@ from app.schemas.issue_object_category import (
     IssueObjectCategoryUpdate,
     TreeResponse,
 )
+from app.services.audit_helper import record_audit_event
 from app.services.issue_objects_service import IssueObjectCategoriesService, IssueObjectsService
 from app.services.uow import UnitOfWork
 
@@ -83,6 +84,34 @@ async def merge_issue_objects(
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+        # TZ-AUDIT_BACKEND_FOUNDATION §8.3 — issue_object.merge audit.
+        event = await record_audit_event(
+            uow,
+            event_type="issue_object.merge",
+            event_version=2,
+            actor_user_id=identity.user_id,
+            entity_type="issue_object",
+            entity_id=str(payload.target_id),
+            summary=f"Объект выдачи #{payload.source_id} слит с #{payload.target_id}",
+            changes={
+                "source_id": payload.source_id,
+                "target_id": payload.target_id,
+            },
+            outcome="success",
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(event.id),
+            resource_type="issue_object",
+            resource_id=str(payload.source_id),
+            relation="merge_source",
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(event.id),
+            resource_type="issue_object",
+            resource_id=str(payload.target_id),
+            relation="merge_target",
+        )
 
     return IssueObjectResponse.model_validate(merged)
 
