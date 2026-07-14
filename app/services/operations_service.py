@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import structlog
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -10,8 +13,10 @@ from app.core.search_utils import normalize_for_storage
 from app.models.category import Category
 from app.models.item import Item
 from app.schemas.asset_register import OperationAcceptLinePayload
+from app.schemas.catalog import ItemsResolveRequest
 from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
-from app.services.document_service import DocumentService, draft_document_type_for_operation, submit_document_type_for_operation
+from app.services.catalog_read_service import CatalogReadService
+from app.services.document_service import DocumentService, draft_document_type_for_operation, submit_document_type_for_operation, _compute_operation_display_number
 from app.services.audit_helper import record_audit_event
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
@@ -272,6 +277,45 @@ class OperationsService:
                 )
 
     @staticmethod
+    def _compute_client_request_hash(payload: OperationCreate) -> str:
+        lines_normalized = []
+        for line in payload.lines:
+            line_dict = {
+                "line_number": line.line_number,
+                "item_id": line.item_id,
+                "qty": str(line.qty) if line.qty is not None else None,
+                "batch": line.batch.strip().lower() if line.batch else None,
+                "comment": line.comment.strip().lower() if line.comment else None,
+            }
+            if line.temporary_item is not None:
+                t = line.temporary_item
+                line_dict["temporary_item"] = {
+                    "client_key": t.client_key,
+                    "name": t.name.strip().lower() if t.name else None,
+                    "sku": t.sku.strip().lower() if t.sku else None,
+                    "unit_id": t.unit_id,
+                    "category_id": t.category_id,
+                    "description": t.description.strip().lower() if t.description else None,
+                    "hashtags": sorted([h.strip().lower() for h in t.hashtags]) if t.hashtags else None,
+                }
+            lines_normalized.append(line_dict)
+        canonical = {
+            "operation_type": payload.operation_type,
+            "site_id": payload.site_id,
+            "source_site_id": payload.source_site_id,
+            "destination_site_id": payload.destination_site_id,
+            "issue_object_id": payload.issue_object_id,
+            "issue_object_name_snapshot": payload.issue_object_name_snapshot.strip().lower() if payload.issue_object_name_snapshot else None,
+            "issued_to_user_id": str(payload.issued_to_user_id) if payload.issued_to_user_id else None,
+            "issued_to_name": payload.issued_to_name.strip().lower() if payload.issued_to_name else None,
+            "effective_at": payload.effective_at.isoformat() if payload.effective_at else None,
+            "notes": payload.notes.strip().lower() if payload.notes else None,
+            "lines": lines_normalized,
+        }
+        raw = json.dumps(canonical, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @staticmethod
     async def _resolve_issue_object(
         uow: UnitOfWork,
         *,
@@ -336,6 +380,31 @@ class OperationsService:
         await OperationsService._validate_operation_sites(uow, operation_data)
         OperationsService._validate_line_quantities(operation_data.operation_type, operation_data.lines)
 
+        client_request_hash = None
+        if operation_data.client_request_id:
+            client_request_hash = OperationsService._compute_client_request_hash(operation_data)
+
+        # Idempotency: try insert, handle unique constraint collision at DB level
+        if operation_data.client_request_id:
+            existing = await uow.operations.get_by_client_request_id(
+                created_by_user_id=user_id,
+                client_request_id=operation_data.client_request_id,
+            )
+            if existing is not None:
+                if existing.client_request_hash == client_request_hash:
+                    return {"operation": existing}
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "idempotency_payload_conflict",
+                        "message": (
+                            f"Idempotency conflict: client_request_id "
+                            f"'{operation_data.client_request_id}' "
+                            f"was already used with a different payload"
+                        ),
+                    },
+                )
+
         temporary_batch = {}
         has_temporary_items = False
         for line in operation_data.lines:
@@ -355,56 +424,6 @@ class OperationsService:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="Phase 1 supports inline temporary_item creation only for RECEIVE operations",
                 )
-            existing_operation = await uow.operations.get_by_client_request_id(
-                created_by_user_id=user_id,
-                client_request_id=operation_data.client_request_id or "",
-            )
-            if existing_operation is not None:
-                # Idempotency replay: if payload matches, return existing operation.
-                # If payload differs, return 409 Conflict per spec §7.4.
-                def normalize_qty(q):
-                    from decimal import Decimal
-                    if isinstance(q, (int, float, str)):
-                        return Decimal(str(q))
-                    return q if isinstance(q, Decimal) else Decimal("0")
-
-                def normalize_str(s):
-                    if s is None:
-                        return None
-                    return s.strip().lower()
-
-                existing_lines = []
-                for line in existing_operation.lines:
-                    existing_lines.append({
-                        "line_number": line.line_number,
-                        "qty": normalize_qty(line.qty),
-                        "batch": normalize_str(line.batch),
-                        "comment": normalize_str(line.comment),
-                        "item_name_snapshot": normalize_str(line.item_name_snapshot),
-                    })
-
-                incoming_lines = []
-                for line in operation_data.lines:
-                    incoming_lines.append({
-                        "line_number": line.line_number,
-                        "qty": normalize_qty(line.qty),
-                        "batch": normalize_str(line.batch),
-                        "comment": normalize_str(line.comment),
-                        "item_name_snapshot": normalize_str(
-                            line.temporary_item.name.strip() if line.temporary_item is not None else None
-                        ),
-                    })
-
-                if existing_lines != incoming_lines:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=(
-                            f"Idempotency conflict: client_request_id '{operation_data.client_request_id}' "
-                            f"was already used with a different payload. "
-                            f"Existing operation id={existing_operation.id}."
-                        ),
-                    )
-                return {"operation": existing_operation}
 
         issue_object_id, issue_object_name_snapshot = await OperationsService._resolve_issue_object(
             uow,
@@ -415,10 +434,12 @@ class OperationsService:
         )
 
         acceptance_required = operation_data.operation_type in ACCEPTANCE_REQUIRED_TYPES
+        effective_at = operation_data.effective_at or datetime.now(UTC)
+        display_number = _compute_operation_display_number(operation_data.site_id, effective_at)
         operation = await uow.operations.create_operation(
             site_id=operation_data.site_id,
             operation_type=operation_data.operation_type,
-            effective_at=operation_data.effective_at or datetime.now(UTC),
+            effective_at=effective_at,
             source_site_id=operation_data.source_site_id,
             destination_site_id=operation_data.destination_site_id,
             issued_to_user_id=operation_data.issued_to_user_id,
@@ -429,6 +450,8 @@ class OperationsService:
             created_by_user_id=user_id,
             notes=operation_data.notes,
             client_request_id=operation_data.client_request_id,
+            client_request_hash=client_request_hash,
+            display_number=display_number,
         )
 
         # Для temporary строк нормализуем category_id и собираем snapshot-поля
@@ -676,10 +699,40 @@ class OperationsService:
             issued_to_name=issue_object_name_snapshot or update_data.issued_to_name,
             issue_object_id=issue_object_id,
             issue_object_name_snapshot=issue_object_name_snapshot,
+            expected_version=update_data.expected_version,
             fields_set=update_data.model_fields_set,
         )
 
+        # B5: catalog guard — batch-resolve persisted item IDs before mutation
         if update_data.lines is not None:
+            persisted_ids = [
+                line.item_id for line in update_data.lines
+                if line.item_id is not None and line.temporary_item is None
+            ]
+            if persisted_ids:
+                resolve_result = await CatalogReadService.resolve_items(
+                    uow,
+                    ItemsResolveRequest(item_ids=persisted_ids),
+                )
+                unusable_fields = {}
+                for resolved in resolve_result.items:
+                    if resolved.status not in ("active",):
+                        if resolved.status == "merged" and resolved.canonical_item_id is not None:
+                            continue
+                        unusable_fields[f"lines.{resolved.requested_id}.item_id"] = {
+                            "status": resolved.status,
+                            "canonical_item_id": resolved.canonical_item_id,
+                        }
+                if unusable_fields:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "code": "catalog_item_unusable",
+                            "message": "Одна или несколько ТМЦ больше недоступны",
+                            "fields": unusable_fields,
+                        },
+                    )
+
             await uow.operations.delete_operation_lines(operation_id)
 
             has_temporary_items = any(line.temporary_item is not None for line in update_data.lines)
@@ -899,6 +952,7 @@ class OperationsService:
         uow: UnitOfWork,
         operation_id: UUID,
         user_id: UUID,
+        expected_version: int | None = None,
     ) -> dict[str, object]:
         try:
             operation = await uow.operations.get_operation_by_id(operation_id)
@@ -1082,6 +1136,7 @@ class OperationsService:
             submitted_operation = await uow.operations.submit_operation(
                 operation_id=operation_id,
                 submitted_by_user_id=user_id,
+                expected_version=expected_version,
             )
 
             # Автоматически создаём документ для операции (если включено в конфиге)

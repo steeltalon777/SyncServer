@@ -169,12 +169,6 @@ async def update_operation(
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
-    if "effective_at" in update_data.model_fields_set:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="effective_at must be changed via PATCH /operations/{operation_id}/effective-at",
-        )
-
     async with uow:
         operation = await uow.operations.get_operation_by_id(operation_id)
         if not operation:
@@ -274,6 +268,7 @@ async def submit_operation(
             uow=uow,
             operation_id=operation_id,
             user_id=identity.user_id,
+            expected_version=submit_data.expected_version,
         )
 
     return OperationResponse.model_validate(result["operation"])

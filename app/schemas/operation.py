@@ -153,6 +153,7 @@ class OperationUpdate(BaseModel):
         default=None,
         validation_alias=AliasChoices("operation_type", "type"),
     )
+    expected_version: int | None = Field(default=None, ge=1)
 
     @field_validator("issue_object_name_snapshot", "issued_to_name", "notes", mode="before")
     @classmethod
@@ -168,6 +169,7 @@ class OperationEffectiveAtUpdate(BaseModel):
 
 class OperationSubmit(BaseModel):
     submit: bool = True
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 class OperationCancel(BaseModel):
@@ -223,6 +225,7 @@ class OperationResponse(ORMBaseModel):
     site_id: int
     operation_type: OperationType = Field(validation_alias=AliasChoices("operation_type", "type"))
     status: OperationStatus
+    version: int = Field(default=1)
     effective_at: datetime | None = None
     source_site_id: int | None = None
     destination_site_id: int | None = Field(default=None, validation_alias=AliasChoices("destination_site_id", "target_site_id"))
@@ -250,6 +253,7 @@ class OperationResponse(ORMBaseModel):
     cancelled_at: datetime | None = None
     cancelled_by_user_id: UUID | None = None
     notes: str | None = None
+    display_number: str | None = None
     lines: list[OperationLineResponse] = Field(default_factory=list)
 
     @property

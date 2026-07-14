@@ -38,6 +38,8 @@ class OperationsRepo:
         issue_object_name_snapshot: str | None = None,
         acceptance_required: bool = False,
         client_request_id: str | None = None,
+        client_request_hash: str | None = None,
+        display_number: str | None = None,
     ) -> Operation:
         operation = Operation(
             site_id=site_id,
@@ -56,13 +58,16 @@ class OperationsRepo:
             created_by_user_id=created_by_user_id,
             notes=notes,
             machine_last_batch_id=client_request_id,
+            client_request_id=client_request_id,
+            client_request_hash=client_request_hash,
+            display_number=display_number,
         )
         self.session.add(operation)
         await self.session.flush()
         return operation
 
     async def soft_delete_operation(self, operation_id: UUID, deleted_by_user_id: UUID) -> Operation | None:
-        operation = await self.get_operation_by_id(operation_id)
+        operation = await self.get_operation_by_id_for_update(operation_id)
         if operation is None:
             return None
         from datetime import UTC, datetime
@@ -95,7 +100,7 @@ class OperationsRepo:
         stmt = (
             select(Operation)
             .where(Operation.created_by_user_id == created_by_user_id)
-            .where(Operation.machine_last_batch_id == client_request_id)
+            .where(Operation.client_request_id == client_request_id)
             .where(Operation.deleted_at.is_(None))
             .options(
                 selectinload(Operation.lines)
@@ -109,6 +114,26 @@ class OperationsRepo:
             )
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def get_operation_by_id_for_update(self, operation_id: UUID) -> Operation | None:
+        stmt = (
+            select(Operation)
+            .where(Operation.id == operation_id)
+            .where(Operation.deleted_at.is_(None))
+            .with_for_update()
+            .options(
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.item)
+                .selectinload(Item.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.inventory_subject)
+                .selectinload(InventorySubject.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+            )
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_operation_line_by_id_for_update(self, operation_line_id: int) -> OperationLine | None:
         stmt = (
@@ -130,15 +155,27 @@ class OperationsRepo:
         issued_to_name: str | None = None,
         issue_object_id: int | None = None,
         issue_object_name_snapshot: str | None = None,
+        expected_version: int | None = None,
         fields_set: set[str] | None = None,
     ) -> Operation | None:
-        operation = await self.get_operation_by_id(operation_id)
+        operation = await self.get_operation_by_id_for_update(operation_id)
         if operation is None:
             return None
 
+        if expected_version is not None and int(operation.version) != expected_version:
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "operation_version_conflict",
+                    "message": "Операция была изменена в другой вкладке",
+                    "current_version": int(operation.version),
+                },
+            )
+
         if notes is not None:
             operation.notes = notes
-        if fields_set is not None and "effective_at" in fields_set:
+        if effective_at is not None or (fields_set is not None and "effective_at" in fields_set):
             operation.effective_at = effective_at
         if fields_set is not None and "source_site_id" in fields_set:
             operation.source_site_id = source_site_id
@@ -162,9 +199,22 @@ class OperationsRepo:
         operation_id: UUID,
         submitted_by_user_id: UUID,
         submitted_at: datetime | None = None,
+        expected_version: int | None = None,
     ) -> Operation | None:
-        operation = await self.get_operation_by_id(operation_id)
-        if operation and operation.status == "draft":
+        operation = await self.get_operation_by_id_for_update(operation_id)
+        if operation is None:
+            return None
+        if expected_version is not None and int(operation.version) != expected_version:
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "operation_version_conflict",
+                    "message": "Операция была изменена в другой вкладке",
+                    "current_version": int(operation.version),
+                },
+            )
+        if operation.status == "draft":
             operation.status = "submitted"
             operation.submitted_by_user_id = submitted_by_user_id
             operation.submitted_at = submitted_at or datetime.now(UTC)
@@ -178,7 +228,7 @@ class OperationsRepo:
         cancelled_by_user_id: UUID,
         cancelled_at: datetime | None = None,
     ) -> Operation | None:
-        operation = await self.get_operation_by_id(operation_id)
+        operation = await self.get_operation_by_id_for_update(operation_id)
         if operation and operation.status in ["draft", "submitted"]:
             operation.status = "cancelled"
             operation.cancelled_by_user_id = cancelled_by_user_id
@@ -193,7 +243,7 @@ class OperationsRepo:
         restored_by_user_id: UUID,
         restored_at: datetime | None = None,
     ) -> Operation | None:
-        operation = await self.get_operation_by_id(operation_id)
+        operation = await self.get_operation_by_id_for_update(operation_id)
         if operation and operation.status == "cancelled":
             operation.status = "draft"
             operation.cancelled_by_user_id = None
@@ -211,7 +261,7 @@ class OperationsRepo:
         acceptance_state: Literal["not_required", "pending", "in_progress", "resolved"],
         resolved_by_user_id: UUID | None = None,
     ) -> Operation | None:
-        operation = await self.get_operation_by_id(operation_id)
+        operation = await self.get_operation_by_id_for_update(operation_id)
         if operation is None:
             return None
 
@@ -283,6 +333,7 @@ class OperationsRepo:
             if raw_term is not None:
                 search_conditions.extend([
                     Operation.notes.ilike(raw_term, escape="\\"),
+                    Operation.display_number.ilike(raw_term, escape="\\"),
                     exists(
                         select(1)
                         .select_from(OperationLine)

@@ -535,7 +535,9 @@ async def test_stage3b_idempotency_conflict_on_different_payload(
     )
     assert resp2.status_code == 409
     detail = resp2.json()["detail"]
-    assert "conflict" in detail.lower() or "Idempotency" in detail
+    # TZ-V3.2 §4.5: structured 409 with code "idempotency_payload_conflict"
+    assert isinstance(detail, dict)
+    assert detail.get("code") == "idempotency_payload_conflict"
 
 
 @pytest.mark.asyncio

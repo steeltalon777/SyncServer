@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -169,10 +169,14 @@ async def test_create_operation_accepts_explicit_effective_at(
 
 
 @pytest.mark.asyncio
-async def test_general_patch_rejects_effective_at_changes(
+async def test_general_patch_accepts_effective_at_atomically(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """TZ-V3.2 B3: PATCH now accepts effective_at atomically with other fields.
+
+    The dedicated /effective-at endpoint remains for legacy compatibility.
+    """
     seed = await _seed_fixture(session_factory)
     operation = await _create_operation(
         client,
@@ -181,14 +185,17 @@ async def test_general_patch_rejects_effective_at_changes(
         item_id=seed["item_id"],
     )
 
+    new_effective_at = datetime(2026, 1, 20, 10, 30, tzinfo=UTC)
     response = await client.patch(
         f"/api/v1/operations/{operation['id']}",
         headers={"X-User-Token": seed["storekeeper_token"]},
-        json={"effective_at": datetime(2026, 1, 20, 10, 30, tzinfo=timezone.utc).isoformat()},
+        json={"effective_at": new_effective_at.isoformat()},
     )
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == "effective_at must be changed via PATCH /operations/{operation_id}/effective-at"
+    assert response.status_code == 200
+    assert datetime.fromisoformat(response.json()["effective_at"]) == new_effective_at
+    # version is incremented atomically with effective_at update
+    assert response.json()["version"] >= 2
 
 
 @pytest.mark.asyncio

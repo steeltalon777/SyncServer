@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-import sqlalchemy
+import sqlalchemy as sa
 from app.models.base import Base
 from sqlalchemy import (
     BigInteger,
@@ -145,6 +145,8 @@ class Operation(Base):
         nullable=True,
     )
 
+    display_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(
         Integer,
@@ -153,6 +155,10 @@ class Operation(Base):
         default=1,
     )
     machine_last_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Warehouse 3.2: dedicated web idempotency columns (separate from machine sync flow)
+    client_request_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    client_request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     lines: Mapped[list["OperationLine"]] = relationship(
         "OperationLine",
@@ -200,6 +206,14 @@ class Operation(Base):
         CheckConstraint(
             "acceptance_state IN ('not_required', 'pending', 'in_progress', 'resolved')",
             name="ck_operations_acceptance_state",
+        ),
+        # Partial unique index for web idempotency (Warehouse 3.2)
+        sa.Index(
+            "ix_operations_client_request_id",
+            "created_by_user_id",
+            "client_request_id",
+            postgresql_where=sa.text("client_request_id IS NOT NULL"),
+            unique=True,
         ),
     )
 
@@ -261,7 +275,7 @@ class OperationLine(Base):
     # После materialization на submit поле очищается.
     temporary_draft_payload: Mapped[dict | None] = mapped_column(
         "temporary_draft_payload",
-        sqlalchemy.JSON(none_as_null=True),
+        sa.JSON(none_as_null=True),
         nullable=True,
         default=None,
     )
