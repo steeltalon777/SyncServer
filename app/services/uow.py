@@ -28,6 +28,13 @@ class UnitOfWork:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+        # batch_correlation_id is an audit-scoped context slot set by
+        # catalog batch apply before processing individual changes. Every
+        # audit event recorded inside this UoW inherits this id unless the
+        # caller passes an explicit correlation_id. This is a lightweight
+        # alternative to threading the id through every helper signature.
+        self.batch_correlation_id: str | None = None
+
         self.sites = SitesRepo(session)
         self.devices = DevicesRepo(session)
         self.audit_events = AuditEventsRepo(session)
