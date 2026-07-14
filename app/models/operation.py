@@ -160,6 +160,25 @@ class Operation(Base):
     client_request_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     client_request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # Phase 1: TZ-AUDIT_BACKEND_FOUNDATION §7.4 — system vs user origin.
+    # origin="system" is set when the operation was created automatically as
+    # part of a merge (item.merge, temporary resolution, review merge).
+    # system_reason categorises the system path.
+    # initiated_by_user_id is the responsible user (the one who triggered
+    # the merge flow that ultimately produced this system ADJUSTMENT).
+    origin: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        server_default="user",
+        default="user",
+    )
+    system_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    initiated_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+
     lines: Mapped[list["OperationLine"]] = relationship(
         "OperationLine",
         back_populates="operation",

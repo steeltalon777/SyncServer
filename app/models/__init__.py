@@ -5,6 +5,8 @@ from app.models.asset_register import (
     PendingAcceptanceBalance,
 )
 from app.models.audit_event import AuditEvent
+from app.models.audit_event_resource import AuditEventResource
+from app.models.audit_item_effect import AuditItemEffect
 from app.models.balance import Balance
 from app.models.base import Base
 from app.models.category import Category
@@ -31,6 +33,8 @@ import app.models.events  # noqa: F401, E402
 
 __all__ = [
     "AuditEvent",
+    "AuditEventResource",
+    "AuditItemEffect",
     "Base",
     "Site",
     "TemporaryItem",
