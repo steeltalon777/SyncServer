@@ -523,4 +523,24 @@ class CatalogBatchErrorResponse(BaseModel):
     errors: list[CatalogBatchErrorDetail]
 
 
+# ─── Item Resolver Schemas ────────────────────────────────────────
+
+
+class ItemsResolveRequest(BaseModel):
+    item_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class ResolvedItemDto(ORMBaseModel):
+    requested_id: int
+    status: str
+    canonical_item_id: int | None = None
+    canonical_status: str | None = None
+    reason: str | None = None
+    item: dict | None = None
+
+
+class ItemsResolveResponse(ORMBaseModel):
+    items: list[ResolvedItemDto]
+
+
 CategoryTreeNode.model_rebuild()

@@ -22,7 +22,10 @@ from app.schemas.catalog import (
     CatalogUnitsResponse,
     CategoryParentChainResponse,
     CategoryTreeNode,
+    ItemsResolveRequest,
+    ItemsResolveResponse,
 )
+from app.services.catalog_read_service import CatalogReadService
 from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/catalog")
@@ -451,3 +454,22 @@ async def browse_category_parent_chain(
         category_id=category_id,
         parent_chain_summary=chain_by_category.get(category_id, []),
     )
+
+
+@router.post("/read/items/resolve", response_model=ItemsResolveResponse)
+async def resolve_items(
+    request: Request,
+    payload: ItemsResolveRequest,
+    identity: Identity = Depends(require_user_identity),
+    uow: UnitOfWork = Depends(get_uow),
+) -> ItemsResolveResponse:
+    async with uow:
+        _require_catalog_read_access(identity)
+        result = await CatalogReadService.resolve_items(uow, payload)
+
+    logger.info(
+        "catalog_resolve_items",
+        request_id=get_request_id(request),
+        count=len(result.items),
+    )
+    return result

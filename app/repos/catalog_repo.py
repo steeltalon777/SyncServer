@@ -67,8 +67,11 @@ class CatalogRepo:
             .join(Unit, Unit.id == Item.unit_id)
             .where(
                 Item.is_active.is_(True),
+                Item.deleted_at.is_(None),
                 Category.is_active.is_(True),
+                Category.deleted_at.is_(None),
                 Unit.is_active.is_(True),
+                Unit.deleted_at.is_(None),
             )
         )
 
@@ -210,6 +213,7 @@ class CatalogRepo:
             .where(
                 Item.category_id.in_(category_ids),
                 Item.is_active.is_(True),
+                Item.deleted_at.is_(None),
             )
             .subquery()
         )
@@ -348,8 +352,11 @@ class CatalogRepo:
             .where(
                 Item.id == item_id,
                 Item.is_active.is_(True),
+                Item.deleted_at.is_(None),
                 Category.is_active.is_(True),
+                Category.deleted_at.is_(None),
                 Unit.is_active.is_(True),
+                Unit.deleted_at.is_(None),
             )
         )
         result = await self.session.execute(stmt)
@@ -538,6 +545,7 @@ class CatalogRepo:
 
         item.deleted_at = datetime.now()
         item.deleted_by_user_id = user_id
+        item.is_active = False
         await self.session.flush()
 
     async def list_units_with_filters(
@@ -648,3 +656,23 @@ class CatalogRepo:
         stmt = stmt.options(selectinload(Item.category), selectinload(Item.unit))
         items = list((await self.session.execute(stmt)).scalars().all())
         return items, total_count
+
+    async def resolve_items_raw(self, item_ids: list[int]) -> list[Item]:
+        if not item_ids:
+            return []
+        seen: set[int] = set()
+        deduped: list[int] = []
+        for iid in item_ids:
+            if iid not in seen:
+                seen.add(iid)
+                deduped.append(iid)
+        stmt = (
+            select(Item)
+            .where(Item.id.in_(deduped))
+            .options(selectinload(Item.category), selectinload(Item.unit))
+        )
+        result = await self.session.execute(stmt)
+        items_map: dict[int, Item] = {}
+        for item in result.scalars().all():
+            items_map[item.id] = item
+        return [items_map[iid] for iid in deduped if iid in items_map]
