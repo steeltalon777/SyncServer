@@ -101,6 +101,62 @@ docker compose exec syncserver python scripts/query_audit.py --username ivanov \
 
 See [docs/audit-query-examples.md](docs/audit-query-examples.md) for full documentation.
 
+## Audit journal (TZ-AUDIT_BACKEND_FOUNDATION / ADR-0018)
+
+The audit surface is **append-only** and consists of three tables:
+
+| Table | Purpose |
+|---|---|
+| `audit_events` | Spanning event log. v2 fields (`event_version`, `outcome`, `correlation_id`, `parent_event_id`, `source_client`, `actor_username_snapshot`, plus Phase 2 hooks `credential_kind` / `credential_fingerprint` / `external_event_id`). |
+| `audit_event_resources` | Edge table — one row per (event × resource × relation) triple, with optional `snapshot_before` / `snapshot_after`. No FK to the linked entity. |
+| `audit_item_effects` | Balance-change journal. `inventory_subject_id` is mandatory; `item_id` is nullable for temporary items. Snapshots survive deletion. |
+
+Helper:
+```python
+from app.services.audit_helper import record_audit_event
+
+await record_audit_event(
+    uow,
+    event_type="operation.submit",
+    event_version=2,
+    actor_user_id=actor,
+    entity_type="operation",
+    entity_id=str(op.id),
+    summary="…",
+    changes={"operation_type": "ADJUSTMENT", "lines_count": 3, "total_qty": "5.0000"},
+    outcome="success",
+    parent_event_id=uow.audit_parent_event_id,  # for child-of merge flows
+)
+```
+
+Phase 1 covers 20 event types across four groups: operations, catalog,
+related (temporary / review / issue_object) and batch. See
+[`docs/audit-event-catalog.md`](docs/audit-event-catalog.md) for the
+table.
+
+The `item.merge` flow has a critical ordering invariant:
+1. INSERT parent `audit_events` row → flush → keep its `event_id`.
+2. Set `uow.audit_parent_event_id` and `audit_effect_type_override`.
+3. Create + submit each system ADJUSTMENT, so each child
+   `operation.submit` event has `parent_event_id` set.
+4. Persist the `audit_item_effects` rows while the `OperationLine.item_id`
+   FK still points at the source item — capturing `item_id=source_id`
+   while the source is still linked is the only way to keep the
+   chronicle truthful after the reassignment.
+5. Reassign `OperationLine.item_id` to the target.
+6. Insert `audit_event_resources` (merge_source, merge_target,
+   generated → ADJUSTMENT ids).
+7. Deactivate the source item.
+
+Cancellation is symmetric with `effect_type='cancel_reversal'`; effects
+are written AFTER the `operation.cancel` audit event so the FK
+`audit_event_id` is valid.
+
+Phase 2 (out of scope for this repo): Django `AuditOutbox` model +
+delivery command, `POST /system/audit-event` for inbound events with
+retry / dedup using `external_event_id`, `credential_*` population,
+admin / security events, `GET /admin/audit/items/{id}/history` API.
+
 ## API Overview
 Base prefix: `/api/v1`
 
@@ -128,3 +184,4 @@ Primary documentation:
 - [AI_CONTEXT.md](AI_CONTEXT.md)
 - [AI_ENTRY_POINTS.md](AI_ENTRY_POINTS.md)
 - [MEMORY.md](MEMORY.md)
+- [docs/adr/0018-audit-architecture.md](docs/adr/0018-audit-architecture.md)
