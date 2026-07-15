@@ -102,13 +102,10 @@ def _generate_document_number(
 
 
 def _compute_operation_display_number(site_id: int | None, created_at: datetime | None) -> str | None:
-    """Вернуть номер операции в том же формате, что Django BFF/Angular таблица.
-
-    Формат: ``{site_id}/{HHmm}/{ddMMyy}``.
-    """
+    """Вернуть номер операции в формате: {ddMMyy}/{HHmm}/{site_id}."""
     if site_id is None or created_at is None:
         return None
-    return f"{site_id}/{created_at.strftime('%H%M')}/{created_at.strftime('%d%m%y')}"
+    return f"{created_at.strftime('%d%m%y')}/{created_at.strftime('%H%M')}/{site_id}"
 
 
 def _site_fallback(site_id: int | None) -> str:

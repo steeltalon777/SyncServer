@@ -9,7 +9,7 @@ from app.services.uow import UnitOfWork
 
 
 def _expected_display_number(operation) -> str:
-    return f"{operation.site_id}/{operation.created_at.strftime('%H%M')}/{operation.created_at.strftime('%d%m%y')}"
+    return f"{operation.created_at.strftime('%d%m%y')}/{operation.created_at.strftime('%H%M')}/{operation.site_id}"
 
 
 @pytest.mark.asyncio
