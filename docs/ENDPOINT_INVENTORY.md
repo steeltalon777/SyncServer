@@ -27,6 +27,7 @@ Base prefix: `/api/v1`
 - `GET /admin/devices` - list devices
 - `GET /admin/devices/{device_id}` - get device by ID
 - `POST /admin/devices` - create device and return token
+- `PUT /admin/devices/by-code/{device_code}` - ensure device by code (idempotent, root only)
 - `PATCH /admin/devices/{device_id}` - update device
 - `DELETE /admin/devices/{device_id}` - delete device
 - `POST /admin/devices/{device_id}/rotate-token` - rotate device token

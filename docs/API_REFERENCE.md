@@ -71,6 +71,7 @@ Devices:
 - `GET /admin/devices`
 - `GET /admin/devices/{device_id}` - get device by ID
 - `POST /admin/devices` - creates device and returns its token
+- `PUT /admin/devices/by-code/{device_code}` - ensure device by code (idempotent, root only)
 - `PATCH /admin/devices/{device_id}`
 - `DELETE /admin/devices/{device_id}` - delete device
 - `POST /admin/devices/{device_id}/rotate-token`
