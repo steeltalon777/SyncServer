@@ -16,6 +16,7 @@ from app.api.routes_auth import router as auth_router
 from app.api.routes_balances import router as balances_router
 from app.api.routes_catalog import router as catalog_router
 from app.api.routes_catalog_admin import router as catalog_admin_router
+from app.api.routes_diagnostics import router as diagnostics_router
 from app.api.routes_documents import router as documents_router
 from app.api.routes_health import router as health_router
 from app.api.routes_operations import router as operations_router
@@ -199,6 +200,9 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
 
     # Review Items API (user token auth)
     app.include_router(review_items_router, prefix=api_v1_prefix)
+
+    # Diagnostics API (user token auth)
+    app.include_router(diagnostics_router, prefix=api_v1_prefix)
 
     # Auth endpoints
     app.include_router(auth_router, prefix=api_v1_prefix)
