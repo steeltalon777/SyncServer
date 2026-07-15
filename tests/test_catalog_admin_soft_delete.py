@@ -212,6 +212,7 @@ class TestCatalogAdminSoftDelete:
         item = await uow.catalog.get_item_by_id(item.id)
         assert item.deleted_at is not None
         assert item.deleted_by_user_id == admin_user.id
+        assert item.is_active is False, "soft-deleted item must have is_active=False (phantom item prevention)"
 
         # Проверяем фильтрацию
         items, total = await service.list_items(uow)
