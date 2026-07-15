@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.admin_common import require_admin_basic
+from app.api.admin_common import require_admin_basic, require_root_admin
 from app.api.deps import get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.admin import (
     DeviceCreate,
+    DeviceEnsureRequest,
     DeviceListResponse,
     DeviceResponse,
     DeviceTokenResponse,
@@ -19,6 +20,25 @@ from app.services.uow import UnitOfWork
 router = APIRouter(tags=["admin"])
 
 
+@router.put("/devices/by-code/{device_code}", response_model=DeviceWithTokenResponse)
+async def ensure_device(
+    device_code: str,
+    payload: DeviceEnsureRequest,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> DeviceWithTokenResponse:
+    async with uow:
+        require_root_admin(identity)
+        device, created = await AdminDevicesService.ensure_by_code(
+            uow,
+            device_code=device_code,
+            device_name=payload.device_name,
+            site_id=payload.site_id,
+            is_active=payload.is_active,
+        )
+    return DeviceWithTokenResponse.model_validate(device)
+
+
 @router.get("/devices/{device_id}", response_model=DeviceResponse)
 async def get_device(
     device_id: int,
@@ -26,7 +46,7 @@ async def get_device(
     identity: Identity = Depends(require_user_identity),
 ) -> DeviceResponse:
     async with uow:
-        require_admin_basic(identity)
+        require_root_admin(identity)
         device = await AdminDevicesService.get_device_required(uow, device_id)
     return DeviceResponse.model_validate(device)
 
@@ -42,7 +62,7 @@ async def list_devices(
     page_size: int = Query(50, ge=1, le=200),
 ) -> DeviceListResponse:
     async with uow:
-        require_admin_basic(identity)
+        require_root_admin(identity)
         devices, total_count = await AdminDevicesService.list_devices(
             uow,
             site_id=site_id,
@@ -67,7 +87,7 @@ async def create_device(
     identity: Identity = Depends(require_user_identity),
 ) -> DeviceWithTokenResponse:
     async with uow:
-        require_admin_basic(identity)
+        require_root_admin(identity)
         device = await AdminDevicesService.create_device(
             uow,
             device_code=payload.device_code,
@@ -86,7 +106,7 @@ async def update_device(
     identity: Identity = Depends(require_user_identity),
 ) -> DeviceResponse:
     async with uow:
-        require_admin_basic(identity)
+        require_root_admin(identity)
         device = await AdminDevicesService.update_device(
             uow,
             device_id=device_id,
@@ -102,7 +122,7 @@ async def delete_device(
     identity: Identity = Depends(require_user_identity),
 ) -> DeviceResponse:
     async with uow:
-        require_admin_basic(identity)
+        require_root_admin(identity)
         device = await AdminDevicesService.delete_device(uow, device_id=device_id)
     return DeviceResponse.model_validate(device)
 
@@ -114,7 +134,7 @@ async def rotate_device_token(
     identity: Identity = Depends(require_user_identity),
 ) -> DeviceTokenResponse:
     async with uow:
-        require_admin_basic(identity)
+        require_root_admin(identity)
         device, generated_at = await AdminDevicesService.rotate_device_token(uow, device_id=device_id)
 
         return DeviceTokenResponse(

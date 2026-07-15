@@ -100,6 +100,53 @@ class AdminDevicesService:
         return device
 
     @staticmethod
+    async def ensure_by_code(
+        uow: UnitOfWork,
+        *,
+        device_code: str,
+        device_name: str,
+        site_id: int | None,
+        is_active: bool,
+    ) -> tuple[Device, bool]:
+        existing = await uow.devices.get_by_code(device_code)
+        if existing is not None:
+            existing.device_name = device_name
+            existing.site_id = site_id
+            existing.is_active = is_active
+            await uow.session.flush()
+            await uow.session.refresh(existing)
+            return existing, False
+
+        return await AdminDevicesService._create_device_with_code(
+            uow, device_code=device_code, device_name=device_name,
+            site_id=site_id, is_active=is_active,
+        ), True
+
+    @staticmethod
+    async def _create_device_with_code(
+        uow: UnitOfWork,
+        *,
+        device_code: str,
+        device_name: str,
+        site_id: int | None,
+        is_active: bool,
+    ) -> Device:
+        await AdminDevicesService.validate_site_exists(uow, site_id)
+        await AdminDevicesService.validate_device_code_unique(uow, device_code=device_code)
+
+        device = Device(
+            device_code=device_code,
+            device_name=device_name,
+            site_id=site_id,
+            is_active=is_active,
+            device_token=uuid4(),
+        )
+        uow.session.add(device)
+        await uow.session.flush()
+        await uow.session.refresh(device)
+        return device
+
+    @staticmethod
     async def update_device(
         uow: UnitOfWork,
         *,

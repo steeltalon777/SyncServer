@@ -29,6 +29,11 @@ class UsersRepo:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_email(self, email: str) -> User | None:
+        stmt = select(User).where(User.email == email)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_by_user_token(self, user_token: UUID) -> User | None:
         stmt = select(User).where(User.user_token == user_token)
         result = await self.session.execute(stmt)

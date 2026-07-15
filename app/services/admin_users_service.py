@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 
+from app.api.admin_common import require_root_admin
 from app.models.user import User
 from app.schemas.admin import (
     UserAccessScopeReplaceRequest,
@@ -15,11 +16,8 @@ from app.services.uow import UnitOfWork
 
 
 def require_root(identity) -> None:
-    if not identity.is_root:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="root permissions required",
-        )
+    """Delegate to shared guard. Kept for compatibility with routes_admin_access."""
+    require_root_admin(identity)
 
 
 def require_target_user_not_root(user: User, *, detail: str) -> None:

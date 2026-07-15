@@ -68,6 +68,7 @@ async def list_operations(
     search: str | None = Query(None),
     item_ids: str | None = Query(None),
     exclude_adjustments: bool = Query(False),
+    client_request_id: str | None = Query(None, max_length=100),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
 ) -> OperationListResponse:
@@ -85,13 +86,20 @@ async def list_operations(
         # Non-root without explicit status filter gets cancelled excluded
         exclude_cancelled = status_filter is None and not OperationsPolicy.can_view_cancelled_operations(identity)
 
+        # Per contract §6.1.2: when client_request_id is provided, the result is
+        # always scoped to the authenticated user (created_by_user_id == identity.user_id),
+        # so users can only see operations they themselves created with that key.
+        effective_created_by_user_id = created_by_user_id
+        if client_request_id is not None:
+            effective_created_by_user_id = identity.user_id
+
         filter_data = OperationFilter(
             site_id=site_id,
             operation_type=operation_type,
             status=status_filter,
             acceptance_state=acceptance_state,
             item_ids=_parse_item_ids(item_ids),
-            created_by_user_id=created_by_user_id,
+            created_by_user_id=effective_created_by_user_id,
             effective_after=effective_after,
             effective_before=effective_before,
             created_after=created_after,
@@ -99,6 +107,7 @@ async def list_operations(
             updated_after=updated_after,
             updated_before=updated_before,
             search=search,
+            client_request_id=client_request_id,
         )
         operations, total_count = await uow.operations.list_operations(
             filter=filter_data,

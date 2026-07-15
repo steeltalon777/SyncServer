@@ -74,6 +74,14 @@ class DeviceCreate(BaseModel):
         return value
 
 
+class DeviceEnsureRequest(BaseModel):
+    """Schema for idempotent device ensure by code."""
+
+    device_name: str = Field(min_length=1, max_length=255)
+    site_id: int | None = Field(default=None)
+    is_active: bool = True
+
+
 class DeviceUpdate(BaseModel):
     """Schema for updating a device."""
 

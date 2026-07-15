@@ -321,6 +321,8 @@ class OperationsRepo:
             where_clauses.append(
                 Operation.created_by_user_id == filter.created_by_user_id
             )
+        if filter.client_request_id is not None:
+            where_clauses.append(Operation.client_request_id == filter.client_request_id)
         if filter.effective_after is not None:
             where_clauses.append(Operation.effective_at >= filter.effective_after)
         if filter.effective_before is not None:

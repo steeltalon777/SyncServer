@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.admin_common import require_admin_basic
+from app.api.admin_common import require_admin_basic, require_root_admin
 from app.api.deps import get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.admin import SiteCreate, SiteListResponse, SiteResponse, SiteUpdate
@@ -45,7 +45,7 @@ async def create_site(
     identity: Identity = Depends(require_user_identity),
 ) -> SiteResponse:
     async with uow:
-        require_admin_basic(identity)
+        require_root_admin(identity)
         site = await AdminSitesService.create_site(uow, payload=payload)
     return SiteResponse.model_validate(site)
 
@@ -58,6 +58,6 @@ async def update_site(
     identity: Identity = Depends(require_user_identity),
 ) -> SiteResponse:
     async with uow:
-        require_admin_basic(identity)
+        require_root_admin(identity)
         updated = await AdminSitesService.update_site(uow, site_id=site_id, payload=payload)
     return SiteResponse.model_validate(updated)

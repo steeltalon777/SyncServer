@@ -282,6 +282,7 @@ class OperationFilter(BaseModel):
     updated_after: datetime | None = None
     updated_before: datetime | None = None
     search: str | None = None
+    client_request_id: str | None = Field(default=None, max_length=100)
 
     model_config = ConfigDict(extra="forbid")
 

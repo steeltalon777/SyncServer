@@ -25,6 +25,14 @@ def require_admin_basic(identity: Identity) -> None:
         )
 
 
+def require_root_admin(identity: Identity) -> None:
+    if not identity.is_root:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="root admin access denied",
+        )
+
+
 def user_with_token_payload(user: User) -> UserWithTokenResponse:
     return UserWithTokenResponse(
         id=user.id,

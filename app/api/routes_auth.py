@@ -88,6 +88,14 @@ async def sync_user(
                     )
                 target_user = by_username
 
+        if payload.email:
+            by_email = await uow.users.get_by_email(payload.email)
+            if by_email is not None and (target_user is None or by_email.id != target_user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="email already bound to another user",
+                )
+
         if target_user is None:
             target_user = User(
                 id=payload.id or uuid4(),

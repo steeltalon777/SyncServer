@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.admin_common import user_with_token_payload
+from app.api.admin_common import require_root_admin, user_with_token_payload
 from app.api.deps import get_uow, require_user_identity
 from app.core.identity import Identity
 from app.schemas.admin import (
@@ -17,7 +17,7 @@ from app.schemas.admin import (
     UserTokenResponse,
     UserUpdate,
 )
-from app.services.admin_users_service import AdminUsersService, require_root
+from app.services.admin_users_service import AdminUsersService
 from app.services.uow import UnitOfWork
 
 router = APIRouter(tags=["admin"])
@@ -35,7 +35,7 @@ async def list_users(
     page_size: int = Query(50, ge=1, le=200),
 ) -> UserListResponse:
     async with uow:
-        require_root(identity)
+        require_root_admin(identity)
         page_items, total_count = await AdminUsersService.list_users(
             uow,
             is_active=is_active,
@@ -61,7 +61,7 @@ async def get_user(
     identity: Identity = Depends(require_user_identity),
 ) -> UserResponse:
     async with uow:
-        require_root(identity)
+        require_root_admin(identity)
         user = await AdminUsersService.get_user_required(uow, user_id)
     return UserResponse.model_validate(user)
 
@@ -73,7 +73,7 @@ async def create_user(
     identity: Identity = Depends(require_user_identity),
 ) -> UserResponse:
     async with uow:
-        require_root(identity)
+        require_root_admin(identity)
         user = await AdminUsersService.create_user(uow, payload=payload)
     return UserResponse.model_validate(user)
 
@@ -86,7 +86,7 @@ async def update_user(
     identity: Identity = Depends(require_user_identity),
 ) -> UserResponse:
     async with uow:
-        require_root(identity)
+        require_root_admin(identity)
         user = await AdminUsersService.update_user(
             uow,
             user_id=user_id,
@@ -102,7 +102,7 @@ async def delete_user(
     identity: Identity = Depends(require_user_identity),
 ) -> UserResponse:
     async with uow:
-        require_root(identity)
+        require_root_admin(identity)
         user = await AdminUsersService.delete_user(
             uow,
             user_id=user_id,
@@ -118,7 +118,7 @@ async def get_user_sync_state(
     identity: Identity = Depends(require_user_identity),
 ) -> UserSyncStateResponse:
     async with uow:
-        require_root(identity)
+        require_root_admin(identity)
         user, scopes = await AdminUsersService.get_user_sync_state(uow, user_id=user_id)
 
     return UserSyncStateResponse(
@@ -135,7 +135,7 @@ async def replace_user_scopes(
     identity: Identity = Depends(require_user_identity),
 ) -> list[UserAccessScopeResponse]:
     async with uow:
-        require_root(identity)
+        require_root_admin(identity)
         scopes = await AdminUsersService.replace_user_scopes(
             uow,
             user_id=user_id,
@@ -152,7 +152,7 @@ async def rotate_user_token(
     identity: Identity = Depends(require_user_identity),
 ) -> UserTokenResponse:
     async with uow:
-        require_root(identity)
+        require_root_admin(identity)
         user, generated_at = await AdminUsersService.rotate_user_token(uow, user_id=user_id)
 
         return UserTokenResponse(

@@ -104,7 +104,7 @@ class SitesRepo:
         total_count = total_result.scalar_one()
 
         # Apply ordering and pagination
-        stmt = stmt.order_by(desc(Site.created_at))
+        stmt = stmt.order_by(desc(Site.created_at), desc(Site.id))
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
         result = await self.session.execute(stmt)
