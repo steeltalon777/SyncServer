@@ -62,6 +62,8 @@ Core entities:
 - `Device` - sync-capable registered client device
 - `Category`, `Item`, `Unit` - global catalog
 - `Operation`, `OperationLine` - inventory-changing documents
+- `OperationRevision`, `OperationRevisionLine` - immutable history of operation lines (INV-C1)
+- `OperationCorrection`, `OperationCorrectionLine` - 3-state correction drafts (draft/applied/abandoned)
 - `Balance` - derived inventory state
 - `Event` - synced device events
 
@@ -91,6 +93,19 @@ Example:
 5. Transaction commits through `UnitOfWork`
 6. Response DTO is returned
 
+**Correction flow (V1, RECEIVE without acceptance):**
+1. `POST /api/v1/operations/{id}/corrections` — clones current `OperationRevision` lines into a `OperationCorrection` draft (INV-C7)
+2. `PUT`/`PATCH`/`POST`/`DELETE lines` — edits the correction draft (INV-C9: PUT full target state, absence = REMOVED)
+3. `POST .../submit` — server computes correction_kind (INV-C8), validates deltas, atomically:
+   - Creates immutable `OperationRevision` N+1 (INV-C6)
+   - Applies balance delta effects
+   - Rebuilds `OperationLine` current projection (INV-C2)
+   - Generates documents from `OperationRevisionLine` (INV-C16)
+   - Supersedes old documents (INV-C17)
+   - Records audit events: `operation.correction.applied`, `document.revision_created`, `document.superseded`
+4. `DELETE .../corrections/{cid}` — abandons the draft (3-state: draft/applied/abandoned)
+- Lock order: Correction → Operation → inventory_subject_id ASC → Balances (INV-C18)
+
 ## Architectural Principles
 - SyncServer is the source of truth for warehouse state
 - Business logic belongs on the server, not in clients
@@ -98,6 +113,10 @@ Example:
 - Repositories do not own business decisions
 - Token-based auth is the primary integration path
 - Root permissions are global; non-root permissions are site-scoped
+- **Operation history is immutable** — `OperationRevision` and `OperationRevisionLine` cannot be updated after creation (INV-C1)
+- `OperationLine` is a **current projection** of the latest revision, mutable for API compatibility (INV-C2)
+- **Correction kind is always computed server-side** — clients never pass `correction_kind` (INV-C8)
+- **V1 scope:** only RECEIVE without `acceptance_required`
 
 ## External Integrations
 - PostgreSQL database
