@@ -453,7 +453,7 @@ class OperationsService:
             ) from exc
 
     @staticmethod
-    async def _validate_operation_sites(uow: UnitOfWork, operation_data: OperationCreate) -> None:
+    async def _validate_operation_sites(uow: UnitOfWork, operation_data: BaseModel) -> None:
         site = await uow.sites.get_by_id(operation_data.site_id)
         if not site:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="site not found")
@@ -507,8 +507,9 @@ class OperationsService:
                 "batch": line.batch.strip().lower() if line.batch else None,
                 "comment": line.comment.strip().lower() if line.comment else None,
             }
-            if line.temporary_item is not None:
-                t = line.temporary_item
+            temporary_item = getattr(line, 'temporary_item', None)
+            if temporary_item is not None:
+                t = temporary_item
                 line_dict["temporary_item"] = {
                     "client_key": t.client_key,
                     "name": t.name.strip().lower() if t.name else None,
@@ -530,6 +531,9 @@ class OperationsService:
             "issued_to_name": payload.issued_to_name.strip().lower() if payload.issued_to_name else None,
             "effective_at": payload.effective_at.isoformat() if payload.effective_at else None,
             "notes": payload.notes.strip().lower() if payload.notes else None,
+            # Source-document fields for content comparison
+            "source_ref": getattr(payload, 'source_ref', None),
+            "source_document_type": getattr(payload, 'source_document_type', None),
             "lines": lines_normalized,
         }
         raw = json.dumps(canonical, sort_keys=True, ensure_ascii=False, default=str)
@@ -673,6 +677,10 @@ class OperationsService:
             client_request_hash=client_request_hash,
             display_number=display_number,
         )
+        # TZ-SOURCE_DOCUMENT_OPERATION_INTAKE_HARDENING §10.4:
+        # Новые manual операции через generic endpoint получают creation_source='manual' явно.
+        # legacy-значение сохраняется только для исторических операций (backfill).
+        operation.creation_source = "manual"
 
         # Для temporary строк нормализуем category_id и собираем snapshot-поля
         # без materialization сущностей. Реальные temporary/backing/inventory_subject
@@ -828,7 +836,7 @@ class OperationsService:
         Gate A1: базовая имплементация без canonical resolution
         (будет добавлена в Gate A2).
         """
-        # Idempotency: проверка по source_ref
+        # Idempotency: проверка по source_ref + content hash
         if payload.source_ref:
             existing = await uow.operations.get_by_source_ref(
                 source_ref=payload.source_ref,
@@ -836,22 +844,25 @@ class OperationsService:
                 created_by_user_id=user_id,
             )
             if existing is not None:
-                if existing.client_request_hash is not None and payload.client_request_id:
-                    computed_hash = OperationsService._compute_client_request_hash(payload)
-                    if existing.client_request_hash == computed_hash:
-                        return {"operation": existing}
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail={
-                            "code": "source_document_idempotency_conflict",
-                            "message": (
-                                f"Source document with source_ref "
-                                f"'{payload.source_ref}' was already used with a different payload"
-                            ),
-                        },
-                    )
-                # If no client_request_hash to compare, still return existing for safety
-                return {"operation": existing}
+                # Всегда вычисляем hash для сравнения контента
+                new_hash = OperationsService._compute_client_request_hash(payload)
+                if existing.client_request_hash is None:
+                    # Существующая операция без hash (legacy) — возвращаем как есть
+                    return {"operation": existing}
+                if existing.client_request_hash == new_hash:
+                    # Тот же payload — idempotent response
+                    return {"operation": existing}
+                # Разный payload — 409 conflict
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "source_document_idempotency_conflict",
+                        "message": (
+                            f"Source document with source_ref "
+                            f"'{payload.source_ref}' was already used with a different payload"
+                        ),
+                    },
+                )
 
         # Валидация operation_type и sites
         await OperationsService._validate_operation_type(payload.operation_type)
@@ -1414,6 +1425,137 @@ class OperationsService:
         await uow.session.flush()
 
     @staticmethod
+    async def _validate_resolved_lines_on_submit(
+        uow: UnitOfWork,
+        operation,
+    ) -> None:
+        """Повторная валидация resolved lines на submit.
+
+        Проверяет:
+        - item_id != null (для source_document гарантировано, для manual тоже
+          теперь обязательно после _materialize_deferred_temporary_lines)
+        - canonical_id через merge chain
+        - canonical.is_active
+        - canonical.deleted_at IS NULL
+        """
+        from app.services.catalog_read_service import CatalogReadService
+
+        unresolved = []
+        for line in operation.lines:
+            if line.item_id is None:
+                unresolved.append({
+                    "line_id": line.id,
+                    "line_number": line.line_number,
+                    "reason": "missing_item_id",
+                })
+                continue
+
+            item = await uow.catalog.get_item_by_id(line.item_id)
+            if item is None:
+                unresolved.append({
+                    "line_id": line.id,
+                    "line_number": line.line_number,
+                    "previous_item_id": line.item_id,
+                    "reason": "item_not_found",
+                })
+                continue
+
+            canonical, reason = await CatalogReadService._follow_merge_chain(
+                uow, item, depth=0,
+            )
+            if canonical is None:
+                unresolved.append({
+                    "line_id": line.id,
+                    "line_number": line.line_number,
+                    "previous_item_id": line.item_id,
+                    "reason": reason or "unresolvable",
+                })
+                continue
+
+            if canonical.deleted_at is not None:
+                unresolved.append({
+                    "line_id": line.id,
+                    "line_number": line.line_number,
+                    "previous_item_id": line.item_id,
+                    "canonical_item_id": canonical.id,
+                    "reason": "deleted",
+                })
+                continue
+
+            if not canonical.is_active:
+                unresolved.append({
+                    "line_id": line.id,
+                    "line_number": line.line_number,
+                    "previous_item_id": line.item_id,
+                    "canonical_item_id": canonical.id,
+                    "reason": "inactive",
+                })
+                continue
+
+        if unresolved:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "operation_lines_unresolved",
+                    "operation_id": str(operation.id),
+                    "lines": unresolved,
+                },
+            )
+
+    @staticmethod
+    async def _freeze_catalog_snapshot(
+        uow: UnitOfWork,
+        operation,
+    ) -> list[dict]:
+        """Зафиксировать catalog snapshot на момент submit.
+
+        Перезаписывает item_name_snapshot, item_sku_snapshot, unit_*_snapshot,
+        category_name_snapshot актуальными canonical значениями.
+        Также обновляет OperationLine.item_id на canonical_id (если отличается).
+        Возвращает список изменений для audit resource links.
+        """
+        from app.services.catalog_read_service import CatalogReadService
+
+        catalog_changes = []
+        for line in operation.lines:
+            if line.item_id is None:
+                continue  # temporary_item будет materialized отдельно (manual only)
+
+            item = await uow.catalog.get_item_by_id(line.item_id)
+            if item is None:
+                continue
+
+            canonical, _ = await CatalogReadService._follow_merge_chain(
+                uow, item, depth=0,
+            )
+            if canonical is None:
+                continue  # уже провалидировано в _validate_resolved_lines_on_submit
+
+            old_id = line.item_id
+            new_id = canonical.id
+
+            if old_id != new_id:
+                catalog_changes.append({
+                    "line_id": line.id,
+                    "line_number": line.line_number,
+                    "previous_item_id": old_id,
+                    "canonical_item_id": new_id,
+                    "reason": "merged",
+                })
+
+            line.item_id = new_id
+            line.item_name_snapshot = canonical.name
+            line.item_sku_snapshot = canonical.sku
+            if canonical.unit:
+                line.unit_name_snapshot = canonical.unit.name
+                line.unit_symbol_snapshot = canonical.unit.symbol
+            if canonical.category:
+                line.category_name_snapshot = canonical.category.name
+
+        await uow.session.flush()
+        return catalog_changes
+
+    @staticmethod
     async def submit_operation(
         uow: UnitOfWork,
         operation_id: UUID,
@@ -1425,10 +1567,30 @@ class OperationsService:
             OperationsWorkflowPolicy.require_exists(operation)
             OperationsWorkflowPolicy.require_draft_for_submit(operation)
 
+            # NEW: validate resolved lines for source_document operations
+            # (у source_document temporary_item невозможен, поэтому validate ДО materialize)
+            ops_cs = getattr(operation, 'creation_source', 'legacy')
+            if ops_cs == "source_document":
+                await OperationsService._validate_resolved_lines_on_submit(uow, operation)
+
             # Materialize deferred temporary lines before balance/register workflow
-            await OperationsService._materialize_deferred_temporary_lines(
-                uow, operation, user_id,
-            )
+            # Для source_document: temporary_draft_payload гарантированно null (schema запрещает)
+            if ops_cs != "source_document":
+                await OperationsService._materialize_deferred_temporary_lines(
+                    uow, operation, user_id,
+                )
+
+            # Для manual: после materialize — validate resolved lines
+            # (созданный Item может сам быть merged или inactive)
+            # Legacy операции (без creation_source) пропускают эту проверку
+            if ops_cs in ("source_document", "manual"):
+                await OperationsService._validate_resolved_lines_on_submit(uow, operation)
+
+            # NEW: freeze catalog snapshot на момент submit (перезаписывает draft-time snapshot)
+            # Для legacy операций (без creation_source) snapshot не перезаписываем
+            catalog_changes = []
+            if ops_cs in ("source_document", "manual"):
+                catalog_changes = await OperationsService._freeze_catalog_snapshot(uow, operation)
 
             # Per-call capture list for audit_item_effects. We persist
             # effects only after the operation.submit audit event has been
@@ -1708,6 +1870,28 @@ class OperationsService:
                 parent_event_id=getattr(uow, "audit_parent_event_id", None),
                 outcome="success",
             )
+
+            # TZ-SOURCE_DOCUMENT_OPERATION_INTAKE_HARDENING §7.2:
+            # Audit resource links for catalog resolution (canonical item_id replacement)
+            if catalog_changes:
+                for change in catalog_changes:
+                    try:
+                        await uow.audit_events.insert_resource(
+                            audit_event_id=int(submit_event.id),
+                            resource_type="operation_line",
+                            resource_id=str(change["line_id"]),
+                            relation="catalog_resolved",
+                            snapshot_before={"item_id": change["previous_item_id"]},
+                            snapshot_after={"item_id": change["canonical_item_id"]},
+                            extra_metadata={"reason": change["reason"]},
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "audit_resource_link_failed",
+                            operation_id=str(operation_id),
+                            line_id=change["line_id"],
+                            error=str(exc),
+                        )
 
             # Persist captured effects — each row references the operation.submit
             # event so reverse lookups remain cheap.
