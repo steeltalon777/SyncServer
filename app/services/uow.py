@@ -8,11 +8,13 @@ from app.repos.asset_registers_repo import AssetRegistersRepo
 from app.repos.audit_events_repo import AuditEventsRepo
 from app.repos.balances_repo import BalancesRepo
 from app.repos.catalog_repo import CatalogRepo
+from app.repos.corrections_repo import CorrectionsRepo
 from app.repos.devices_repo import DevicesRepo
 from app.repos.documents_repo import DocumentsRepo
 from app.repos.events_repo import EventsRepo
 from app.repos.inventory_subjects_repo import InventorySubjectsRepo
 from app.repos.machine_repo import MachineRepo
+from app.repos.operation_revisions_repo import OperationRevisionsRepo
 from app.repos.operations_repo import OperationsRepo
 from app.repos.issue_object_categories_repo import IssueObjectCategoriesRepo
 from app.repos.issue_objects_repo import IssueObjectsRepo
@@ -58,6 +60,8 @@ class UnitOfWork:
         self.asset_registers = AssetRegistersRepo(session)
         self.user_access_scopes = UserAccessScopesRepo(session)
         self.operations = OperationsRepo(session)
+        self.operation_revisions = OperationRevisionsRepo(session)
+        self.corrections = CorrectionsRepo(session)
         self.issue_objects = IssueObjectsRepo(session)
         self.issue_object_categories = IssueObjectCategoriesRepo(session)
         self.reports = ReportsRepo(session)

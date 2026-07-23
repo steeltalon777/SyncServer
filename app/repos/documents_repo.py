@@ -37,6 +37,7 @@ class DocumentsRepo:
         payload_hash: str | None = None,
         finalized_at: datetime | None = None,
         supersedes_document_id: UUID | None = None,
+        operation_revision_id: UUID | None = None,
     ) -> Document:
         """Create a new document."""
         document = Document(
@@ -53,6 +54,7 @@ class DocumentsRepo:
             created_by_user_id=created_by_user_id,
             finalized_at=finalized_at,
             supersedes_document_id=supersedes_document_id,
+            operation_revision_id=operation_revision_id,
         )
         self.session.add(document)
         await self.session.flush()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -12,14 +13,19 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+if TYPE_CHECKING:
+    from app.models.document import Document
 
 
 class Operation(Base):
@@ -195,10 +201,30 @@ class Operation(Base):
     # Ref на source документ (например, "invoice-2026-07-21-001")
     source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # TZ-OPERATION_CORRECTION_BY_DIFF: current immutable revision pointer
+    # use_alter=True to break circular dependency with operation_revisions
+    current_revision_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("operation_revisions.id", use_alter=True, name="fk_operations_current_revision"),
+        nullable=True,
+    )
+    correction_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0,
+    )
+    last_corrected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     lines: Mapped[list["OperationLine"]] = relationship(
         "OperationLine",
         back_populates="operation",
         cascade="all, delete-orphan",
+    )
+    revisions: Mapped[list["OperationRevision"]] = relationship(
+        back_populates="operation", cascade="all, delete-orphan",
+        foreign_keys="OperationRevision.operation_id",
+    )
+    corrections: Mapped[list["OperationCorrection"]] = relationship(
+        back_populates="operation", cascade="all, delete-orphan",
+        foreign_keys="OperationCorrection.operation_id",
     )
 
     site = relationship(
@@ -262,6 +288,12 @@ class OperationLine(Base):
         PGUUID(as_uuid=True),
         ForeignKey("operations.id"),
         nullable=False,
+    )
+
+    # TZ-OPERATION_CORRECTION_BY_DIFF: stable line UUID for correction tracking
+    line_uuid: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        nullable=True,
     )
 
     line_number: Mapped[int] = mapped_column(nullable=False)
@@ -381,4 +413,174 @@ class OperationLine(Base):
         CheckConstraint("qty <> 0", name="ck_operation_lines_qty_non_zero"),
         CheckConstraint("accepted_qty >= 0", name="ck_operation_lines_accepted_qty_non_negative"),
         CheckConstraint("lost_qty >= 0", name="ck_operation_lines_lost_qty_non_negative"),
+    )
+
+
+class OperationRevision(Base):
+    __tablename__ = "operation_revisions"
+
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4,
+    )
+    operation_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("operations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+    created_by_correction_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("operation_corrections.id", use_alter=True, name="fk_operation_revisions_correction"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+    operation: Mapped["Operation"] = relationship(
+        back_populates="revisions",
+        foreign_keys="OperationRevision.operation_id",
+    )
+    lines: Mapped[list["OperationRevisionLine"]] = relationship(
+        back_populates="revision", cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "operation_id", "revision_number",
+            name="uq_operation_revisions_op_rev",
+        ),
+    )
+
+
+class OperationRevisionLine(Base):
+    __tablename__ = "operation_revision_lines"
+
+    revision_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("operation_revisions.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    line_uuid: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+    )
+    line_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("items.id"))
+    inventory_subject_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("inventory_subjects.id"),
+    )
+    qty: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False)
+    accepted_qty: Mapped[Decimal] = mapped_column(
+        Numeric(18, 3), nullable=False, server_default="0", default=0,
+    )
+    lost_qty: Mapped[Decimal] = mapped_column(
+        Numeric(18, 3), nullable=False, server_default="0", default=0,
+    )
+    batch: Mapped[str | None] = mapped_column(String(100))
+    comment: Mapped[str | None] = mapped_column(Text)
+
+    source_item_name: Mapped[str | None] = mapped_column(String(255))
+    source_item_sku: Mapped[str | None] = mapped_column(String(100))
+    source_unit_name: Mapped[str | None] = mapped_column(String(100))
+    source_category_name: Mapped[str | None] = mapped_column(String(255))
+
+    item_name_snapshot: Mapped[str | None] = mapped_column(String(255))
+    item_sku_snapshot: Mapped[str | None] = mapped_column(String(100))
+    unit_name_snapshot: Mapped[str | None] = mapped_column(String(100))
+    unit_symbol_snapshot: Mapped[str | None] = mapped_column(String(20))
+    category_name_snapshot: Mapped[str | None] = mapped_column(String(255))
+
+    revision: Mapped["OperationRevision"] = relationship(back_populates="lines")
+
+
+class OperationCorrection(Base):
+    __tablename__ = "operation_corrections"
+
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4,
+    )
+    operation_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("operations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="draft", default="draft",
+    )
+    base_operation_revision_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("operation_revisions.id", ondelete="RESTRICT", use_alter=True, name="fk_corrections_base_revision"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1", default=1,
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    submitted_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id"),
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    operation: Mapped["Operation"] = relationship(
+        back_populates="corrections",
+        foreign_keys="OperationCorrection.operation_id",
+    )
+    lines: Mapped[list["OperationCorrectionLine"]] = relationship(
+        back_populates="correction", cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'applied', 'abandoned')",
+            name="ck_operation_corrections_status",
+        ),
+        Index(
+            "uq_active_correction_per_operation",
+            "operation_id",
+            unique=True,
+            postgresql_where=sa.text("status = 'draft'"),
+        ),
+        Index("ix_operation_corrections_operation_id", "operation_id"),
+    )
+
+
+class OperationCorrectionLine(Base):
+    __tablename__ = "operation_correction_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    correction_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("operation_corrections.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    line_uuid: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    line_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("items.id"))
+    qty: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False)
+    batch: Mapped[str | None] = mapped_column(String(100))
+    comment: Mapped[str | None] = mapped_column(Text)
+
+    correction: Mapped["OperationCorrection"] = relationship(back_populates="lines")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "correction_id", "line_uuid", name="uq_correction_lines_line_uuid",
+        ),
     )

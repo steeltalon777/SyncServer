@@ -20,6 +20,7 @@ from app.api.routes_diagnostics import router as diagnostics_router
 from app.api.routes_documents import router as documents_router
 from app.api.routes_health import router as health_router
 from app.api.routes_operations import router as operations_router
+from app.api.routes_corrections import router as corrections_router
 from app.api.routes_issue_objects import router as issue_objects_router, router_categories as issue_object_categories_router
 from app.api.routes_reports import router as reports_router
 from app.api.routes_sync import router as sync_router
@@ -167,6 +168,7 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
 
     # Operations API (user token auth)
     app.include_router(operations_router, prefix=api_v1_prefix)
+    app.include_router(corrections_router, prefix=api_v1_prefix)
 
     # Temporary items API (user token auth)
     app.include_router(temporary_items_router, prefix=api_v1_prefix)

@@ -65,6 +65,13 @@ class Document(Base):
         ForeignKey("documents.id"),
     )
 
+    # TZ-OPERATION_CORRECTION_BY_DIFF: указывает, из какой revision создан документ
+    operation_revision_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("operation_revisions.id"),
+        nullable=True,
+    )
+
     # Relationships
     site: Mapped["Site"] = relationship("Site", back_populates="documents")
     created_by_user: Mapped["User"] = relationship("User", back_populates="documents")

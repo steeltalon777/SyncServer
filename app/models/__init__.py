@@ -16,7 +16,14 @@ from app.models.inventory_subject import InventorySubject
 from app.models.item import Item
 from app.models.machine import MachineBatch, MachineReport, MachineSnapshot
 from app.models.document import Document, DocumentOperation, DocumentSource
-from app.models.operation import Operation, OperationLine
+from app.models.operation import (
+    Operation,
+    OperationCorrection,
+    OperationCorrectionLine,
+    OperationLine,
+    OperationRevision,
+    OperationRevisionLine,
+)
 from app.models.issue_object import IssueObject, IssueObjectAlias
 from app.models.issue_object_category import IssueObjectCategory
 from app.models.site import Site
@@ -56,7 +63,11 @@ __all__ = [
     "OperationAcceptanceAction",
     "Unit",
     "Operation",
+    "OperationCorrection",
+    "OperationCorrectionLine",
     "OperationLine",
+    "OperationRevision",
+    "OperationRevisionLine",
     "User",
     "UserAccessScope",
     "SyncState",

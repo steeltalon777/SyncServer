@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Text, and_, cast, desc, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -428,8 +428,11 @@ class OperationsRepo:
         inventory_subject_id: int | None,
         item_id: int | None,
         qty: Decimal | int,
+        line_uuid: UUID | None = None,
         batch: str | None = None,
         comment: str | None = None,
+        accepted_qty: Decimal | None = None,
+        lost_qty: Decimal | None = None,
         source_item_name: str | None = None,
         source_item_sku: str | None = None,
         source_unit_name: str | None = None,
@@ -443,12 +446,13 @@ class OperationsRepo:
     ) -> OperationLine:
         line = OperationLine(
             operation_id=operation_id,
+            line_uuid=line_uuid or uuid4(),
             line_number=line_number,
             inventory_subject_id=inventory_subject_id,
             item_id=item_id,
             qty=qty,
-            accepted_qty=Decimal("0"),
-            lost_qty=Decimal("0"),
+            accepted_qty=accepted_qty if accepted_qty is not None else Decimal("0"),
+            lost_qty=lost_qty if lost_qty is not None else Decimal("0"),
             batch=batch,
             comment=comment,
             source_item_name=source_item_name,
@@ -646,3 +650,103 @@ class OperationsRepo:
         for line in lines:
             await self.session.delete(line)
         await self.session.flush()
+
+    async def rebuild_operation_lines(
+        self,
+        operation_id: UUID,
+        final_lines: list[dict],
+    ) -> list[OperationLine]:
+        """Rebuild operation lines by updating in-place or inserting new.
+
+        Uses UPDATE for existing lines (by line_uuid) instead of DELETE+INSERT
+        to avoid FK violations (pending_acceptance_balances, etc.).
+        Only removes lines that are not in the final state.
+        """
+        stmt = select(OperationLine).where(OperationLine.operation_id == operation_id)
+        current_lines = (await self.session.execute(stmt)).scalars().all()
+
+        final_uuids = {fl["line_uuid"] for fl in final_lines if fl.get("line_uuid")}
+        current_by_uuid: dict[UUID, OperationLine] = {}
+        for cl in current_lines:
+            if cl.line_uuid is not None:
+                current_by_uuid[cl.line_uuid] = cl
+
+        result = []
+
+        for fl in final_lines:
+            lu = fl.get("line_uuid")
+            if lu is not None and lu in current_by_uuid:
+                # Update existing line in-place
+                existing = current_by_uuid[lu]
+                existing.line_number = fl["line_number"]
+                existing.item_id = fl.get("item_id")
+                existing.qty = fl["qty"]
+                existing.inventory_subject_id = fl.get("inventory_subject_id")
+                existing.accepted_qty = fl.get("accepted_qty", Decimal("0"))
+                existing.lost_qty = fl.get("lost_qty", Decimal("0"))
+                existing.batch = fl.get("batch")
+                existing.comment = fl.get("comment")
+                existing.item_name_snapshot = fl.get("item_name_snapshot")
+                existing.item_sku_snapshot = fl.get("item_sku_snapshot")
+                existing.unit_name_snapshot = fl.get("unit_name_snapshot")
+                existing.unit_symbol_snapshot = fl.get("unit_symbol_snapshot")
+                existing.category_name_snapshot = fl.get("category_name_snapshot")
+                result.append(existing)
+            else:
+                # Insert new line
+                new_line = await self.create_operation_line(
+                    operation_id=operation_id,
+                    line_number=fl["line_number"],
+                    inventory_subject_id=fl.get("inventory_subject_id"),
+                    item_id=fl.get("item_id"),
+                    qty=fl["qty"],
+                    line_uuid=lu or uuid4(),
+                    batch=fl.get("batch"),
+                    comment=fl.get("comment"),
+                    accepted_qty=fl.get("accepted_qty", Decimal("0")),
+                    lost_qty=fl.get("lost_qty", Decimal("0")),
+                    item_name_snapshot=fl.get("item_name_snapshot"),
+                    item_sku_snapshot=fl.get("item_sku_snapshot"),
+                    unit_name_snapshot=fl.get("unit_name_snapshot"),
+                    unit_symbol_snapshot=fl.get("unit_symbol_snapshot"),
+                    category_name_snapshot=fl.get("category_name_snapshot"),
+                )
+                result.append(new_line)
+
+        # Remove lines not in final state
+        for lu, existing in current_by_uuid.items():
+            if lu not in final_uuids:
+                await self.session.delete(existing)
+
+        await self.session.flush()
+        return result
+
+    async def update_operation_correction_fields(
+        self,
+        operation_id: UUID,
+        current_revision_id: UUID,
+        *,
+        expected_version: int | None = None,
+    ) -> Operation | None:
+        operation = await self.get_operation_by_id_for_update(operation_id)
+        if operation is None:
+            return None
+
+        if expected_version is not None and int(operation.version) != expected_version:
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "operation_version_conflict",
+                    "message": "Операция была изменена в другой вкладке",
+                    "current_version": int(operation.version),
+                },
+            )
+
+        from datetime import UTC, datetime as _dt
+        operation.current_revision_id = current_revision_id
+        operation.correction_count = int(operation.correction_count) + 1
+        operation.last_corrected_at = _dt.now(UTC)
+        operation.version = int(operation.version) + 1
+        await self.session.flush()
+        return operation

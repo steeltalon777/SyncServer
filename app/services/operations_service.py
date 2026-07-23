@@ -6,7 +6,7 @@ import json
 import structlog
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
 from app.core.search_utils import normalize_for_storage
@@ -1806,6 +1806,44 @@ class OperationsService:
                 submitted_by_user_id=user_id,
                 expected_version=expected_version,
             )
+
+            # TZ-OPERATION_CORRECTION_BY_DIFF: Create revision 0 on initial submit
+            # INV-C5: Initial submit создаёт revision 0
+            revisions_repo = getattr(uow, "operation_revisions", None)
+            if revisions_repo is not None:
+                # Check if revision 0 already exists (e.g., after restore)
+                existing_revisions = await revisions_repo.get_revisions_for_operation(operation_id)
+                next_rev_number = max((r.revision_number for r in existing_revisions), default=-1) + 1
+                revision_0 = await revisions_repo.create_revision(
+                    operation_id=operation_id,
+                    revision_number=next_rev_number,
+                    created_by_user_id=user_id,
+                )
+                for line in operation.lines:
+                    await revisions_repo.create_revision_line(
+                        revision_id=revision_0.id,
+                        line_uuid=line.line_uuid or uuid4(),
+                        line_number=line.line_number,
+                        item_id=line.item_id,
+                        inventory_subject_id=line.inventory_subject_id,
+                        qty=line.qty,
+                        accepted_qty=line.accepted_qty,
+                        lost_qty=line.lost_qty,
+                        batch=line.batch,
+                        comment=line.comment,
+                        source_item_name=line.source_item_name,
+                        source_item_sku=line.source_item_sku,
+                        source_unit_name=line.source_unit_name,
+                        source_category_name=line.source_category_name,
+                        item_name_snapshot=line.item_name_snapshot,
+                        item_sku_snapshot=line.item_sku_snapshot,
+                        unit_name_snapshot=line.unit_name_snapshot,
+                        unit_symbol_snapshot=line.unit_symbol_snapshot,
+                        category_name_snapshot=line.category_name_snapshot,
+                    )
+                # Set current_revision_id on operation
+                submitted_operation.current_revision_id = revision_0.id
+                await uow.session.flush()
 
             # Автоматически создаём документ для операции (если включено в конфиге)
             # Пока создаём только для определённых типов операций

@@ -194,6 +194,7 @@ class DocumentService:
         basis_type: str | None = None,
         basis_number: str | None = None,
         basis_date: datetime | None = None,
+        operation_revision_id: UUID | None = None,
     ) -> dict[str, Any]:
         """Сгенерировать документ на основе операции.
 
@@ -204,6 +205,9 @@ class DocumentService:
         - Данные ответственных лиц
         - Номер документа по сквозной нумерации
 
+        INV-C16: Если operation_revision_id передан, строки читаются из OperationRevisionLine.
+        INV-C4: Document.operation_revision_id указывает, из какой revision создан документ.
+
         Args:
             uow: UnitOfWork для транзакции
             operation_id: ID операции-источника
@@ -211,6 +215,7 @@ class DocumentService:
             template_name: Имя шаблона (если None — используется шаблон по умолчанию)
             auto_finalize: Если True — документ сразу финализируется
             created_by_user_id: ID пользователя-создателя
+            operation_revision_id: ID ревизии для чтения строк (INV-C16)
 
         Returns:
             Словарь с созданным документом и статусом
@@ -261,6 +266,13 @@ class DocumentService:
         # 5. Определяем шаблон
         effective_template = template_name or DEFAULT_TEMPLATES.get(document_type, "default_v1")
 
+        # 5b. Если operation_revision_id передан — загружаем revision lines
+        revision_lines = None
+        if operation_revision_id is not None:
+            revision = await uow.operation_revisions.get_revision_by_id(operation_revision_id)
+            if revision is not None:
+                revision_lines = revision.lines
+
         # 6. Для черновиков — всегда создаём новый документ (войдируем старый).
         #    Для проведённых — сохраняем идемпотентность.
         if operation.status == "draft":
@@ -308,6 +320,7 @@ class DocumentService:
             basis_type=basis_type,
             basis_number=basis_number,
             basis_date=basis_date,
+            revision_lines=revision_lines,
         )
 
         # 8. Генерируем технический номер документа
@@ -320,6 +333,14 @@ class DocumentService:
         status_value = "finalized" if effective_auto_finalize else "draft"
         now = datetime.now(UTC) if effective_auto_finalize else None
 
+        # Determine revision for document
+        doc_revision = 0
+        if operation_revision_id is not None:
+            # If we have an operation_revision_id, look up the revision number
+            rev = await uow.operation_revisions.get_revision_by_id(operation_revision_id)
+            if rev is not None:
+                doc_revision = rev.revision_number
+
         # 11. Создаём документ
         document = await uow.documents.create_document(
             document_type=document_type,
@@ -327,13 +348,14 @@ class DocumentService:
             payload=payload,
             created_by_user_id=created_by_user_id or operation.created_by_user_id,
             document_number=document_number,
-            revision=0,
+            revision=doc_revision,
             status=status_value,
             template_name=effective_template,
             template_version="1.0",
             payload_schema_version=PAYLOAD_SCHEMA_VERSION,
             payload_hash=payload_hash,
             finalized_at=now,
+            operation_revision_id=operation_revision_id,
         )
 
         # 12. Линкуем документ к операции
@@ -419,6 +441,7 @@ class DocumentService:
         basis_type: str | None = None,
         basis_number: str | None = None,
         basis_date: datetime | None = None,
+        revision_lines: list | None = None,
     ) -> dict[str, Any]:
         """Собрать самодостаточный payload для печати документа.
 
@@ -428,6 +451,9 @@ class DocumentService:
         - Строки документа с историческими снапшотами
         - Подписи ответственных лиц
         - Метаданные операции
+
+        INV-C16: Если revision_lines передан, строки берутся из них,
+        иначе из operation.lines.
         """
         # Заголовок документа
         document_title = DocumentService._get_document_title(document_type)
@@ -501,8 +527,10 @@ class DocumentService:
             }
 
         # Строки документа
+        # INV-C16: используем revision_lines если переданы, иначе operation.lines
+        source_lines = revision_lines if revision_lines is not None else operation.lines
         lines = []
-        for line in operation.lines:
+        for line in source_lines:
             line_data = {
                 "line_number": line.line_number,
                 "item_id": line.item_id,
