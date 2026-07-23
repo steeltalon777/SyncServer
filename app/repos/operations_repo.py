@@ -102,6 +102,38 @@ class OperationsRepo:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_source_ref(
+        self,
+        *,
+        source_ref: str,
+        creation_source: str = "source_document",
+        created_by_user_id: UUID | None = None,
+    ) -> Operation | None:
+        """Find existing operation by source_ref for idempotency.
+
+        Used by POST /operations/from-source-document to prevent duplicate
+        operations from the same source document.
+        """
+        stmt = (
+            select(Operation)
+            .where(Operation.source_ref == source_ref)
+            .where(Operation.creation_source == creation_source)
+            .where(Operation.deleted_at.is_(None))
+            .options(
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.item)
+                .selectinload(Item.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.inventory_subject)
+                .selectinload(InventorySubject.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+            )
+        )
+        if created_by_user_id is not None:
+            stmt = stmt.where(Operation.created_by_user_id == created_by_user_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def get_by_client_request_id(self, *, created_by_user_id: UUID, client_request_id: str) -> Operation | None:
         stmt = (
             select(Operation)

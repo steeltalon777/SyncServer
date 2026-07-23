@@ -194,6 +194,10 @@ class OperationLineResponse(ORMBaseModel):
     temporary_item_status: str | None = None
     resolved_item_id: int | None = None
     resolved_item_name: str | None = None
+    source_item_name: str | None = None
+    source_item_sku: str | None = None
+    source_unit_name: str | None = None
+    source_category_name: str | None = None
     item_name_snapshot: str | None = None
     item_sku_snapshot: str | None = None
     unit_name_snapshot: str | None = None
@@ -254,6 +258,8 @@ class OperationResponse(ORMBaseModel):
     cancelled_by_user_id: UUID | None = None
     notes: str | None = None
     display_number: str | None = None
+    creation_source: str = "legacy"
+    source_ref: str | None = None
     lines: list[OperationLineResponse] = Field(default_factory=list)
 
     @property
@@ -266,6 +272,88 @@ class OperationListResponse(ORMBaseModel):
     total_count: int
     page: int
     page_size: int
+
+
+SourceDocumentType = Literal[
+    "invoice",
+    "ocr_scan",
+    "csv_import",
+    "json_import",
+    "external_api",
+]
+
+
+class SourceDocumentOperationLineCreate(BaseModel):
+    """Operation line для source-document. НЕ ДОПУСКАЕТ temporary_item.
+
+    extra='forbid' — любое поле, не объявленное в schema, вызовет 422.
+    Это критично для безопасности: если кто-то попытается передать
+    temporary_item или другое непредусмотренное поле, запрос падает,
+    а не молча игнорируется.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    line_number: int = Field(ge=1)
+
+    # ОБЯЗАТЕЛЬНОЕ поле — schema физически не допускает null
+    item_id: int = Field(ge=1)
+
+    qty: Decimal = Field(gt=0, validation_alias=AliasChoices("qty", "quantity"))
+    batch: str | None = Field(default=None, max_length=100)
+    comment: str | None = Field(default=None, max_length=1000)
+
+    # SOURCE snapshot (опциональные, но рекомендуемые для audit)
+    source_item_name: str | None = Field(default=None, max_length=255)
+    source_item_sku: str | None = Field(default=None, max_length=100)
+    source_unit_name: str | None = Field(default=None, max_length=100)
+    source_category_name: str | None = Field(default=None, max_length=255)
+
+    @field_validator("qty")
+    @classmethod
+    def validate_qty_positive(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("qty must be positive")
+        return value
+
+
+class SourceDocumentOperationCreate(BaseModel):
+    """Source-document operation create payload.
+
+    Schema не имеет temporary_item — backend физически не может создать Item.
+    Все строки обязаны иметь item_id.
+
+    extra='forbid' — любое поле, не объявленное в schema, вызовет 422.
+    Это защищает от тихих ошибок интеграции (если кто-то пытается
+    добавить поле вроде temporary_item в будущем).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    operation_type: OperationType = Field(validation_alias=AliasChoices("operation_type", "type"))
+    site_id: int = Field(ge=1)
+
+    # Идентификация source
+    source_ref: str = Field(min_length=1, max_length=255)  # ОБЯЗАТЕЛЬНО
+    source_document_type: SourceDocumentType
+    source_document_date: datetime | None = None
+
+    # Стандартные поля операции
+    effective_at: datetime | None = None
+    source_site_id: int | None = None
+    destination_site_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("destination_site_id", "target_site_id"),
+    )
+    issued_to_user_id: UUID | None = None
+    issued_to_name: str | None = Field(default=None, max_length=255)
+    issue_object_id: int | None = None
+    issue_object_name_snapshot: str | None = Field(default=None, max_length=255)
+    lines: list[SourceDocumentOperationLineCreate] = Field(min_length=1)
+    notes: str | None = Field(default=None, max_length=1000)
+
+    # ОБЯЗАТЕЛЬНЫЙ idempotency key — стабильный идентификатор source-document.
+    # Повторная отправка одного и того же source-document с тем же source_ref
+    # через этот endpoint не должна создавать вторую Operation.
+    client_request_id: str | None = Field(default=None, max_length=100)
 
 
 class OperationFilter(BaseModel):

@@ -179,6 +179,22 @@ class Operation(Base):
         nullable=True,
     )
 
+    # TZ-SOURCE_DOCUMENT_OPERATION_INTAKE_HARDENING: source-document flow marker
+    creation_source: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default="legacy",
+        default="legacy",
+    )
+    # Значения:
+    # - "manual" — ручное создание через UI (POST /operations без temporary_item)
+    # - "source_document" — через dedicated endpoint (POST /operations/from-source-document)
+    # - "system" — служебная (merge, review resolution, system ADJUSTMENT)
+    # - "legacy" — существующие операции до этого TZ (default при backfill)
+
+    # Ref на source документ (например, "invoice-2026-07-21-001")
+    source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     lines: Mapped[list["OperationLine"]] = relationship(
         "OperationLine",
         back_populates="operation",
@@ -281,7 +297,13 @@ class OperationLine(Base):
     batch: Mapped[str | None] = mapped_column(String(100), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Historical snapshots
+    # SOURCE snapshot (от исходного документа, фиксируется на draft)
+    source_item_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_item_sku: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_unit_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_category_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Historical snapshots (catalog snapshot, frozen at submit)
     item_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
     item_sku_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
     unit_name_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -345,6 +367,15 @@ class OperationLine(Base):
     def is_draft_temporary(self) -> bool:
         """Returns True if this line has a deferred temporary payload not yet materialized."""
         return self.temporary_draft_payload is not None
+
+    @property
+    def resolution_mode(self) -> Literal["existing_item", "inline_item"]:
+        """existing_item: item_id != null, temporary_draft_payload = null
+        inline_item: temporary_draft_payload != null (item_id = null до submit)
+        """
+        if self.temporary_draft_payload is not None:
+            return "inline_item"
+        return "existing_item"
 
     __table_args__ = (
         CheckConstraint("qty <> 0", name="ck_operation_lines_qty_non_zero"),

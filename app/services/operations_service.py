@@ -15,13 +15,19 @@ from app.models.category import Category
 from app.models.item import Item
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.catalog import ItemsResolveRequest
-from app.schemas.operation import OperationCreate, OperationType, OperationUpdate
+from app.schemas.operation import (
+    OperationCreate,
+    OperationType,
+    OperationUpdate,
+    SourceDocumentOperationCreate,
+)
 from app.services.catalog_read_service import CatalogReadService
 from app.services.document_service import DocumentService, draft_document_type_for_operation, submit_document_type_for_operation, _compute_operation_display_number
 from app.services.audit_helper import record_audit_event
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
 logger = structlog.get_logger()
@@ -491,7 +497,7 @@ class OperationsService:
                 )
 
     @staticmethod
-    def _compute_client_request_hash(payload: OperationCreate) -> str:
+    def _compute_client_request_hash(payload: BaseModel) -> str:
         lines_normalized = []
         for line in payload.lines:
             line_dict = {
@@ -804,6 +810,192 @@ class OperationsService:
                 if hasattr(created_operation, "short_id") and created_operation.short_id
                 else f"Создан черновик операции ({created_operation.operation_type})"
             ),
+        )
+        return {"operation": created_operation}
+
+    @staticmethod
+    async def create_operation_from_source_document(
+        uow: UnitOfWork,
+        payload: SourceDocumentOperationCreate,
+        user_id: UUID,
+    ) -> dict[str, object]:
+        """Создать draft операцию из source-document.
+
+        Schema физически не допускает temporary_item.
+        Каждая строка обязана иметь item_id.
+        Endpoint самостоятельно проставляет creation_source='source_document'.
+
+        Gate A1: базовая имплементация без canonical resolution
+        (будет добавлена в Gate A2).
+        """
+        # Idempotency: проверка по source_ref
+        if payload.source_ref:
+            existing = await uow.operations.get_by_source_ref(
+                source_ref=payload.source_ref,
+                creation_source="source_document",
+                created_by_user_id=user_id,
+            )
+            if existing is not None:
+                if existing.client_request_hash is not None and payload.client_request_id:
+                    computed_hash = OperationsService._compute_client_request_hash(payload)
+                    if existing.client_request_hash == computed_hash:
+                        return {"operation": existing}
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "code": "source_document_idempotency_conflict",
+                            "message": (
+                                f"Source document with source_ref "
+                                f"'{payload.source_ref}' was already used with a different payload"
+                            ),
+                        },
+                    )
+                # If no client_request_hash to compare, still return existing for safety
+                return {"operation": existing}
+
+        # Валидация operation_type и sites
+        await OperationsService._validate_operation_type(payload.operation_type)
+        await OperationsService._validate_operation_sites(uow, payload)
+
+        # Валидация item_id для каждой строки
+        for line_data in payload.lines:
+            item = await uow.catalog.get_item_by_id(line_data.item_id)
+            if item is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "source_document_line_unresolvable",
+                        "line_number": line_data.line_number,
+                        "item_id": line_data.item_id,
+                        "reason": "item_not_found",
+                    },
+                )
+            if not item.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "source_document_line_inactive",
+                        "line_number": line_data.line_number,
+                        "item_id": line_data.item_id,
+                        "canonical_item_id": item.id,
+                    },
+                )
+            if item.deleted_at is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "source_document_line_deleted",
+                        "line_number": line_data.line_number,
+                        "item_id": line_data.item_id,
+                        "canonical_item_id": item.id,
+                    },
+                )
+
+        # Создание операции
+        effective_at = payload.effective_at or datetime.now(UTC)
+        display_number = _compute_operation_display_number(payload.site_id, effective_at)
+
+        client_request_hash = None
+        if payload.client_request_id:
+            client_request_hash = OperationsService._compute_client_request_hash(payload)
+
+        operation = await uow.operations.create_operation(
+            site_id=payload.site_id,
+            operation_type=payload.operation_type,
+            created_by_user_id=user_id,
+            effective_at=effective_at,
+            source_site_id=payload.source_site_id,
+            destination_site_id=payload.destination_site_id,
+            issued_to_user_id=payload.issued_to_user_id,
+            issued_to_name=payload.issued_to_name,
+            issue_object_id=payload.issue_object_id,
+            issue_object_name_snapshot=payload.issue_object_name_snapshot,
+            acceptance_required=payload.operation_type in ACCEPTANCE_REQUIRED_TYPES,
+            notes=payload.notes,
+            client_request_id=payload.client_request_id,
+            client_request_hash=client_request_hash,
+            display_number=display_number,
+            origin="user",  # backward compat
+        )
+        # Проставляем creation_source и source_ref напрямую
+        operation.creation_source = "source_document"
+        operation.source_ref = payload.source_ref
+
+        # Создаём строки с SOURCE snapshot
+        for line_data in payload.lines:
+            item = await uow.catalog.get_item_by_id(line_data.item_id)
+            if item is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"item with id {line_data.item_id} not found",
+                )
+
+            unit = await uow.catalog.get_unit_by_id(item.unit_id)
+            category = await uow.catalog.get_category_by_id(item.category_id)
+
+            # Сначала SOURCE snapshot (от исходного документа)
+            # Потом catalog snapshot (от draft-времени — будет перезаписан на submit)
+            await uow.operations.create_operation_line(
+                operation_id=operation.id,
+                line_number=line_data.line_number,
+                inventory_subject_id=None,  # будет создан на submit
+                item_id=line_data.item_id,  # уже валидирован
+                qty=line_data.qty,
+                batch=line_data.batch,
+                comment=line_data.comment,
+                source_item_name=line_data.source_item_name,
+                source_item_sku=line_data.source_item_sku,
+                source_unit_name=line_data.source_unit_name,
+                source_category_name=line_data.source_category_name,
+                item_name_snapshot=item.name,
+                item_sku_snapshot=item.sku,
+                unit_name_snapshot=unit.name if unit else None,
+                unit_symbol_snapshot=unit.symbol if unit else None,
+                category_name_snapshot=category.name if category else None,
+            )
+
+        created_operation = await uow.operations.get_operation_by_id(operation.id)
+
+        # Draft waybill
+        draft_doc_type = draft_document_type_for_operation(created_operation.operation_type)
+        if draft_doc_type:
+            try:
+                async with uow.session.begin_nested():
+                    await DocumentService.generate_from_operation(
+                        uow=uow,
+                        operation_id=created_operation.id,
+                        document_type=draft_doc_type,
+                        auto_finalize=False,
+                        created_by_user_id=user_id,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "waybill_auto_create_failed",
+                    operation_id=str(created_operation.id),
+                    operation_type=created_operation.operation_type,
+                    error=str(exc),
+                )
+
+        # Audit
+        await record_audit_event(
+            uow,
+            event_type="operation.create",
+            actor_user_id=user_id,
+            site_id=payload.site_id,
+            entity_type="operation",
+            entity_id=str(created_operation.id),
+            summary=(
+                f"Пользователь создал черновик операции №{created_operation.short_id} "
+                f"из source-document ({payload.source_document_type})"
+                if hasattr(created_operation, "short_id") and created_operation.short_id
+                else f"Создан черновик операции из source-document ({payload.source_document_type})"
+            ),
+            changes={
+                "creation_source": "source_document",
+                "source_ref": payload.source_ref,
+                "source_document_type": payload.source_document_type,
+                "lines_count": len(payload.lines),
+            },
         )
         return {"operation": created_operation}
 

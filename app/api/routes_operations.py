@@ -22,6 +22,7 @@ from app.schemas.operation import (
     OperationSubmit,
     OperationType,
     OperationUpdate,
+    SourceDocumentOperationCreate,
 )
 from app.services.operations_policy import OperationsPolicy
 from app.services.operations_service import OperationsService
@@ -167,6 +168,40 @@ async def create_operation(
 
     operation = result["operation"]
     logger.info("create_operation", request_id=get_request_id(request), id=operation.id, user=identity.user_id)
+    return OperationResponse.model_validate(operation)
+
+
+@router.post("/from-source-document", response_model=OperationResponse)
+async def create_operation_from_source_document(
+    payload: SourceDocumentOperationCreate,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+) -> OperationResponse:
+    """Создать draft операцию из source-document (накладная, OCR, импорт).
+
+    Schema физически не допускает temporary_item.
+    Каждая строка обязана иметь item_id.
+    Endpoint самостоятельно проставляет creation_source='source_document'.
+    """
+    OperationsPolicy.require_create_draft(identity, payload.site_id)
+
+    async with uow:
+        result = await OperationsService.create_operation_from_source_document(
+            uow=uow,
+            payload=payload,
+            user_id=identity.user_id,
+        )
+
+    operation = result["operation"]
+    logger.info(
+        "create_operation_from_source_document",
+        request_id=get_request_id(request),
+        id=operation.id,
+        source_ref=payload.source_ref,
+        source_document_type=payload.source_document_type,
+        user=identity.user_id,
+    )
     return OperationResponse.model_validate(operation)
 
 
