@@ -9,9 +9,37 @@ from app.api.deps import get_request_id, get_uow, require_user_identity
 from app.core.identity import Identity
 from app.services.corrections_service import CorrectionsService
 from app.services.uow import UnitOfWork
+from app.services.operations_policy import OperationsPolicy
 
 router = APIRouter(prefix="/operations")
 logger = structlog.get_logger()
+
+
+def _require_root(identity: Identity):
+    """All correction endpoints require root (TZ §1.1)."""
+    if not identity.is_root:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="corrections require root permissions",
+        )
+
+
+@router.get("/{operation_id}/corrections/{correction_id}")
+async def get_correction(
+    operation_id: UUID,
+    correction_id: UUID,
+    request: Request,
+    uow: UnitOfWork = Depends(get_uow),
+    identity: Identity = Depends(require_user_identity),
+):
+    """Get a correction draft by ID."""
+    _require_root(identity)
+    async with uow:
+        from app.services.corrections_service import CorrectionsService
+        correction = await uow.corrections.get_correction_by_id(correction_id)
+        if correction is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="correction not found")
+        return CorrectionsService._correction_to_dict(correction)
 
 
 @router.post("/{operation_id}/corrections")
@@ -26,6 +54,7 @@ async def begin_correction(
     INV-C7: Клонирует все baseline lines (не пустой).
     INV-C19: Partial unique index — одна active draft на operation.
     """
+    _require_root(identity)
     async with uow:
         result = await CorrectionsService.begin_correction(
             uow=uow,
@@ -56,6 +85,7 @@ async def update_correction_put(
 
     INV-C9: PUT full target state. Отсутствие строки = REMOVED.
     """
+    _require_root(identity)
     expected_version = body.get("expected_version")
     if expected_version is None:
         raise HTTPException(
@@ -90,6 +120,7 @@ async def add_correction_line(
     identity: Identity = Depends(require_user_identity),
 ):
     """POST a new line to a correction draft."""
+    _require_root(identity)
     expected_version = body.get("expected_version")
     if expected_version is None:
         raise HTTPException(
@@ -119,6 +150,7 @@ async def update_correction_line(
     identity: Identity = Depends(require_user_identity),
 ):
     """PATCH a line in a correction draft."""
+    _require_root(identity)
     expected_version = body.get("expected_version")
     if expected_version is None:
         raise HTTPException(
@@ -148,6 +180,7 @@ async def delete_correction_line(
     identity: Identity = Depends(require_user_identity),
 ):
     """DELETE a line from a correction draft."""
+    _require_root(identity)
     body = await request.json()
     expected_version = body.get("expected_version")
     if expected_version is None:
@@ -177,6 +210,7 @@ async def submit_correction(
     identity: Identity = Depends(require_user_identity),
 ):
     """Submit a correction: compute diff, validate, apply effects atomically."""
+    _require_root(identity)
     expected_version = body.get("expected_version")
     if expected_version is None:
         raise HTTPException(
@@ -211,6 +245,7 @@ async def abandon_correction(
     identity: Identity = Depends(require_user_identity),
 ):
     """Abandon a correction draft."""
+    _require_root(identity)
     body = await request.json()
     expected_version = body.get("expected_version")
     if expected_version is None:

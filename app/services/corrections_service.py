@@ -214,13 +214,31 @@ class CorrectionsService:
                 )
 
         # Build normalized lines: ensure line_uuid for added lines
+        # If client passes line_uuid for a line not in baseline → 422
+        baseline_lines = set()
+        if hasattr(correction, 'base_operation_revision_id') and correction.base_operation_revision_id:
+            baseline_rev = await uow.operation_revisions.get_revision_by_id(
+                correction.base_operation_revision_id,
+            )
+            if baseline_rev:
+                baseline_lines = {bl.line_uuid for bl in baseline_rev.lines}
+
         normalized_lines = []
         for line_data in lines:
+            client_lu = line_data.get("line_uuid")
+            if client_lu is not None and client_lu not in baseline_lines:
+                # Client supplied a UUID for what looks like an added line → 422
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "correction_added_line_uuid_prohibited",
+                        "message": "client must not supply line_uuid for added lines; server generates it",
+                    },
+                )
             if "line_uuid" not in line_data or line_data["line_uuid"] is None:
                 line_data["line_uuid"] = uuid4()
-            # Validate new item for lines without line_uuid in baseline (added)
             if line_data.get("item_id") is not None:
-                CorrectionsService._validate_new_item(uow, line_data["item_id"])
+                await CorrectionsService._validate_new_item(uow, line_data["item_id"])
             normalized_lines.append(line_data)
 
         # Replace all lines
@@ -255,7 +273,7 @@ class CorrectionsService:
 
         line_uuid = uuid4()
         if line_data.get("item_id") is not None:
-            CorrectionsService._validate_new_item(uow, line_data["item_id"])
+            await CorrectionsService._validate_new_item(uow, line_data["item_id"])
 
         await uow.corrections.create_correction_line(
             correction_id=correction_id,
@@ -304,7 +322,7 @@ class CorrectionsService:
         if "qty" in updates:
             line.qty = Decimal(str(updates["qty"]))
         if "item_id" in updates:
-            CorrectionsService._validate_new_item(uow, updates["item_id"])
+            await CorrectionsService._validate_new_item(uow, updates["item_id"])
             line.item_id = updates["item_id"]
         if "batch" in updates:
             line.batch = updates.get("batch")
@@ -404,6 +422,32 @@ class CorrectionsService:
         Lock order (INV-C18):
         Correction → Operation → inventory_subject_id ASC → balances → Documents
         """
+        # Idempotency check (MUST come before status check — INV-C13)
+        if idempotency_key:
+            existing_by_key = await uow.corrections.get_correction_by_idempotency_key(
+                correction.operation_id, idempotency_key,
+            )
+            if existing_by_key is not None:
+                if existing_by_key.id != correction_id:
+                    # Different correction with same key
+                    if existing_by_key.status == "applied":
+                        return await CorrectionsService._build_submit_response(
+                            uow, existing_by_key,
+                        )
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "code": "idempotency_key_conflict",
+                            "existing_correction_id": str(existing_by_key.id),
+                            "existing_status": existing_by_key.status,
+                        },
+                    )
+                if existing_by_key.status == "applied":
+                    # Same correction already applied — idempotent retry
+                    return await CorrectionsService._build_submit_response(
+                        uow, existing_by_key,
+                    )
+
         # Lock 1: Correction
         correction = await uow.corrections.get_correction_by_id_for_update(correction_id)
         if correction is None:
@@ -418,27 +462,6 @@ class CorrectionsService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "correction_version_conflict", "current_version": int(correction.version)},
             )
-
-        # Idempotency check
-        if idempotency_key:
-            existing = await uow.corrections.get_correction_by_idempotency_key(
-                correction.operation_id, idempotency_key,
-            )
-            if existing is not None and existing.id != correction.id:
-                # Different correction with same key — return its result
-                if existing.status == "applied":
-                    return await CorrectionsService._build_submit_response(
-                        uow, existing,
-                    )
-                elif existing.status == "draft":
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail={
-                            "code": "idempotency_key_conflict",
-                            "existing_correction_id": str(existing.id),
-                            "existing_status": existing.status,
-                        },
-                    )
 
         # Lock 2: Operation
         operation = await uow.operations.get_operation_by_id_for_update(correction.operation_id)
@@ -481,8 +504,8 @@ class CorrectionsService:
                 extra={"computed_diff": CorrectionsService._diff_to_dict(diff)},
             )
 
-        # Lock 3: inventory_subjects in ASC order
-        affected_subjects = CorrectionsService._collect_affected_subjects(diff)
+        # Lock 3: inventory_subjects in ASC order (INV-C18)
+        affected_subjects = await CorrectionsService._collect_affected_subjects(uow, diff)
         for subject_id in sorted(affected_subjects):
             await uow.inventory_subjects.get_for_update(subject_id)
 
@@ -542,37 +565,36 @@ class CorrectionsService:
         )
 
         # Generate documents (INV-C16: from OperationRevisionLine, NOT OperationLine)
+        from app.services.document_service import DocumentService, submit_document_type_for_operation
+        old_active_docs = await CorrectionsService._get_active_documents(
+            uow, correction.operation_id,
+        )
+
+        doc_type = submit_document_type_for_operation(operation.operation_type)
         new_documents = []
-        try:
-            from app.services.document_service import DocumentService
-            old_active_docs = await CorrectionsService._get_active_documents(
-                uow, correction.operation_id,
+        if doc_type:
+            result = await DocumentService.generate_from_operation(
+                uow=uow,
+                operation_id=operation.id,
+                document_type=doc_type,
+                auto_finalize=True,
+                created_by_user_id=user_id,
+                operation_revision_id=new_revision.id,
             )
+            new_doc = result["document"]
+            new_doc.operation_revision_id = new_revision.id
+            await uow.session.flush()
+            new_documents.append(new_doc)
 
-            # Generate new documents from the new revision
-            from app.services.document_service import submit_document_type_for_operation
-            doc_type = submit_document_type_for_operation(operation.operation_type)
-            if doc_type:
-                result = await DocumentService.generate_from_operation(
-                    uow=uow,
-                    operation_id=operation.id,
-                    document_type=doc_type,
-                    auto_finalize=True,
-                    created_by_user_id=user_id,
-                )
-                new_doc = result["document"]
-                # Link document to the revision
-                new_doc.operation_revision_id = new_revision.id
-                await uow.session.flush()
-                new_documents.append(new_doc)
+            # Supersede old documents after new one is created
+            superseded_docs = []
+            for old_doc in old_active_docs:
+                if old_doc.id != new_doc.id and old_doc.status not in ("void", "superseded"):
+                    old_doc.status = "superseded"
+                    superseded_docs.append(old_doc)
+            await uow.session.flush()
 
-                # Supersede old documents
-                for old_doc in old_active_docs:
-                    if old_doc.id != new_doc.id and old_doc.status not in ("void", "superseded"):
-                        old_doc.status = "superseded"
-                        await uow.session.flush()
-
-            # Audit: document.revision_created and document.superseded
+            # Audit: document.revision_created
             for nd in new_documents:
                 await record_audit_event(
                     uow,
@@ -590,23 +612,21 @@ class CorrectionsService:
                         "correction_id": str(correction.id),
                     },
                 )
-            for old_doc in old_active_docs:
-                if old_doc.status == "superseded":
-                    await record_audit_event(
-                        uow,
-                        event_type="document.superseded",
-                        actor_user_id=user_id,
-                        site_id=operation.site_id,
-                        entity_type="document",
-                        entity_id=str(old_doc.id),
-                        summary=f"Document superseded by correction",
-                        changes={
-                            "old_document_id": str(old_doc.id),
-                            "reason": "correction_applied",
-                        },
-                    )
-        except Exception as e:
-            logger.warning("document_generation_failed", error=str(e))
+            # Audit: document.superseded
+            for old_doc in superseded_docs:
+                await record_audit_event(
+                    uow,
+                    event_type="document.superseded",
+                    actor_user_id=user_id,
+                    site_id=operation.site_id,
+                    entity_type="document",
+                    entity_id=str(old_doc.id),
+                    summary=f"Document superseded by correction",
+                    changes={
+                        "old_document_id": str(old_doc.id),
+                        "reason": "correction_applied",
+                    },
+                )
 
         # Write audit effects
         audit_event = await record_audit_event(
@@ -812,7 +832,7 @@ class CorrectionsService:
         # Validate new items for added lines
         for added in diff.added:
             if added["item_id"] is not None:
-                CorrectionsService._validate_new_item(uow, added["item_id"])
+                await CorrectionsService._validate_new_item(uow, added["item_id"])
 
         # Validate removed lines: sufficient balance check
         for removed in diff.removed:
@@ -833,24 +853,16 @@ class CorrectionsService:
         for ir in diff.item_replaced:
             # New item must be active
             if ir["new_item_id"] is not None:
-                CorrectionsService._validate_new_item(uow, ir["new_item_id"])
-            # Old side reversal: sufficient balance of old item
-            if ir["diff_qty"] < 0:
+                await CorrectionsService._validate_new_item(uow, ir["new_item_id"])
+            # Old side reversal: sufficient balance of FULL old_qty (not just diff_qty)
+            if ir["old_item_id"] is not None and ir["old_qty"] > 0:
                 await CorrectionsService._validate_sufficient_balance(
-                    uow, operation, ir["old_item_id"], abs(ir["diff_qty"]), ir["line_uuid"],
+                    uow, operation, ir["old_item_id"], ir["old_qty"], ir["line_uuid"],
                 )
 
     @staticmethod
-    def _validate_new_item(uow: UnitOfWork, item_id: int) -> None:
-        """Validate new Item for added/replaced: active, deleted_at IS NULL."""
-        import asyncio
-
-        # We can't await inside a sync method - this is called in a loop
-        # Actually this is a static method that takes uow, so let's make it async
-        pass
-
-    @staticmethod
-    async def _validate_new_item_async(uow: UnitOfWork, item_id: int) -> None:
+    async def _validate_new_item(uow: UnitOfWork, item_id: int) -> None:
+        """Validate new Item for added/replaced: active, deleted_at IS NULL (INV-C14)."""
         item = await uow.catalog.get_item_by_id(item_id)
         if item is None:
             raise HTTPException(
@@ -862,7 +874,6 @@ class CorrectionsService:
                 },
             )
         if item.deleted_at is not None or not item.is_active:
-            import json
             reason = "soft_deleted" if item.deleted_at is not None else "inactive"
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -872,11 +883,6 @@ class CorrectionsService:
                     "reason": reason,
                 },
             )
-
-    @staticmethod
-    def _validate_new_item(uow, item_id):
-        """Synchronous wrapper used before flushing - the actual check is async."""
-        pass
 
     @staticmethod
     async def _validate_sufficient_balance(
@@ -914,11 +920,20 @@ class CorrectionsService:
             )
 
     @staticmethod
-    def _collect_affected_subjects(diff: ComputedDiff) -> set[int]:
+    async def _collect_affected_subjects(
+        uow: UnitOfWork, diff: ComputedDiff,
+    ) -> set[int]:
         """Collect all inventory_subject_ids affected by the diff."""
         subjects: set[int] = set()
-        # Would need to look up subject_ids from item_ids in _apply_deltas
-        # For now return empty - subjects are resolved during apply
+        item_ids: set[int] = set()
+        for d in diff.deltas:
+            item_id = d.get("item_id") or d.get("new_item_id") or d.get("old_item_id")
+            if item_id is not None:
+                item_ids.add(item_id)
+        for item_id in item_ids:
+            subject = await uow.inventory_subjects.get_by_item_id(item_id)
+            if subject is not None:
+                subjects.add(subject.id)
         return subjects
 
     @staticmethod
