@@ -243,6 +243,9 @@ class CorrectionsService:
         # Replace all lines
         new_lines = await uow.corrections.replace_all_lines(correction_id, normalized_lines)
 
+        # Expire cached correction so next read sees fresh lines
+        await uow.session.refresh(correction, ["lines"])
+
         # Bump version on the correction
         await uow.corrections.update_correction_status(
             correction_id, "draft", expected_version=expected_version,
@@ -587,6 +590,7 @@ class CorrectionsService:
             for old_doc in old_active_docs:
                 if old_doc.id != new_doc.id and old_doc.status not in ("void", "superseded"):
                     old_doc.status = "superseded"
+                    new_doc.supersedes_document_id = old_doc.id
                     superseded_docs.append(old_doc)
             await uow.session.flush()
 

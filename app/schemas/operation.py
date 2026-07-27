@@ -82,6 +82,7 @@ class OperationCreate(BaseModel):
         max_length=255,
     )
     lines: list[OperationLineCreate] = Field(min_length=1)
+    acceptance_required: bool = False
     notes: str | None = Field(default=None, max_length=1000)
     client_request_id: str | None = Field(default=None, max_length=100)
 

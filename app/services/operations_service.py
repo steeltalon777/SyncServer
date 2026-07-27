@@ -657,7 +657,12 @@ class OperationsService:
             issued_to_name=operation_data.issued_to_name,
         )
 
-        acceptance_required = operation_data.operation_type in ACCEPTANCE_REQUIRED_TYPES
+        # honour explicit acceptance_required from client, otherwise use type default
+        fields_set = getattr(operation_data, "model_fields_set", set())
+        if "acceptance_required" in fields_set:
+            acceptance_required = operation_data.acceptance_required
+        else:
+            acceptance_required = operation_data.operation_type in ACCEPTANCE_REQUIRED_TYPES
         effective_at = operation_data.effective_at or datetime.now(UTC)
         display_number = _compute_operation_display_number(operation_data.site_id, effective_at)
         operation = await uow.operations.create_operation(
