@@ -215,19 +215,18 @@ class CorrectionsService:
 
         # Build normalized lines: ensure line_uuid for added lines
         # If client passes line_uuid for a line not in baseline → 422
-        baseline_lines = set()
-        if hasattr(correction, 'base_operation_revision_id') and correction.base_operation_revision_id:
+        baseline_lines: set[str] = set()
+        if correction.base_operation_revision_id:
             baseline_rev = await uow.operation_revisions.get_revision_by_id(
                 correction.base_operation_revision_id,
             )
             if baseline_rev:
-                baseline_lines = {bl.line_uuid for bl in baseline_rev.lines}
+                baseline_lines = {str(bl.line_uuid) for bl in baseline_rev.lines}
 
         normalized_lines = []
         for line_data in lines:
             client_lu = line_data.get("line_uuid")
             if client_lu is not None and client_lu not in baseline_lines:
-                # Client supplied a UUID for what looks like an added line → 422
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail={
@@ -422,18 +421,23 @@ class CorrectionsService:
         Lock order (INV-C18):
         Correction → Operation → inventory_subject_id ASC → balances → Documents
         """
-        # Idempotency check (MUST come before status check — INV-C13)
+        # Lock 1: Correction
+        correction = await uow.corrections.get_correction_by_id_for_update(correction_id)
+        if correction is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="correction not found")
+
+        # Idempotency check BEFORE status check (INV-C13)
         if idempotency_key:
+            correction.idempotency_key = idempotency_key
             existing_by_key = await uow.corrections.get_correction_by_idempotency_key(
                 correction.operation_id, idempotency_key,
             )
             if existing_by_key is not None:
+                if existing_by_key.status == "applied":
+                    return await CorrectionsService._build_submit_response(
+                        uow, existing_by_key,
+                    )
                 if existing_by_key.id != correction_id:
-                    # Different correction with same key
-                    if existing_by_key.status == "applied":
-                        return await CorrectionsService._build_submit_response(
-                            uow, existing_by_key,
-                        )
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
                         detail={
@@ -442,16 +446,8 @@ class CorrectionsService:
                             "existing_status": existing_by_key.status,
                         },
                     )
-                if existing_by_key.status == "applied":
-                    # Same correction already applied — idempotent retry
-                    return await CorrectionsService._build_submit_response(
-                        uow, existing_by_key,
-                    )
+            await uow.session.flush()
 
-        # Lock 1: Correction
-        correction = await uow.corrections.get_correction_by_id_for_update(correction_id)
-        if correction is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="correction not found")
         if correction.status != "draft":
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

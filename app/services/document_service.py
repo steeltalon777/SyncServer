@@ -273,8 +273,10 @@ class DocumentService:
             if revision is not None:
                 revision_lines = revision.lines
 
-        # 6. Для черновиков — всегда создаём новый документ (войдируем старый).
-        #    Для проведённых — сохраняем идемпотентность.
+        # 6. Для черновиков — войдируем старый и создаём новый.
+        #    Для проведённых — идемпотентность,
+        #    НО если operation_revision_id передан — ВСЕГДА новый документ
+        #    (correction submit: старая revision уже имеет свой документ).
         if operation.status == "draft":
             await DocumentService._void_existing_documents(
                 uow=uow,
@@ -282,8 +284,10 @@ class DocumentService:
                 document_type=document_type,
                 template_name=effective_template,
             )
-            # Документы черновика всегда draft, независимо от auto_finalize.
             effective_auto_finalize = False
+        elif operation_revision_id is not None:
+            # Correction submit — всегда создаём новый, не ищем reuse
+            effective_auto_finalize = auto_finalize
         else:
             existing_document = await DocumentService._find_reusable_document(
                 uow=uow,

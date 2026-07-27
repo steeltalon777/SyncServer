@@ -21,6 +21,14 @@ class InventorySubjectsRepo:
         stmt = select(InventorySubject).where(InventorySubject.item_id == item_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_for_update(self, subject_id: int) -> InventorySubject | None:
+        stmt = (
+            select(InventorySubject)
+            .where(InventorySubject.id == subject_id)
+            .with_for_update()
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def get_by_temporary_item_id(self, temporary_item_id: int) -> InventorySubject | None:
         stmt = select(InventorySubject).where(InventorySubject.temporary_item_id == temporary_item_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()

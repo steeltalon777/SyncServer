@@ -63,7 +63,7 @@ def upgrade() -> None:
         sa.Column(
             "base_operation_revision_id",
             PGUUID(as_uuid=True),
-            nullable=False,
+            nullable=True,
         ),
         sa.Column("version", sa.Integer, nullable=False, server_default="1"),
         sa.Column("idempotency_key", sa.String(100)),
