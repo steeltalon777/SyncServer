@@ -159,6 +159,13 @@ class OperationsRepo:
             .where(Operation.id == operation_id)
             .where(Operation.deleted_at.is_(None))
             .with_for_update()
+            # Critical for the pessimistic lock to be authoritative: the caller
+            # may already hold this Operation in the session identity map (e.g.
+            # submit-flow step 2 read-only load), so without
+            # populate_existing=True SQLAlchemy returns the STALE instance and
+            # the concurrent transaction would re-submit on outdated state.
+            # (Discovered by tests/test_submit_concurrency.py, TZ 1 §13.)
+            .execution_options(populate_existing=True)
             .options(
                 selectinload(Operation.lines)
                 .selectinload(OperationLine.item)
@@ -243,15 +250,8 @@ class OperationsRepo:
         if operation is None:
             return None
         if expected_version is not None and int(operation.version) != expected_version:
-            from fastapi import HTTPException, status
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "operation_version_conflict",
-                    "message": "Операция была изменена в другой вкладке",
-                    "current_version": int(operation.version),
-                },
-            )
+            from app.services.operation_submit_errors import StaleVersionError
+            raise StaleVersionError(expected_version, int(operation.version))
         if operation.status == "draft":
             operation.status = "submitted"
             operation.submitted_by_user_id = submitted_by_user_id

@@ -157,7 +157,17 @@ async def test_expense_rejects_stale_balance(
     assert submit2.status_code == 409, f"expected 409, got {submit2.status_code}: {submit2.text}"
     data = submit2.json()
     detail = data.get("detail") or ""
-    assert "insufficient" in detail.lower(), f"expected insufficient stock message, got: {detail}"
+    assert "Недостаточно товара" in detail, f"expected insufficient stock message, got: {detail}"
+    errors = data.get("errors") or []
+    assert len(errors) == 1
+    first = errors[0]
+    assert first["code"] == "insufficient_stock"
+    assert first["scope"] == "line_group"
+    assert isinstance(first["operation_line_ids"], list) and len(first["operation_line_ids"]) == 1
+    assert first["item"]["id"] == item_id
+    assert first["stock_site"]["id"] == site_id
+    assert first["required_qty"] == "10.000"
+    assert first["available_qty"] == "0.000"
 
 
 @pytest.mark.asyncio
@@ -204,4 +214,14 @@ async def test_move_rejects_stale_balance(
     assert submit2.status_code == 409, f"expected 409, got {submit2.status_code}: {submit2.text}"
     data = submit2.json()
     detail = data.get("detail") or ""
-    assert "insufficient" in detail.lower(), f"expected insufficient stock message, got: {detail}"
+    assert "Недостаточно товара" in detail, f"expected insufficient stock message, got: {detail}"
+    errors = data.get("errors") or []
+    assert len(errors) == 1
+    first = errors[0]
+    assert first["code"] == "insufficient_stock"
+    assert first["scope"] == "line_group"
+    assert isinstance(first["operation_line_ids"], list) and len(first["operation_line_ids"]) == 1
+    assert first["item"]["id"] == item_id
+    assert first["stock_site"]["id"] == source_site_id
+    assert first["required_qty"] == "5.000"
+    assert first["available_qty"] == "0.000"

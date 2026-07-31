@@ -24,6 +24,7 @@ from app.schemas.operation import (
     OperationUpdate,
     SourceDocumentOperationCreate,
 )
+from app.schemas.operation_submit_error import ProblemEnvelope
 from app.services.operations_policy import OperationsPolicy
 from app.services.operations_service import OperationsService
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
@@ -289,7 +290,15 @@ async def update_operation_effective_at(
     return OperationResponse.model_validate(updated_operation)
 
 
-@router.post("/{operation_id}/submit", response_model=OperationResponse)
+@router.post(
+    "/{operation_id}/submit",
+    response_model=OperationResponse,
+    responses={
+        403: {"model": ProblemEnvelope, "description": "Role not permitted"},
+        404: {"model": ProblemEnvelope, "description": "Operation not found"},
+        409: {"model": ProblemEnvelope, "description": "Submit rejected"},
+    },
+)
 async def submit_operation(
     operation_id: UUID,
     submit_data: OperationSubmit,
@@ -300,20 +309,16 @@ async def submit_operation(
     if not submit_data.submit:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="submit must be true")
 
+    # The endpoint stays thin: authorisation, state, version and balance
+    # checks run inside OperationsService.submit_operation in the
+    # authoritative order (ADR-0025 §7). Domain errors are mapped to the
+    # ProblemEnvelope by the registered exception handler.
     async with uow:
-        operation = await uow.operations.get_operation_by_id(operation_id)
-        if not operation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
-
-        OperationsPolicy.require_operate_site(identity, operation.site_id)
-        OperationsPolicy.require_operation_submit_permission(identity, operation)
-        if operation.operation_type == "MOVE":
-            OperationsPolicy.require_move_access(identity, operation.source_site_id, operation.destination_site_id)
-
         result = await OperationsService.submit_operation(
             uow=uow,
             operation_id=operation_id,
             user_id=identity.user_id,
+            identity=identity,
             expected_version=submit_data.expected_version,
         )
 

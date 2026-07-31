@@ -1,3 +1,9 @@
+"""Operation domain service with strict server-side validation.
+
+Submit flow uses the OperationSubmitError envelope. See ADR-0025
+(`docs/adr/0025-operation-submit-domain-errors.md`).
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -9,6 +15,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from app.core.catalog_defaults import UNCATEGORIZED_CATEGORY_CODE, UNCATEGORIZED_CATEGORY_NAME
+from app.core.identity import Identity
 from app.core.search_utils import normalize_for_storage
 from app.models.audit_item_effect import AuditItemEffect
 from app.models.category import Category
@@ -24,6 +31,17 @@ from app.schemas.operation import (
 from app.services.catalog_read_service import CatalogReadService
 from app.services.document_service import DocumentService, draft_document_type_for_operation, submit_document_type_for_operation, _compute_operation_display_number
 from app.services.audit_helper import record_audit_event
+from app.services.operation_submit_errors import (
+    InsufficientIssuedBalanceError,
+    InsufficientStockError,
+    IssuedStockDeficit,
+    OperationInWrongStateError,
+    OperationNotFoundError,
+    RoleNotPermittedError,
+    StaleVersionError,
+    StockDeficit,
+)
+from app.services.operations_policy import OperationsPolicy
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 from app.services.uow import UnitOfWork
 from fastapi import HTTPException, status
@@ -111,6 +129,305 @@ class OperationsService:
         current_qty = balance.qty if balance is not None else Decimal("0")
         if current_qty < required_qty:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=error_message)
+
+    # ─── Submit-boundary guards (ADR-0025 §4, TZ §7.1) ─────────────────────
+    #
+    # OperationsPolicy / OperationsWorkflowPolicy keep raising HTTPException
+    # for non-submit flows. The submit service converts those HTTP-level
+    # errors into the domain exceptions handled by the registered envelope
+    # handler, so the actual submit flow never leaks a raw HTTPException
+    # from these sources.
+
+    @staticmethod
+    def _require_draft_for_submit_boundary(operation) -> None:
+        """State guard for submit: convert HTTPException into OperationInWrongStateError."""
+        try:
+            OperationsWorkflowPolicy.require_draft_for_submit(operation)
+        except HTTPException as exc:
+            raise OperationInWrongStateError(
+                current_state=operation.status,
+                allowed_states=["draft"],
+            ) from exc
+
+    @staticmethod
+    def _require_submit_permission(identity: Identity, operation) -> None:
+        """Authorisation for submit: convert policy HTTPException(403) into RoleNotPermittedError.
+
+        Called twice per submit — before taking the operation lock (TZ §7.1
+        step 3) and again on the locked operation (step 7). Non-403 errors
+        (e.g. MOVE without source/destination) are re-raised unchanged.
+        """
+        try:
+            OperationsPolicy.require_operate_site(identity, operation.site_id)
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_403_FORBIDDEN:
+                raise RoleNotPermittedError() from exc
+            raise
+        try:
+            OperationsPolicy.require_operation_submit_permission(identity, operation)
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_403_FORBIDDEN:
+                raise RoleNotPermittedError() from exc
+            raise
+        if operation.operation_type == "MOVE":
+            try:
+                OperationsPolicy.require_move_access(identity, operation.source_site_id, operation.destination_site_id)
+            except HTTPException as exc:
+                if exc.status_code == status.HTTP_403_FORBIDDEN:
+                    raise RoleNotPermittedError() from exc
+                raise
+
+    @staticmethod
+    async def _lock_operation(uow: UnitOfWork, operation_id: UUID, operation) -> object:
+        """Take the row lock on the operation (TZ §7.1 step 4).
+
+        Falls back to the read-only snapshot when the UoW does not expose
+        the lock method (unit-test mocks).
+        """
+        lock_method = getattr(uow.operations, "get_operation_by_id_for_update", None)
+        if lock_method is None:
+            return operation
+        locked = await lock_method(operation_id)
+        if locked is None:
+            raise OperationNotFoundError(operation_id)
+        return locked
+
+    # ─── Two-phase aggregated balance check (ADR-0025 §5, TZ §5) ───────────
+
+    @staticmethod
+    async def _lookup_subject_display(
+        uow: UnitOfWork,
+        subject_id: int,
+        subject_cache: dict[int, object],
+        unit_cache: dict[int, object],
+    ) -> tuple[int | None, str, int | None, str | None, str | None]:
+        """Best-effort display lookup for a deficit group.
+
+        Returns (item_id, item_name, unit_id, unit_name, unit_symbol).
+        Falls back to "(неизвестно)" / None when lookups fail.
+        """
+        subject = subject_cache.get(subject_id)
+        if subject is None:
+            try:
+                subject = await uow.inventory_subjects.get_by_id(subject_id)
+            except Exception:
+                subject = None
+            subject_cache[subject_id] = subject
+
+        item_id = getattr(subject, "item_id", None) if subject is not None else None
+        item_name = "(неизвестно)"
+        unit_id: int | None = None
+        if item_id is not None:
+            try:
+                item = await uow.catalog.get_item_by_id(item_id)
+            except Exception:
+                item = None
+            if item is not None:
+                item_name = getattr(item, "name", None) or "(неизвестно)"
+                unit_id = getattr(item, "unit_id", None)
+
+        unit_name: str | None = None
+        unit_symbol: str | None = None
+        if unit_id is not None:
+            unit = unit_cache.get(unit_id)
+            if unit is None:
+                try:
+                    unit = await uow.catalog.get_unit_by_id(unit_id)
+                except Exception:
+                    unit = None
+                unit_cache[unit_id] = unit
+            if unit is not None:
+                unit_name = getattr(unit, "name", None)
+                unit_symbol = getattr(unit, "symbol", None)
+        return item_id, item_name, unit_id, unit_name, unit_symbol
+
+    @staticmethod
+    async def _build_stock_deficit(
+        uow: UnitOfWork,
+        *,
+        site_id: int,
+        subject_id: int,
+        lines: list,
+        available: Decimal,
+        site_name_cache: dict[int, str],
+        subject_cache: dict[int, object],
+        unit_cache: dict[int, object],
+    ) -> StockDeficit:
+        if site_id not in site_name_cache:
+            try:
+                site = await uow.sites.get_by_id(site_id)
+            except Exception:
+                site = None
+            site_name_cache[site_id] = getattr(site, "name", None) or "(неизвестно)"
+        item_id, item_name, unit_id, unit_name, unit_symbol = await OperationsService._lookup_subject_display(
+            uow,
+            subject_id,
+            subject_cache,
+            unit_cache,
+        )
+        return StockDeficit(
+            stock_site_id=site_id,
+            stock_site_name=site_name_cache[site_id],
+            item_id=item_id,
+            item_name=item_name,
+            unit_id=unit_id,
+            unit_name=unit_name,
+            unit_symbol=unit_symbol,
+            required_qty=sum((qty for _, qty in lines), Decimal("0")),
+            available_qty=available,
+            operation_line_ids=[int(line.id) for line, _ in lines],
+        )
+
+    @staticmethod
+    async def _build_issued_stock_deficit(
+        uow: UnitOfWork,
+        *,
+        issue_object_id: int,
+        subject_id: int,
+        lines: list,
+        available: Decimal,
+        subject_cache: dict[int, object],
+        unit_cache: dict[int, object],
+    ) -> IssuedStockDeficit:
+        issue_object_name = "(неизвестно)"
+        try:
+            issue_object = await uow.issue_objects.get_by_id(issue_object_id)
+        except Exception:
+            issue_object = None
+        if issue_object is not None:
+            issue_object_name = getattr(issue_object, "display_name", None) or "(неизвестно)"
+        item_id, item_name, unit_id, unit_name, unit_symbol = await OperationsService._lookup_subject_display(
+            uow,
+            subject_id,
+            subject_cache,
+            unit_cache,
+        )
+        return IssuedStockDeficit(
+            issue_object_id=issue_object_id,
+            issue_object_name=issue_object_name,
+            item_id=item_id,
+            item_name=item_name,
+            unit_id=unit_id,
+            unit_name=unit_name,
+            unit_symbol=unit_symbol,
+            required_qty=sum((qty for _, qty in lines), Decimal("0")),
+            available_qty=available,
+            operation_line_ids=[int(line.id) for line, _ in lines],
+        )
+
+    @staticmethod
+    async def _check_submit_balance_sufficiency(uow: UnitOfWork, operation) -> None:
+        """Two-phase aggregated balance check for submit (TZ §5, ADR-0025 §5).
+
+        Phase 1 collects every balance-consuming line effect grouped by
+        balance key — `(site_id, inventory_subject_id)` for warehouse and
+        `(issue_object_id, inventory_subject_id)` for issued. RECEIVE and
+        positive ADJUSTMENT lines do not consume balance and are skipped.
+
+        Phase 2 locks each unique key exactly once in global order
+        (`sorted(keys)`) and compares the summed required quantity against
+        the available quantity read inside the lock. All deficient groups
+        are collected into a single domain error, ordered by the line_number
+        of the first line of each group.
+        """
+        warehouse_effects: dict[tuple[int, int], list] = {}
+        issued_effects: dict[tuple[int, int], list] = {}
+        op_type = operation.operation_type
+
+        def _line_sort_key(line):
+            line_number = getattr(line, "line_number", None)
+            if line_number is not None:
+                return (False, int(line_number))
+            return (True, int(getattr(line, "id", 0)))
+
+        # Phase 1: one pass over lines ordered by line_number.
+        for line in sorted(operation.lines, key=_line_sort_key):
+            if line.inventory_subject_id is None:
+                continue
+            subject_id = int(line.inventory_subject_id)
+            quantity = Decimal(line.qty)
+            if op_type == "RECEIVE":
+                continue
+            if op_type == "ADJUSTMENT":
+                if quantity < 0:
+                    warehouse_effects.setdefault((operation.site_id, subject_id), []).append((line, abs(quantity)))
+                continue
+            if op_type == "WRITE_OFF" and operation.issue_object_id is not None:
+                issued_effects.setdefault((operation.issue_object_id, subject_id), []).append((line, quantity))
+                continue
+            if op_type == "MOVE":
+                if operation.source_site_id is not None:
+                    warehouse_effects.setdefault((operation.source_site_id, subject_id), []).append((line, quantity))
+                continue
+            if op_type == "ISSUE_RETURN":
+                if operation.issue_object_id is not None:
+                    issued_effects.setdefault((operation.issue_object_id, subject_id), []).append((line, quantity))
+                continue
+            # EXPENSE, WRITE_OFF (no issue object), ISSUE
+            warehouse_effects.setdefault((operation.site_id, subject_id), []).append((line, quantity))
+
+        deficits: list[tuple[int, StockDeficit]] = []
+        issued_deficits: list[tuple[int, IssuedStockDeficit]] = []
+        site_name_cache: dict[int, str] = {}
+        subject_cache: dict[int, object] = {}
+        unit_cache: dict[int, object] = {}
+
+        # Phase 2: global key order → one lock per unique key, no deadlock.
+        for key in sorted(warehouse_effects.keys()):
+            site_id, subject_id = key
+            balance = await uow.balances.get_for_update(site_id=site_id, inventory_subject_id=subject_id)
+            available = Decimal(balance.qty) if balance is not None else Decimal("0")
+            lines = warehouse_effects[key]
+            sum_required = sum((qty for _, qty in lines), Decimal("0"))
+            if sum_required > available:
+                first_line_number = min(int(getattr(line, "line_number", 0)) for line, _ in lines)
+                deficit = await OperationsService._build_stock_deficit(
+                    uow,
+                    site_id=site_id,
+                    subject_id=subject_id,
+                    lines=lines,
+                    available=available,
+                    site_name_cache=site_name_cache,
+                    subject_cache=subject_cache,
+                    unit_cache=unit_cache,
+                )
+                deficits.append((first_line_number, deficit))
+
+        for key in sorted(issued_effects.keys()):
+            issue_object_id, subject_id = key
+            balance = await uow.asset_registers.get_issued_balance(
+                issue_object_id=issue_object_id,
+                inventory_subject_id=subject_id,
+            )
+            available = Decimal(balance.qty) if balance is not None else Decimal("0")
+            lines = issued_effects[key]
+            sum_required = sum((qty for _, qty in lines), Decimal("0"))
+            if sum_required > available:
+                first_line_number = min(int(getattr(line, "line_number", 0)) for line, _ in lines)
+                issued_deficits.append((
+                    first_line_number,
+                    await OperationsService._build_issued_stock_deficit(
+                        uow,
+                        issue_object_id=issue_object_id,
+                        subject_id=subject_id,
+                        lines=lines,
+                        available=available,
+                        subject_cache=subject_cache,
+                        unit_cache=unit_cache,
+                    ),
+                ))
+
+        deficits.sort(key=lambda item: item[0])
+        issued_deficits.sort(key=lambda item: item[0])
+
+        if deficits or issued_deficits:
+            if deficits:
+                raise InsufficientStockError(deficits=[deficit for _, deficit in deficits])
+            # Warehouse deficits have priority (TZ §5.1). Issued-only flows
+            # (ISSUE_RETURN) land here; if both ever co-occur the warehouse
+            # error is raised above and the issued deficits are dropped for
+            # debug logging only.
+            raise InsufficientIssuedBalanceError(deficits=[deficit for _, deficit in issued_deficits])
 
     @staticmethod
     async def _validate_operation_type(operation_type: OperationType) -> None:
@@ -1566,13 +1883,51 @@ class OperationsService:
         operation_id: UUID,
         user_id: UUID,
         expected_version: int | None = None,
+        identity: Identity | None = None,
     ) -> dict[str, object]:
-        try:
-            operation = await uow.operations.get_operation_by_id(operation_id)
-            OperationsWorkflowPolicy.require_exists(operation)
-            OperationsWorkflowPolicy.require_draft_for_submit(operation)
+        """Submit an operation with the authoritative guard order (TZ §7.1).
 
-            # NEW: validate resolved lines for source_document operations
+        Steps inside the transaction:
+          2. primary read-only load (OperationNotFoundError on missing);
+          3. primary authorisation (RoleNotPermittedError) before the lock;
+          4. row lock on the operation;
+          5. state check on the locked operation (state-before-version);
+          6. optimistic expected_version check on the locked operation;
+          7. re-authorisation on the locked operation;
+          8. line materialization / validation;
+          9. two-phase aggregated balance check;
+         10. single InsufficientStockError / InsufficientIssuedBalanceError;
+         11. atomic application (capture, repo submit, audit).
+
+        `identity` is optional: system flows (merge, review resolution, sync)
+        call submit without an actor identity and skip authorisation steps.
+        """
+        try:
+            # Step 2: primary safe load (no lock).
+            operation = await uow.operations.get_operation_by_id(operation_id)
+            if operation is None:
+                raise OperationNotFoundError(operation_id)
+
+            # Step 3: primary authorisation before taking the lock.
+            if identity is not None:
+                OperationsService._require_submit_permission(identity, operation)
+
+            # Step 4: take the operation row lock for authoritative checks.
+            operation = await OperationsService._lock_operation(uow, operation_id, operation)
+
+            # Step 5: state check on the locked operation (state-before-version).
+            OperationsService._require_draft_for_submit_boundary(operation)
+
+            # Step 6: optimistic version check (skipped only when the client
+            # did not pass expected_version; state/rights checks never skip).
+            if expected_version is not None and int(operation.version) != expected_version:
+                raise StaleVersionError(expected_version, int(operation.version))
+
+            # Step 7: re-authorisation on the locked operation.
+            if identity is not None:
+                OperationsService._require_submit_permission(identity, operation)
+
+            # Step 8: validate resolved lines for source_document operations
             # (у source_document temporary_item невозможен, поэтому validate ДО materialize)
             ops_cs = getattr(operation, 'creation_source', 'legacy')
             if ops_cs == "source_document":
@@ -1597,13 +1952,22 @@ class OperationsService:
             if ops_cs in ("source_document", "manual"):
                 catalog_changes = await OperationsService._freeze_catalog_snapshot(uow, operation)
 
-            # Per-call capture list for audit_item_effects. We persist
-            # effects only after the operation.submit audit event has been
-            # written so that audit_event_id is available.
+            # Ensure every line has an inventory subject before the aggregate
+            # balance check groups lines by (site_id, inventory_subject_id).
+            for line in operation.lines:
+                await OperationsService._ensure_line_inventory_subject(uow, line)
+
+            # Step 9 + 10: two-phase aggregated balance check. Raises a single
+            # InsufficientStockError / InsufficientIssuedBalanceError when any
+            # group's summed requirement exceeds its locked available quantity.
+            await OperationsService._check_submit_balance_sufficiency(uow, operation)
+
+            # Step 11: apply effects. Sufficiency was already verified in the
+            # aggregated check, so per-line _ensure_sufficient_* calls are no
+            # longer needed on the submit path.
             balance_effects_capture: list[dict] = []
 
             for line in operation.lines:
-                await OperationsService._ensure_line_inventory_subject(uow, line)
                 quantity = Decimal(line.qty)
                 if operation.operation_type == "RECEIVE":
                     if operation.acceptance_required:
@@ -1629,17 +1993,8 @@ class OperationsService:
                             note=getattr(operation, "notes", None),
                         )
                 elif operation.operation_type == "WRITE_OFF" and operation.issue_object_id is not None:
-                    # Object write-off: validate issued balance, then decrement issued register
-                    await OperationsService._ensure_sufficient_issued_balance(
-                        uow,
-                        issue_object_id=operation.issue_object_id,
-                        inventory_subject_id=line.inventory_subject_id,
-                        required_qty=quantity,
-                        error_message=(
-                            f"insufficient issued balance for WRITE_OFF: "
-                            f"issue_object={operation.issue_object_id}, inventory_subject={line.inventory_subject_id}, required={line.qty}"
-                        ),
-                    )
+                    # Object write-off: decrement issued register (sufficiency
+                    # verified in the aggregated check).
                     await OperationsService._upsert_issued(
                         uow,
                         issue_object_id=operation.issue_object_id,
@@ -1648,16 +2003,6 @@ class OperationsService:
                         error_context="WRITE_OFF from issue object",
                     )
                 elif operation.operation_type in DECREMENT_OPERATION_TYPES:
-                    await OperationsService._ensure_sufficient_balance(
-                        uow,
-                        site_id=operation.site_id,
-                        inventory_subject_id=line.inventory_subject_id,
-                        required_qty=quantity,
-                        error_message=(
-                            f"insufficient stock for {operation.operation_type}: inventory_subject={line.inventory_subject_id}, "
-                            f"site={operation.site_id}, required={line.qty}"
-                        ),
-                    )
                     await OperationsService._capture_balance_change(
                         uow,
                         capture=balance_effects_capture,
@@ -1669,17 +2014,6 @@ class OperationsService:
                         note=getattr(operation, "notes", None),
                     )
                 elif operation.operation_type == "ADJUSTMENT":
-                    if quantity < 0:
-                        await OperationsService._ensure_sufficient_balance(
-                            uow,
-                            site_id=operation.site_id,
-                            inventory_subject_id=line.inventory_subject_id,
-                            required_qty=abs(quantity),
-                            error_message=(
-                                f"insufficient stock for ADJUSTMENT: inventory_subject={line.inventory_subject_id}, "
-                                f"site={operation.site_id}, delta={line.qty}"
-                            ),
-                        )
                     await OperationsService._capture_balance_change(
                         uow,
                         capture=balance_effects_capture,
@@ -1697,16 +2031,6 @@ class OperationsService:
                             detail="MOVE operation requires source_site_id and destination_site_id",
                         )
 
-                    await OperationsService._ensure_sufficient_balance(
-                        uow,
-                        site_id=operation.source_site_id,
-                        inventory_subject_id=line.inventory_subject_id,
-                        required_qty=quantity,
-                        error_message=(
-                            f"insufficient stock for MOVE: inventory_subject={line.inventory_subject_id}, "
-                            f"source_site={operation.source_site_id}, required={line.qty}"
-                        ),
-                    )
                     await OperationsService._capture_balance_change(
                         uow,
                         capture=balance_effects_capture,
@@ -1745,16 +2069,6 @@ class OperationsService:
                             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="ISSUE requires issue_object_id",
                         )
-                    await OperationsService._ensure_sufficient_balance(
-                        uow,
-                        site_id=operation.site_id,
-                        inventory_subject_id=line.inventory_subject_id,
-                        required_qty=quantity,
-                        error_message=(
-                            f"insufficient stock for ISSUE: inventory_subject={line.inventory_subject_id}, "
-                            f"site={operation.site_id}, required={line.qty}"
-                        ),
-                    )
                     await OperationsService._capture_balance_change(
                         uow,
                         capture=balance_effects_capture,
@@ -1778,16 +2092,6 @@ class OperationsService:
                             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="ISSUE_RETURN requires issue_object_id",
                         )
-                    await OperationsService._ensure_sufficient_issued_balance(
-                        uow,
-                        issue_object_id=operation.issue_object_id,
-                        inventory_subject_id=line.inventory_subject_id,
-                        required_qty=quantity,
-                        error_message=(
-                            f"insufficient issued balance for ISSUE_RETURN: "
-                            f"issue_object={operation.issue_object_id}, inventory_subject={line.inventory_subject_id}, required={line.qty}"
-                        ),
-                    )
                     await OperationsService._upsert_issued(
                         uow,
                         issue_object_id=operation.issue_object_id,

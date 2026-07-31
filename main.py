@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import SyncServerException
+from app.api.exceptions_handlers import operation_submit_error_handler
 from app.api.routes_admin import router as admin_router
 from app.api.routes_assets import router as assets_router
 from app.api.routes_auth import router as auth_router
@@ -29,6 +30,7 @@ from app.api.routes_temporary_items import router as temporary_items_router
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging_config import configure_logging
+from app.services.operation_submit_errors import OperationSubmitError
 
 settings = get_settings()
 if "LOG_LEVEL" not in os.environ:
@@ -142,6 +144,8 @@ def create_app(*, enable_startup_migrations: bool = True) -> FastAPI:
             status_code=exc.status_code,
             content=error_body,
         )
+
+    app.add_exception_handler(OperationSubmitError, operation_submit_error_handler)
 
     @app.get("/")
     async def root() -> dict[str, str]:
