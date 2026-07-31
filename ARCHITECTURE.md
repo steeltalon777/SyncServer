@@ -123,6 +123,24 @@ Example:
 - Django-based admin / client integration over HTTP API
 - Device sync clients using token-authenticated sync endpoints
 
+## Search Normalization (TZ-SEARCH_NORMALIZATION)
+Все точки поиска по SyncServer (15 точек в 10 репозиториях: catalog, asset_registers, balances, operations, reports, sites, devices, temporary_items, issue_objects, issue_object_categories) используют единый pipeline нормализации ввода:
+
+1. **Единая утилита:** [`app/core/search_utils.py`](app/core/search_utils.py)
+   - `normalize_search_text(value)` — strip → lower → ё→е → удаление пунктуации → сворачивание пробелов
+   - `normalize_for_storage(value)` — для `normalized_name` колонки (None для пустого ввода)
+   - `escape_like_pattern(text)` — экранирование LIKE-спецсимволов (`%`, `_`, `\\`)
+   - `build_normalized_like_term(search)` — для поиска по `normalized_name` / `normalized_key` колонкам
+   - `build_raw_like_term(search)` — для поиска по сырым техническим колонкам (`sku`, `code`, `device_code`, `description`, `notes`, снапшоты) — НЕ удаляет пунктуацию и НЕ сворачивает пробелы
+
+2. **Критическое правило:** для одного поиска используются **два term**: `normalized_term` для нормализованных колонок, `raw_term` для сырых. Использование `normalized_term` для `sku`/`code` сломает поиск по артикулам с дефисами/слешами/точками (например `17М-03-49270-G` → `%17м 03 49270 g%` → 0 матчей).
+
+3. **Event listeners:** [`app/models/events.py`](app/models/events.py) автоматически вычисляют `normalized_name` для `Item`, `Category`, `TemporaryItem`, `Site`, `Device` через `before_insert`/`before_update`. Для `IssueObject.normalized_key` и `IssueObjectCategory.normalized_key` сохранено ручное управление (другая семантика: unique constraint).
+
+4. **Миграция `0020_search_normalization`:** добавляет `normalized_name` в `sites`/`devices`, делает backfill всех 5 таблиц правильной логикой (lowercase + ё→е + remove punctuation + collapse spaces), создаёт B-tree и GIN-trigram индексы. Расширение `pg_trgm` — обязательная зависимость.
+
+5. **Индексы:** B-tree `ix_<table>_normalized_name` для точного соответствия и prefix-search; GIN `ix_<table>_normalized_name_trgm` (USING gin gin_trgm_ops) для ILIKE `%term%` acceleration.
+
 ## Future Architecture
 - Expand test coverage for end-to-end admin integration flows
 - Keep public client contracts explicit and stable

@@ -21,8 +21,11 @@ SyncServer is an async backend for warehouse data, inventory operations, site ac
 - `app/models/`
 - `app/schemas/`
 - `app/core/`
+  - `search_utils.py` – единая утилита нормализации поиска (Phase 0, TZ-SEARCH_NORMALIZATION)
 - `docs/`
 - `tests/`
+  - `test_search_utils.py` – 44 unit-теста
+  - `test_search_normalization.py` – 13 integration-тестов
 
 ## Main Modules
 - Auth

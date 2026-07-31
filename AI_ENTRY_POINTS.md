@@ -49,6 +49,10 @@
 ## Configuration
 - `app/core/config.py`
 - `app/core/db.py`
+- `app/core/search_utils.py` - нормализация и экранирование поискового ввода (normalize_search_text, build_normalized_like_term, build_raw_like_term)
 - `.env.example`
 - `docker-compose.yml`
 - `Dockerfile`
+
+## Search Events
+- `app/models/events.py` - SQLAlchemy event listeners для auto-compute `normalized_name` для Item, Category, TemporaryItem, Site, Device

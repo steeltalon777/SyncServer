@@ -54,3 +54,12 @@
 - `site_id` on some catalog reads is an access-context check, not a data partition
 - Operation lifecycle is constrained to `draft -> submitted -> cancelled`
 - Django auth may include optional device context on `/auth/*`
+
+## Search Normalization Rules
+- All search inputs MUST flow through `app/core/search_utils.py` — never use raw `f"%{search}%"` patterns.
+- For columns with `normalized_name` / `normalized_key` use `build_normalized_like_term(search)`.
+- For raw technical columns (`sku`, `code`, `device_code`, `description`, `notes`, snapshots) use `build_raw_like_term(search)` — it preserves hyphens, slashes, dots, and case.
+- Two terms per query, never one: mixing the same term across both column types breaks SKU search.
+- All `.ilike()` calls MUST include `escape="\\"` argument.
+- `normalized_name` is auto-computed via SQLAlchemy event listeners (`app/models/events.py`) on `before_insert`/`before_update` for `Item`, `Category`, `TemporaryItem`, `Site`, `Device` — services must not set it manually.
+- `IssueObject.normalized_key` / `IssueObjectCategory.normalized_key` are computed in services (different semantics, used in unique constraints).
