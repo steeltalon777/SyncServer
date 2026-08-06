@@ -263,6 +263,11 @@ class OperationResponse(ORMBaseModel):
     source_ref: str | None = None
     lines: list[OperationLineResponse] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _sort_lines_by_line_number(self) -> "OperationResponse":
+        self.lines = sorted(self.lines, key=lambda line: (line.line_number, line.id))
+        return self
+
     @property
     def type(self) -> OperationType:
         return self.operation_type

@@ -533,6 +533,17 @@ class DocumentService:
         # Строки документа
         # INV-C16: используем revision_lines если переданы, иначе operation.lines
         source_lines = revision_lines if revision_lines is not None else operation.lines
+        # TZ-V3.3 Stage B: defense-in-depth — явная сортировка по (line_number, tie_breaker).
+        # Для OperationLine / OperationCorrectionLine tie_breaker = id (BigInteger PK).
+        # Для OperationRevisionLine колонки id нет (PK = (revision_id, line_uuid)),
+        # поэтому fallback на line_uuid (детерминированный уникальный атрибут).
+        source_lines = sorted(
+            source_lines,
+            key=lambda line: (
+                line.line_number,
+                getattr(line, "id", None) or getattr(line, "line_uuid", None),
+            ),
+        )
         lines = []
         for line in source_lines:
             line_data = {

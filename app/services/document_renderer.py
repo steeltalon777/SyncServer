@@ -83,12 +83,18 @@ class DocumentRenderer:
         template_name: str | None,
         payload: dict[str, Any],
     ) -> str:
+        sorted_lines = sorted(
+            payload.get("lines", []),
+            key=lambda line: (line["line_number"], line.get("id", 0)),
+        )
+        render_payload = {**payload, "lines": sorted_lines}
+
         template_path = cls._resolve_template_path(template_name)
         if template_path is None:
-            return cls._fallback_html(document_number=document_number, payload=payload)
+            return cls._fallback_html(document_number=document_number, payload=render_payload)
 
         if Environment is None or FileSystemLoader is None or select_autoescape is None:
-            return cls._fallback_html(document_number=document_number, payload=payload)
+            return cls._fallback_html(document_number=document_number, payload=render_payload)
 
         env = Environment(
             loader=FileSystemLoader(str(template_path.parent)),
@@ -105,7 +111,7 @@ class DocumentRenderer:
             "template_version": "1.0",
             "payload_schema_version": payload.get("payload_schema_version", "1.0.0"),
         }
-        return template.render(payload=payload, document=document_ctx)
+        return template.render(payload=render_payload, document=document_ctx)
 
     @staticmethod
     def _resolve_template_path(template_name: str | None) -> Path | None:

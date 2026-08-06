@@ -217,6 +217,7 @@ class Operation(Base):
         "OperationLine",
         back_populates="operation",
         cascade="all, delete-orphan",
+        order_by="OperationLine.line_number, OperationLine.id",
     )
     revisions: Mapped[list["OperationRevision"]] = relationship(
         back_populates="operation", cascade="all, delete-orphan",
@@ -448,6 +449,7 @@ class OperationRevision(Base):
     )
     lines: Mapped[list["OperationRevisionLine"]] = relationship(
         back_populates="revision", cascade="all, delete-orphan",
+        order_by="OperationRevisionLine.line_number, OperationRevisionLine.line_uuid",
     )
 
     __table_args__ = (
@@ -544,6 +546,7 @@ class OperationCorrection(Base):
     )
     lines: Mapped[list["OperationCorrectionLine"]] = relationship(
         back_populates="correction", cascade="all, delete-orphan",
+        order_by="OperationCorrectionLine.line_number, OperationCorrectionLine.id",
     )
 
     __table_args__ = (

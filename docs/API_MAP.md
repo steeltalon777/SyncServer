@@ -11544,6 +11544,8 @@ _No request body_
 
 ### OperationResponse
 
+> **Порядок строк:** строки операции (`lines`) всегда возвращаются в порядке `line_number` ascending, tie-breaker `id` ascending. Это гарантируется централизованным Pydantic `@model_validator(mode='after')` на `OperationResponse` (ADR-0026, TZ-V3.3).
+
 ```json
 {
   "properties": {
