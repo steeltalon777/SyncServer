@@ -38,6 +38,8 @@ async def client(session_factory: async_sessionmaker[AsyncSession]):
 
 async def _seed_reports_fixture(
     session_factory: async_sessionmaker[AsyncSession],
+    *,
+    include_system: bool = False,
 ) -> dict[str, int | str]:
     async with session_factory() as session:
         suffix = uuid4().hex[:6]
@@ -180,6 +182,54 @@ async def _seed_reports_fixture(
         session.add_all([receive, expense, adjustment, move, cancelled])
         await session.flush()
 
+        if include_system:
+            system_adjustment = Operation(
+                site_id=site_main.id,
+                operation_type="ADJUSTMENT",
+                status="submitted",
+                origin="system",
+                system_reason="item_merge",
+                effective_at=datetime(2026, 1, 15, 9, 0, tzinfo=timezone.utc),
+                created_by_user_id=chief.id,
+                created_at=datetime(2026, 1, 15, 9, 0, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 1, 15, 9, 0, tzinfo=timezone.utc),
+                submitted_at=datetime(2026, 1, 15, 9, 0, tzinfo=timezone.utc),
+                submitted_by_user_id=chief.id,
+            )
+            system_receive = Operation(
+                site_id=site_main.id,
+                operation_type="RECEIVE",
+                status="submitted",
+                origin="system",
+                system_reason="review_merge",
+                effective_at=datetime(2026, 1, 16, 9, 0, tzinfo=timezone.utc),
+                created_by_user_id=chief.id,
+                created_at=datetime(2026, 1, 16, 9, 0, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 1, 16, 9, 0, tzinfo=timezone.utc),
+                submitted_at=datetime(2026, 1, 16, 9, 0, tzinfo=timezone.utc),
+                submitted_by_user_id=chief.id,
+            )
+            session.add_all([system_adjustment, system_receive])
+            await session.flush()
+            session.add_all(
+                [
+                    OperationLine(
+                        operation_id=system_adjustment.id,
+                        line_number=1,
+                        inventory_subject_id=tracked_subject.id,
+                        item_id=tracked_item.id,
+                        qty=Decimal("5"),
+                    ),
+                    OperationLine(
+                        operation_id=system_receive.id,
+                        line_number=1,
+                        inventory_subject_id=helper_subject.id,
+                        item_id=helper_item.id,
+                        qty=Decimal("7"),
+                    ),
+                ]
+            )
+
         session.add_all(
             [
                 OperationLine(
@@ -257,7 +307,6 @@ async def _seed_reports_fixture(
         }
 
 
-@pytest.mark.xfail(reason="Known bug in item-movement report query: missing temporary_items.name in GROUP BY")
 @pytest.mark.asyncio(loop_scope="session")
 async def test_item_movement_report_aggregates_submitted_operations_for_period(
     client: AsyncClient,
@@ -290,6 +339,110 @@ async def test_item_movement_report_aggregates_submitted_operations_for_period(
     assert Decimal(row["outgoing_qty"]) == Decimal("6")
     assert Decimal(row["net_qty"]) == Decimal("4")
     assert row["last_operation_at"].startswith("2026-01-13T09:00:00")
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_item_movement_default_excludes_system_operations_and_keeps_manual_adjustment(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Default exclude_system_effects=true: system ADJUSTMENT/RECEIVE are excluded,
+    while the manual ADJUSTMENT (origin='user', qty -1) is retained — outgoing 6
+    includes it (3 expense + 1 manual adjustment + 2 move out)."""
+    seed = await _seed_reports_fixture(session_factory, include_system=True)
+
+    response = await client.get(
+        "/api/v1/reports/item-movement",
+        headers={"X-User-Token": seed["chief_token"]},
+        params={
+            "site_id": seed["site_main_id"],
+            "date_from": "2026-01-01T00:00:00+00:00",
+            "date_to": "2026-01-31T23:59:59+00:00",
+            "page": 1,
+            "page_size": 20,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # System RECEIVE on helper item is filtered out before aggregation.
+    assert body["total_count"] == 1
+
+    row = body["items"][0]
+    assert row["display_name"] == seed["tracked_item_name"]
+    assert Decimal(row["incoming_qty"]) == Decimal("10")
+    assert Decimal(row["outgoing_qty"]) == Decimal("6")
+    assert Decimal(row["net_qty"]) == Decimal("4")
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_item_movement_explicit_true_excludes_system_operations(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_reports_fixture(session_factory, include_system=True)
+
+    response = await client.get(
+        "/api/v1/reports/item-movement",
+        headers={"X-User-Token": seed["chief_token"]},
+        params={
+            "site_id": seed["site_main_id"],
+            "exclude_system_effects": "true",
+            "date_from": "2026-01-01T00:00:00+00:00",
+            "date_to": "2026-01-31T23:59:59+00:00",
+            "page": 1,
+            "page_size": 20,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_count"] == 1
+    row = body["items"][0]
+    assert row["display_name"] == seed["tracked_item_name"]
+    assert Decimal(row["incoming_qty"]) == Decimal("10")
+    assert Decimal(row["outgoing_qty"]) == Decimal("6")
+    assert Decimal(row["net_qty"]) == Decimal("4")
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_item_movement_explicit_false_includes_system_operations(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """exclude_system_effects=false includes system ADJUSTMENT (+5 on tracked) and
+    system RECEIVE (+7 on helper): count and aggregates are computed after the filter."""
+    seed = await _seed_reports_fixture(session_factory, include_system=True)
+
+    response = await client.get(
+        "/api/v1/reports/item-movement",
+        headers={"X-User-Token": seed["chief_token"]},
+        params={
+            "site_id": seed["site_main_id"],
+            "exclude_system_effects": "false",
+            "date_from": "2026-01-01T00:00:00+00:00",
+            "date_to": "2026-01-31T23:59:59+00:00",
+            "page": 1,
+            "page_size": 20,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_count"] == 2
+
+    rows_by_name = {row["display_name"]: row for row in body["items"]}
+    assert set(rows_by_name) == {seed["tracked_item_name"], seed["helper_item_name"]}
+
+    tracked = rows_by_name[seed["tracked_item_name"]]
+    assert Decimal(tracked["incoming_qty"]) == Decimal("15")
+    assert Decimal(tracked["outgoing_qty"]) == Decimal("6")
+    assert Decimal(tracked["net_qty"]) == Decimal("9")
+
+    helper = rows_by_name[seed["helper_item_name"]]
+    assert Decimal(helper["incoming_qty"]) == Decimal("7")
+    assert Decimal(helper["outgoing_qty"]) == Decimal("0")
+    assert Decimal(helper["net_qty"]) == Decimal("7")
 
 
 @pytest.mark.asyncio(loop_scope="session")

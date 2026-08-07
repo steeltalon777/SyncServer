@@ -99,14 +99,51 @@ def test_cancel_rejects_already_cancelled_operation() -> None:
     assert exc.value.detail == "operation is already cancelled"
 
 
-def test_effective_at_change_rejects_cancelled_operation() -> None:
+def test_effective_at_change_allows_draft() -> None:
+    """ADR-0028 §2: effective_at change is allowed for draft operations."""
+
+    operation = _operation(status="draft")
+
+    OperationsWorkflowPolicy.require_draft_for_effective_at_change(operation)
+
+
+def test_effective_at_change_rejects_submitted() -> None:
+    """ADR-0028 §2: submitted operations are fail-closed for effective_at."""
+
+    operation = _operation(status="submitted")
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsWorkflowPolicy.require_draft_for_effective_at_change(operation)
+
+    assert exc.value.status_code == 409
+    assert "effective_at" in exc.value.detail
+    assert "submitted" in exc.value.detail
+
+
+def test_effective_at_change_rejects_cancelled() -> None:
+    """ADR-0028 §2: cancelled operations are fail-closed for effective_at."""
+
     operation = _operation(status="cancelled")
 
     with pytest.raises(HTTPException) as exc:
-        OperationsWorkflowPolicy.require_not_cancelled_for_effective_at_change(operation)
+        OperationsWorkflowPolicy.require_draft_for_effective_at_change(operation)
 
     assert exc.value.status_code == 409
-    assert exc.value.detail == "cannot change effective_at for cancelled operation"
+    assert "effective_at" in exc.value.detail
+    assert "cancelled" in exc.value.detail
+
+
+def test_effective_at_change_rejects_unknown_status() -> None:
+    """ADR-0028 §2: unknown/legacy status is fail-closed (defensive default)."""
+
+    operation = _operation(status="legacy_unknown")
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsWorkflowPolicy.require_draft_for_effective_at_change(operation)
+
+    assert exc.value.status_code == 409
+    assert "effective_at" in exc.value.detail
+    assert "legacy_unknown" in exc.value.detail
 
 
 def test_exists_guard_rejects_missing_operation() -> None:

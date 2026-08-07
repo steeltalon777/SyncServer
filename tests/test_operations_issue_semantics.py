@@ -452,7 +452,7 @@ def _base_uow(operation, balance_qty: Decimal | None = None):
         catalog=SimpleNamespace(get_item_by_id=AsyncMock()),
         temporary_items=SimpleNamespace(get_by_id=AsyncMock()),
         session=SimpleNamespace(flush=AsyncMock()),
-        audit_events=SimpleNamespace(insert=AsyncMock()),
+        audit_events=SimpleNamespace(insert=AsyncMock(), insert_effect=AsyncMock()),
     )
 
 

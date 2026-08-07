@@ -101,6 +101,43 @@ docker compose exec syncserver python scripts/query_audit.py --username ivanov \
 
 See [docs/audit-query-examples.md](docs/audit-query-examples.md) for full documentation.
 
+### `scripts/integrity_check.py` (Stage A-7)
+
+Read-only integrity CLI. Issues ten symbolic checks
+(`BALANCE_EFFECT_DRIFT`, `EXPECTED_EFFECT_GAP`, `ACCEPTANCE_EFFECT_GAP`,
+`EFFECT_DATE_NULL`, `EFFECT_CHAIN_BROKEN`, `MERGE_CHAIN_CYCLE`,
+`BACKDATED_SUBMITTED`, `LATE_ACCEPTANCE`, `MERGE_AUDIT_GAP`,
+`AUDIT_ENTITY_ORPHAN`) against the warehouse database. Every check runs
+in its own `SET TRANSACTION READ ONLY` transaction; only `SELECT`
+statements are issued and no repair options are accepted. The CLI
+never receives the connection string on the command line — the DSN is
+read from `DATABASE_URL` / `DATABASE_URL_TEST` so it cannot leak
+through process lists or shell history. Errors are sanitised and
+samples contain only stable identifiers, quantities, dates and
+booleans.
+
+```bash
+# Human-readable text summary
+docker compose exec syncserver python scripts/integrity_check.py
+
+# JSON output with bounded sample rows
+docker compose exec syncserver python scripts/integrity_check.py --format json --sample-limit 5
+
+# Promote warnings to the fail threshold
+docker compose exec syncserver python scripts/integrity_check.py --fail-on warning --format json
+```
+
+Exit codes:
+
+- `0` — no findings at/above `--fail-on` (default `critical`);
+- `1` — at least one finding at/above the threshold;
+- `2` — invalid arguments, configuration or DB execution error.
+
+The repository-level `make integrity-check ARGS="--format json"`
+shortcut runs the same CLI inside the SyncServer container. Scheduled
+execution and alert routing remain outside Stage A; R-26 stays partial
+until a separate operational owner documents the schedule.
+
 ## Audit journal (TZ-AUDIT_BACKEND_FOUNDATION / ADR-0018)
 
 The audit surface is **append-only** and consists of three tables:

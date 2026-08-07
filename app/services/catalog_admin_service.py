@@ -43,6 +43,34 @@ from app.services.uow import UnitOfWork
 logger = structlog.get_logger()
 
 
+def _jsonify_scalars(payload: dict[str, object]) -> dict[str, object]:
+    """Convert datetime/UUID/Decimal values to JSON-safe scalar strings.
+
+    ADR-0028 §7.2 keeps `audit_event_resources.snapshot_*` strictly
+    JSON-serialisable; the allow-list itself is enforced at the snapshot
+    builders, but we still defensively normalise scalar types so that
+    safety checks elsewhere don't have to repeat them.
+    """
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from decimal import Decimal as _Decimal
+    from uuid import UUID as _UUID
+
+    out: dict[str, object] = {}
+    for key, value in payload.items():
+        if value is None or isinstance(value, (bool, int, str)):
+            out[key] = value
+        elif isinstance(value, (_dt, _date)):
+            out[key] = value.isoformat()
+        elif isinstance(value, _UUID):
+            out[key] = str(value)
+        elif isinstance(value, _Decimal):
+            out[key] = str(value)
+        else:
+            out[key] = value
+    return out
+
+
 class CatalogAdminService:
     async def create_unit(self, uow: UnitOfWork, payload: UnitCreateRequest, created_by_user_id: UUID | None = None) -> Unit:
         await self._ensure_unit_unique(uow, name=payload.name, symbol=payload.symbol)
@@ -426,10 +454,38 @@ class CatalogAdminService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="unit already deleted")
         if unit.is_active:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot delete active unit")
+        snapshot_before = CatalogAdminService._snapshot_unit(unit)
         try:
             await uow.catalog.soft_delete_unit(unit_id, user_id)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+        # Re-read so the snapshot_after reflects the soft-delete timestamps.
+        refreshed = await uow.catalog.get_unit_by_id(unit_id)
+        snapshot_after = CatalogAdminService._snapshot_unit(refreshed) if refreshed is not None else {}
+
+        delete_event = await record_audit_event(
+            uow,
+            event_type="unit.delete",
+            event_version=2,
+            actor_user_id=user_id,
+            entity_type="unit",
+            entity_id=str(unit_id),
+            summary=f"Архивное удаление единицы измерения «{unit.name}»",
+            changes={
+                "deleted_at": snapshot_after.get("deleted_at"),
+                "deleted_by_user_id": snapshot_after.get("deleted_by_user_id"),
+            },
+            outcome="success",
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(delete_event.id),
+            resource_type="unit",
+            resource_id=str(unit_id),
+            relation="primary",
+            snapshot_before=snapshot_before,
+            snapshot_after=snapshot_after,
+        )
 
     async def delete_category(self, uow: UnitOfWork, category_id: int, user_id: UUID) -> None:
         category = await uow.catalog.get_category_by_id(category_id)
@@ -439,10 +495,37 @@ class CatalogAdminService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="category already deleted")
         if category.is_active:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot delete active category")
+        snapshot_before = CatalogAdminService._snapshot_category(category)
         try:
             await uow.catalog.soft_delete_category(category_id, user_id)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+        refreshed = await uow.catalog.get_category_by_id(category_id)
+        snapshot_after = CatalogAdminService._snapshot_category(refreshed) if refreshed is not None else {}
+
+        delete_event = await record_audit_event(
+            uow,
+            event_type="category.delete",
+            event_version=2,
+            actor_user_id=user_id,
+            entity_type="category",
+            entity_id=str(category_id),
+            summary=f"Архивное удаление категории «{category.name}»",
+            changes={
+                "deleted_at": snapshot_after.get("deleted_at"),
+                "deleted_by_user_id": snapshot_after.get("deleted_by_user_id"),
+            },
+            outcome="success",
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(delete_event.id),
+            resource_type="category",
+            resource_id=str(category_id),
+            relation="primary",
+            snapshot_before=snapshot_before,
+            snapshot_after=snapshot_after,
+        )
 
     async def delete_item(self, uow: UnitOfWork, item_id: int, user_id: UUID) -> None:
         item = await uow.catalog.get_item_by_id(item_id)
@@ -453,10 +536,82 @@ class CatalogAdminService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="item already deleted")
         if item.is_active and not item.requires_review:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot delete active item")
+        snapshot_before = CatalogAdminService._snapshot_item(item)
         try:
             await uow.catalog.soft_delete_item(item_id, user_id)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+        refreshed = await uow.catalog.get_item_by_id(item_id)
+        snapshot_after = CatalogAdminService._snapshot_item(refreshed) if refreshed is not None else {}
+
+        delete_event = await record_audit_event(
+            uow,
+            event_type="item.delete",
+            event_version=2,
+            actor_user_id=user_id,
+            entity_type="item",
+            entity_id=str(item_id),
+            summary=f"Архивное удаление ТМЦ «{item.name}»",
+            changes={
+                "deleted_at": snapshot_after.get("deleted_at"),
+                "deleted_by_user_id": snapshot_after.get("deleted_by_user_id"),
+            },
+            outcome="success",
+        )
+        await uow.audit_events.insert_resource(
+            audit_event_id=int(delete_event.id),
+            resource_type="item",
+            resource_id=str(item_id),
+            relation="primary",
+            snapshot_before=snapshot_before,
+            snapshot_after=snapshot_after,
+        )
+
+    # ─── Snapshot helpers (ADR-0028 §7.2 allow-list) ────────────────────
+
+    @staticmethod
+    def _snapshot_unit(unit) -> dict[str, object]:
+        return _jsonify_scalars({
+            "id": getattr(unit, "id", None),
+            "name": getattr(unit, "name", None),
+            "code": getattr(unit, "code", None),
+            "symbol": getattr(unit, "symbol", None),
+            "sort_order": getattr(unit, "sort_order", None),
+            "is_active": getattr(unit, "is_active", None),
+            "deleted_at": getattr(unit, "deleted_at", None),
+            "deleted_by_user_id": getattr(unit, "deleted_by_user_id", None),
+        })
+
+    @staticmethod
+    def _snapshot_category(category) -> dict[str, object]:
+        return _jsonify_scalars({
+            "id": getattr(category, "id", None),
+            "name": getattr(category, "name", None),
+            "code": getattr(category, "code", None),
+            "parent_id": getattr(category, "parent_id", None),
+            "sort_order": getattr(category, "sort_order", None),
+            "is_active": getattr(category, "is_active", None),
+            "merged_into_id": getattr(category, "merged_into_id", None),
+            "deleted_at": getattr(category, "deleted_at", None),
+            "deleted_by_user_id": getattr(category, "deleted_by_user_id", None),
+        })
+
+    @staticmethod
+    def _snapshot_item(item) -> dict[str, object]:
+        return _jsonify_scalars({
+            "id": getattr(item, "id", None),
+            "sku": getattr(item, "sku", None),
+            "name": getattr(item, "name", None),
+            "category_id": getattr(item, "category_id", None),
+            "unit_id": getattr(item, "unit_id", None),
+            "is_active": getattr(item, "is_active", None),
+            "requires_review": getattr(item, "requires_review", None),
+            "review_status": getattr(item, "review_status", None),
+            "merged_into_id": getattr(item, "merged_into_id", None),
+            "deleted_at": getattr(item, "deleted_at", None),
+            "deleted_by_user_id": getattr(item, "deleted_by_user_id", None),
+        })
 
     async def list_units(
         self,

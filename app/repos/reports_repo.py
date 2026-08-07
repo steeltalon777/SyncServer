@@ -27,8 +27,14 @@ class ReportsRepo:
         user_site_ids: list[int],
         page: int,
         page_size: int,
+        exclude_system_effects: bool = True,
     ) -> tuple[list[dict], int]:
         operation_at = func.coalesce(Operation.effective_at, Operation.created_at)
+
+        # A-6 (ADR-0028 §7): exclude system-generated operations (origin='system')
+        # per UNION branch, before aggregation. Manual/legacy operations (origin
+        # 'user' or NULL) are retained regardless of operation type.
+        system_origin_filter = func.coalesce(Operation.origin, "user") != "system"
         accepted_or_full_qty = case(
             (Operation.acceptance_required.is_(True), OperationLine.accepted_qty),
             else_=OperationLine.qty,
@@ -47,6 +53,8 @@ class ReportsRepo:
             .where(Operation.status == "submitted")
             .where(Operation.operation_type == "RECEIVE")
         )
+        if exclude_system_effects:
+            receive_rows = receive_rows.where(system_origin_filter)
 
         decrement_rows = (
             select(
@@ -61,6 +69,8 @@ class ReportsRepo:
             .where(Operation.status == "submitted")
             .where(Operation.operation_type.in_(("EXPENSE", "WRITE_OFF")))
         )
+        if exclude_system_effects:
+            decrement_rows = decrement_rows.where(system_origin_filter)
 
         adjustment_rows = (
             select(
@@ -75,6 +85,8 @@ class ReportsRepo:
             .where(Operation.status == "submitted")
             .where(Operation.operation_type == "ADJUSTMENT")
         )
+        if exclude_system_effects:
+            adjustment_rows = adjustment_rows.where(system_origin_filter)
 
         move_out_rows = (
             select(
@@ -90,6 +102,8 @@ class ReportsRepo:
             .where(Operation.operation_type == "MOVE")
             .where(Operation.source_site_id.is_not(None))
         )
+        if exclude_system_effects:
+            move_out_rows = move_out_rows.where(system_origin_filter)
 
         move_in_rows = (
             select(
@@ -105,6 +119,8 @@ class ReportsRepo:
             .where(Operation.operation_type == "MOVE")
             .where(Operation.destination_site_id.is_not(None))
         )
+        if exclude_system_effects:
+            move_in_rows = move_in_rows.where(system_origin_filter)
 
         movement_rows = union_all(
             receive_rows,
@@ -198,6 +214,7 @@ class ReportsRepo:
             InventorySubject.item_id,
             InventorySubject.temporary_item_id,
             TemporaryItem.resolved_item_id,
+            TemporaryItem.name,
             Item.name,
             Item.sku,
             Item.unit_id,

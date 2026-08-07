@@ -18,6 +18,15 @@ class ItemMovementFilter(BaseModel):
     search: str | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
+    exclude_system_effects: bool = Field(
+        default=True,
+        description=(
+            "Exclude system-generated operations (Operation.origin='system', e.g. "
+            "merge/review/temporary ADJUSTMENT) from the report. Manual ADJUSTMENT "
+            "and legacy operations are retained regardless of operation type. "
+            "Default true per ADR-0028."
+        ),
+    )
 
     model_config = ConfigDict(extra="forbid")
 

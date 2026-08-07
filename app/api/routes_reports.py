@@ -57,6 +57,14 @@ async def list_item_movement_report(
     search: str | None = Query(None, description="Search in item, category, or site labels"),
     date_from: datetime | None = Query(None, description="Inclusive report start datetime"),
     date_to: datetime | None = Query(None, description="Inclusive report end datetime"),
+    exclude_system_effects: bool = Query(
+        True,
+        description=(
+            "Exclude system-generated operations (origin='system', e.g. merge/review/"
+            "temporary ADJUSTMENT). Manual ADJUSTMENT and legacy NULL origin are kept. "
+            "Default true per ADR-0028."
+        ),
+    ),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(100, ge=1, le=200, description="Page size"),
 ) -> ItemMovementReportResponse:
@@ -77,12 +85,14 @@ async def list_item_movement_report(
             search=search,
             date_from=date_from,
             date_to=date_to,
+            exclude_system_effects=exclude_system_effects,
         )
         items, total_count = await uow.reports.list_item_movement(
             filter=filter_data,
             user_site_ids=visible_site_ids,
             page=page,
             page_size=page_size,
+            exclude_system_effects=filter_data.exclude_system_effects,
         )
 
     logger.info(

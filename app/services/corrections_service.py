@@ -629,6 +629,11 @@ class CorrectionsService:
                 )
 
         # Write audit effects
+        # ADR-0028 §5: correction delta uses the apply timestamp. The event's
+        # created_at server_default is not available in the ORM object right
+        # after flush, so we capture one explicit apply timestamp and reuse
+        # it for the effect rows (deterministic, same business moment).
+        apply_timestamp = datetime.now(UTC)
         audit_event = await record_audit_event(
             uow,
             event_type="operation.correction.applied",
@@ -657,6 +662,7 @@ class CorrectionsService:
             audit_event_id=int(audit_event.id),
             operation_id=operation.id,
             is_system_generated=False,
+            effective_at=apply_timestamp,
         )
 
         # Update correction status

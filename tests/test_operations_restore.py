@@ -4,9 +4,11 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import get_db
+from app.models.audit_event import AuditEvent
 from app.models.category import Category
 from app.models.item import Item
 from app.models.site import Site
@@ -233,3 +235,141 @@ async def test_restored_operation_supports_patch_and_submit(client, session_fact
                            json={"submit": True})
     assert r3.status_code == 200, r3.text
     assert r3.json()["status"] == "submitted"
+
+
+# ---------------------------------------------------------------------------
+# ADR-0028 A-2: restore writes operation.restore audit event
+# ---------------------------------------------------------------------------
+
+
+async def _find_restore_event(session_factory, operation_id):
+    async with session_factory() as session:
+        result = await session.execute(
+            select(AuditEvent).where(
+                AuditEvent.event_type == "operation.restore",
+                AuditEvent.entity_id == str(operation_id),
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+@pytest.mark.asyncio
+async def test_restore_writes_audit_event_with_parent_cancel(client, session_factory):
+    """A-2: successful restore writes operation.restore with correct changes
+    and parent_event_id pointing at the last successful operation.cancel event.
+    """
+    seed = await _seed_fixture(session_factory)
+    op = await _create_receive_op(client, seed["root_token"], seed["site_id"], seed["item_id"])
+    await _submit_op(client, seed["root_token"], op["id"])
+    await _cancel_op(client, seed["root_token"], op["id"])
+
+    r = await client.post(f"/api/v1/operations/{op['id']}/restore",
+                          headers={"X-User-Token": seed["root_token"]},
+                          json={"restore": True})
+    assert r.status_code == 200, r.text
+
+    restore_event = await _find_restore_event(session_factory, op["id"])
+    assert restore_event is not None
+    assert restore_event.outcome == "success"
+    changes = dict(restore_event.changes or {})
+    assert changes["previous_status"] == "cancelled"
+    assert changes["new_status"] == "draft"
+    assert changes["previous_version"] < changes["new_version"]
+    assert changes["restored_by_user_id"] is not None
+    assert "cancelled_at_before" in changes
+    assert "cancelled_by_user_id_before" in changes
+    # cancel_event happens through the same root user right before restore
+    assert restore_event.parent_event_id is not None
+
+
+@pytest.mark.asyncio
+async def test_restore_writes_cancel_event_missing_when_legacy(client, session_factory):
+    """A-2: when no cancel audit event is found the audit row records
+    cancel_event_missing=True and parent_event_id stays None.
+    """
+    seed = await _seed_fixture(session_factory)
+    op = await _create_receive_op(client, seed["root_token"], seed["site_id"], seed["item_id"])
+    await _submit_op(client, seed["root_token"], op["id"])
+    await _cancel_op(client, seed["root_token"], op["id"])
+
+    # Wipe the audit history for this operation to simulate a legacy gap.
+    async with session_factory() as session:
+        await session.execute(
+            AuditEvent.__table__.delete().where(
+                AuditEvent.entity_id == str(op["id"]),
+                AuditEvent.event_type.in_(("operation.cancel",)),
+            )
+        )
+        await session.commit()
+
+    r = await client.post(f"/api/v1/operations/{op['id']}/restore",
+                          headers={"X-User-Token": seed["root_token"]},
+                          json={"restore": True})
+    assert r.status_code == 200, r.text
+
+    restore_event = await _find_restore_event(session_factory, op["id"])
+    assert restore_event is not None
+    assert restore_event.parent_event_id is None
+    changes = dict(restore_event.changes or {})
+    assert changes.get("cancel_event_missing") is True
+
+
+@pytest.mark.asyncio
+async def test_failed_restore_writes_no_event(client, session_factory):
+    """A-2: failed restore (403 storekeeper / 409 wrong state) does not
+    write an operation.restore audit event.
+    """
+    seed = await _seed_fixture(session_factory)
+    op = await _create_receive_op(client, seed["root_token"], seed["site_id"], seed["item_id"])
+    await _submit_op(client, seed["root_token"], op["id"])
+    await _cancel_op(client, seed["root_token"], op["id"])
+
+    # storekeeper is not root
+    r = await client.post(f"/api/v1/operations/{op['id']}/restore",
+                          headers={"X-User-Token": seed["storekeeper_token"]},
+                          json={"restore": True})
+    assert r.status_code == 403, r.text
+
+    restore_event = await _find_restore_event(session_factory, op["id"])
+    assert restore_event is None, "storekeeper 403 must not write audit event"
+
+    # root tries to restore a draft (409 from workflow)
+    draft_op = await _create_receive_op(client, seed["root_token"], seed["site_id"], seed["item_id"])
+    r2 = await client.post(f"/api/v1/operations/{draft_op['id']}/restore",
+                           headers={"X-User-Token": seed["root_token"]},
+                           json={"restore": True})
+    assert r2.status_code == 409, r2.text
+    draft_event = await _find_restore_event(session_factory, draft_op["id"])
+    assert draft_event is None
+
+
+@pytest.mark.asyncio
+async def test_repeated_restore_does_not_create_duplicate_event(client, session_factory):
+    """A-2: a second restore against an already-restored draft is rejected
+    by the workflow guard and produces no additional audit row.
+    """
+    seed = await _seed_fixture(session_factory)
+    op = await _create_receive_op(client, seed["root_token"], seed["site_id"], seed["item_id"])
+    await _submit_op(client, seed["root_token"], op["id"])
+    await _cancel_op(client, seed["root_token"], op["id"])
+
+    r = await client.post(f"/api/v1/operations/{op['id']}/restore",
+                          headers={"X-User-Token": seed["root_token"]},
+                          json={"restore": True})
+    assert r.status_code == 200, r.text
+
+    # second attempt → 409 (status is now 'draft')
+    r2 = await client.post(f"/api/v1/operations/{op['id']}/restore",
+                           headers={"X-User-Token": seed["root_token"]},
+                           json={"restore": True})
+    assert r2.status_code == 409, r2.text
+
+    # exactly one restore event
+    async with session_factory() as session:
+        rows = (await session.execute(
+            select(AuditEvent.event_id).where(
+                AuditEvent.event_type == "operation.restore",
+                AuditEvent.entity_id == str(op["id"]),
+            )
+        )).scalars().all()
+    assert len(list(rows)) == 1

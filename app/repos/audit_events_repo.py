@@ -155,6 +155,34 @@ class AuditEventsRepo:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def find_latest_event_for_entity(
+        self,
+        *,
+        event_type: str,
+        entity_type: str,
+        entity_id: str,
+        outcome: str = "success",
+    ) -> AuditEvent | None:
+        """Return newest matching audit event for (event_type, entity).
+
+        Used to wire `operation.restore.parent_event_id` to the latest
+        successful `operation.cancel` of the same operation. Deterministic
+        ordering: newest `created_at`, tiebreaker on `id` descending.
+        ADR-0028 §3.1 specifies this lookup contract.
+        """
+        stmt = (
+            select(AuditEvent)
+            .where(
+                AuditEvent.event_type == event_type,
+                AuditEvent.entity_type == entity_type,
+                AuditEvent.entity_id == entity_id,
+                AuditEvent.outcome == outcome,
+            )
+            .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     # ─────────────────────────────────────────────────────────────────
     # Resources (audit_event_resources)
     # ─────────────────────────────────────────────────────────────────

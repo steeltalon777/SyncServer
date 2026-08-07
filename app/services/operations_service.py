@@ -654,24 +654,39 @@ class OperationsService:
         operation_id: UUID,
         is_system_generated: bool,
         caused_by_event_id: int | None = None,
+        effective_at: datetime | None = None,
     ) -> list[AuditItemEffect]:
         """Persist captured balance changes as audit_item_effects rows.
 
         Looks up the inventory subject for snapshot fields (item, name, sku,
         subject_type) and writes one effect row per captured change.
         Returns the inserted effects for tests/inspection.
+
+        ADR-0028 §4.3 mandates fail-closed semantics: empty capture is a
+        valid no-op, but a non-empty capture without a configured
+        ``audit_events.insert_effect`` hook is an invariant violation and
+        MUST abort the UoW. Unit test doubles that assert against a mock
+        UoW without effect persistence must monkey-patch insert_effect.
+
+        ADR-0028 §5 mandates an explicit cause timestamp: ``effective_at``
+        is the business timestamp of the balance mutation, distinct from
+        ``created_at`` (physical insert). Each captured row may carry its
+        own ``cause_timestamp``/``effective_at`` key (acceptance/lost
+        paths) or the caller passes a single ``effective_at`` for the whole
+        batch (submit/cancel/correction). A missing timestamp falls back to
+        ``datetime.now(UTC)`` as a safety net only; relying on the server
+        default alone is forbidden by tests.
         """
         written: list[AuditItemEffect] = []
         if not capture:
             return written
-        # If the UoW does not expose an audit_events.insert_effect hook
-        # we silently skip persistence. This keeps the call sites free for
-        # unit tests that mock the UoW surface and do not assert on
-        # audit effects.
         repo = getattr(uow, "audit_events", None)
         insert_effect = getattr(repo, "insert_effect", None) if repo is not None else None
         if insert_effect is None:
-            return written
+            raise RuntimeError(
+                "audit_items_effects hook missing: non-empty capture requires "
+                "uow.audit_events.insert_effect (ADR-0028 §4.3)"
+            )
 
         # Snapshot enrichment is best-effort. Tests may mock the UoW and not
         # expose the inventory_subjects repo — in that case we simply skip
@@ -701,6 +716,14 @@ class OperationsService:
                     temp_item = subject.temporary_item
                     item_name = getattr(temp_item, "name", None)
                     item_sku = getattr(temp_item, "sku", None)
+            # Per-row cause timestamp wins; batch-level effective_at is the
+            # submit/cancel/correction producer contract. UTC now() is a
+            # safety net, not the production contract (ADR-0028 §5).
+            row_effective_at = (
+                c.get("effective_at") or c.get("cause_timestamp") or effective_at
+            )
+            if row_effective_at is None:
+                row_effective_at = datetime.now(UTC)
             effect = AuditItemEffect(
                 audit_event_id=audit_event_id,
                 operation_id=operation_id,
@@ -716,6 +739,7 @@ class OperationsService:
                 effect_type=c["effect_type"],
                 is_system_generated=is_system_generated,
                 caused_by_event_id=caused_by_event_id,
+                effective_at=row_effective_at,
                 note=c.get("note"),
             )
             written.append(await uow.audit_events.insert_effect(effect))
@@ -1342,7 +1366,7 @@ class OperationsService:
     ):
         operation = await uow.operations.get_operation_by_id(operation_id)
         OperationsWorkflowPolicy.require_exists(operation)
-        OperationsWorkflowPolicy.require_not_cancelled_for_effective_at_change(operation)
+        OperationsWorkflowPolicy.require_draft_for_effective_at_change(operation)
         previous_effective_at = operation.effective_at
 
         updated = await uow.operations.update_operation(
@@ -1394,6 +1418,11 @@ class OperationsService:
         operation = await uow.operations.get_operation_by_id(operation_id)
         OperationsWorkflowPolicy.require_exists(operation)
         OperationsWorkflowPolicy.require_draft_for_update(operation)
+        # ADR-0028 §2: effective_at is draft-only mutable. Explicit guard
+        # clarifies the failure even when other draft-only guards (e.g. lines,
+        # operation_type) could also trip.
+        if "effective_at" in update_data.model_fields_set:
+            OperationsWorkflowPolicy.require_draft_for_effective_at_change(operation)
         lines_count_before = len(operation.lines)
 
         # При смене типа: валидировать, что operation_type допустим
@@ -2250,6 +2279,7 @@ class OperationsService:
                 operation_id=submitted_operation.id,
                 is_system_generated=is_system,
                 caused_by_event_id=getattr(uow, "audit_caused_by_event_id", None),
+                effective_at=submitted_operation.effective_at,
             )
 
             response = {"operation": submitted_operation}
@@ -2311,6 +2341,15 @@ class OperationsService:
                 )
 
             if accepted_delta > 0:
+                line_progress_before = (
+                    Decimal(line.accepted_qty),
+                    Decimal(line.lost_qty),
+                )
+                balance_before_row = await uow.balances.get_for_update(
+                    site_id=destination_site_id,
+                    inventory_subject_id=line.inventory_subject_id,
+                )
+                balance_before_qty = Decimal(getattr(balance_before_row, "qty", 0) or 0)
                 await OperationsService._upsert_pending(
                     uow,
                     operation_id=operation.id,
@@ -2331,13 +2370,72 @@ class OperationsService:
                     accepted_delta=accepted_delta,
                     lost_delta=Decimal("0"),
                 )
-                await uow.asset_registers.create_acceptance_action(
+                action = await uow.asset_registers.create_acceptance_action(
                     operation_id=operation.id,
                     operation_line_id=line.id,
                     action_type="accept",
                     qty=accepted_delta,
                     performed_by_user_id=user_id,
                     notes=update.note,
+                )
+
+                # A-4 / ADR-0028 §4.1: per-action event + warehouse effect.
+                # The event explicitly references the OperationAcceptanceAction
+                # id; the effect is bound to the event (1:1 ownership) and
+                # carries the action.performed_at as cause timestamp.
+                accept_event = await record_audit_event(
+                    uow,
+                    event_type="operation.line_accepted",
+                    actor_user_id=user_id,
+                    site_id=destination_site_id,
+                    entity_type="operation_line",
+                    entity_id=str(line.id),
+                    summary=(
+                        f"Принято {accepted_delta} {getattr(line, 'unit_symbol_snapshot', '') or ''} "
+                        f"по строке операции №{getattr(line, 'line_number', '?')}"
+                    ).strip(),
+                    changes={
+                        "operation_id": str(operation.id),
+                        "operation_line_id": int(line.id),
+                        "action_id": int(action.id),
+                        "action_type": "accept",
+                        "inventory_subject_id": int(line.inventory_subject_id),
+                        "item_id": int(line.item_id) if line.item_id is not None else None,
+                        "item_name_snapshot": getattr(line, "item_name_snapshot", None),
+                        "item_sku_snapshot": getattr(line, "item_sku_snapshot", None),
+                        "destination_site_id": int(destination_site_id),
+                        "qty": str(accepted_delta),
+                        "line_progress_before": {
+                            "accepted_qty": str(line_progress_before[0]),
+                            "lost_qty": str(line_progress_before[1]),
+                        },
+                        "line_progress_after": {
+                            "accepted_qty": str(line_progress_before[0] + accepted_delta),
+                            "lost_qty": str(line_progress_before[1]),
+                        },
+                    },
+                    outcome="success",
+                )
+                capture_for_accept: list[dict] = [
+                    {
+                        "site_id": destination_site_id,
+                        "inventory_subject_id": int(line.inventory_subject_id),
+                        "quantity_before": balance_before_qty,
+                        "quantity_delta": Decimal(accepted_delta),
+                        "quantity_after": balance_before_qty + Decimal(accepted_delta),
+                        "effect_type": "acceptance",
+                        "operation_line_id": int(line.id),
+                        "note": update.note or "acceptance",
+                        "cause_timestamp": action.performed_at,
+                    }
+                ]
+                await OperationsService._write_captured_effects(
+                    uow,
+                    capture=capture_for_accept,
+                    audit_event_id=int(accept_event.id),
+                    operation_id=operation.id,
+                    is_system_generated=False,
+                    caused_by_event_id=None,
                 )
 
             if lost_delta > 0:
@@ -2361,18 +2459,59 @@ class OperationsService:
                     qty_delta=lost_delta,
                     error_context="mark lost",
                 )
+                line_progress_before_lost = (
+                    Decimal(line.accepted_qty),
+                    Decimal(line.lost_qty),
+                )
                 await uow.operations.update_operation_line_progress(
                     operation_line_id=line.id,
                     accepted_delta=Decimal("0"),
                     lost_delta=lost_delta,
                 )
-                await uow.asset_registers.create_acceptance_action(
+                action_lost = await uow.asset_registers.create_acceptance_action(
                     operation_id=operation.id,
                     operation_line_id=line.id,
                     action_type="mark_lost",
                     qty=lost_delta,
                     performed_by_user_id=user_id,
                     notes=update.note,
+                )
+
+                # A-4 / ADR-0028 §4.1: per-action event, NO warehouse effect.
+                # mark_lost only moves qty between pending and the lost
+                # register; balances.qty does not change.
+                await record_audit_event(
+                    uow,
+                    event_type="operation.line_mark_lost",
+                    actor_user_id=user_id,
+                    site_id=destination_site_id,
+                    entity_type="operation_line",
+                    entity_id=str(line.id),
+                    summary=(
+                        f"Отмечено как утерянное {lost_delta} по строке операции "
+                        f"№{getattr(line, 'line_number', '?')}"
+                    ),
+                    changes={
+                        "operation_id": str(operation.id),
+                        "operation_line_id": int(line.id),
+                        "action_id": int(action_lost.id),
+                        "action_type": "mark_lost",
+                        "inventory_subject_id": int(line.inventory_subject_id),
+                        "item_id": int(line.item_id) if line.item_id is not None else None,
+                        "item_name_snapshot": getattr(line, "item_name_snapshot", None),
+                        "item_sku_snapshot": getattr(line, "item_sku_snapshot", None),
+                        "destination_site_id": int(destination_site_id),
+                        "qty": str(lost_delta),
+                        "line_progress_before": {
+                            "accepted_qty": str(line_progress_before_lost[0]),
+                            "lost_qty": str(line_progress_before_lost[1]),
+                        },
+                        "line_progress_after": {
+                            "accepted_qty": str(line_progress_before_lost[0]),
+                            "lost_qty": str(line_progress_before_lost[1] + lost_delta),
+                        },
+                    },
+                    outcome="success",
                 )
 
         refreshed = await uow.operations.get_operation_by_id(operation_id)
@@ -2429,27 +2568,41 @@ class OperationsService:
         if operation is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
+        warehouse_target_site_id: int | None = None
         if action == "found_to_destination":
             destination_site_id = OperationsService._destination_site_for_acceptance(operation)
+            balance_before_row = await uow.balances.get_for_update(
+                site_id=destination_site_id,
+                inventory_subject_id=lost_row.inventory_subject_id,
+            )
+            balance_before_qty = Decimal(getattr(balance_before_row, "qty", 0) or 0)
             await uow.balances.update_balance_quantity(
                 site_id=destination_site_id,
                 inventory_subject_id=lost_row.inventory_subject_id,
                 quantity_delta=qty,
             )
+            warehouse_target_site_id = int(destination_site_id)
         elif action == "return_to_source":
             if lost_row.source_site_id is None:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="source_site_id is required for return_to_source",
                 )
+            balance_before_row = await uow.balances.get_for_update(
+                site_id=lost_row.source_site_id,
+                inventory_subject_id=lost_row.inventory_subject_id,
+            )
+            balance_before_qty = Decimal(getattr(balance_before_row, "qty", 0) or 0)
             await uow.balances.update_balance_quantity(
                 site_id=lost_row.source_site_id,
                 inventory_subject_id=lost_row.inventory_subject_id,
                 quantity_delta=qty,
             )
+            warehouse_target_site_id = int(lost_row.source_site_id)
         elif action == "write_off":
-            # Inventory is removed from temporary lost register.
-            # Responsibility is linked via responsible_recipient_id in action log.
+            # Inventory is removed from temporary lost register only;
+            # responsibility is linked via responsible_recipient_id in action
+            # log. balances.qty does NOT change.
             pass
         else:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="unsupported action")
@@ -2464,7 +2617,7 @@ class OperationsService:
             qty_delta=-qty,
             error_context=action,
         )
-        await uow.asset_registers.create_acceptance_action(
+        action_row = await uow.asset_registers.create_acceptance_action(
             operation_id=lost_row.operation_id,
             operation_line_id=lost_row.operation_line_id,
             action_type=action,
@@ -2473,6 +2626,59 @@ class OperationsService:
             recipient_id=responsible_recipient_id,
             notes=note,
         )
+
+        # A-4 / ADR-0028 §4.2: per-action event with `action_type`.
+        # For found_to_destination and return_to_source, a warehouse effect
+        # is also persisted with the action.performed_at as the captured
+        # cause timestamp (effective_at wiring lands in A-5).
+        lost_resolved_event = await record_audit_event(
+            uow,
+            event_type="operation.line_lost_resolved",
+            actor_user_id=user_id,
+            site_id=getattr(operation, "site_id", None),
+            entity_type="operation_line",
+            entity_id=str(lost_row.operation_line_id),
+            summary=(
+                f"Решение по утерянному имуществу ({action}): {qty}"
+            ),
+            changes={
+                "operation_id": str(lost_row.operation_id),
+                "operation_line_id": int(lost_row.operation_line_id),
+                "action_id": int(action_row.id),
+                "action_type": action,
+                "qty": str(qty),
+                "inventory_subject_id": int(lost_row.inventory_subject_id),
+                "site_id": int(lost_row.site_id),
+                "source_site_id": (
+                    int(lost_row.source_site_id) if lost_row.source_site_id is not None else None
+                ),
+            },
+            outcome="success",
+        )
+
+        if warehouse_target_site_id is not None:
+            capture_resolve: list[dict] = [
+                {
+                    "site_id": int(warehouse_target_site_id),
+                    "inventory_subject_id": int(lost_row.inventory_subject_id),
+                    "quantity_before": balance_before_qty,
+                    "quantity_delta": Decimal(qty),
+                    "quantity_after": balance_before_qty + Decimal(qty),
+                    "effect_type": "acceptance",
+                    "operation_line_id": int(lost_row.operation_line_id),
+                    "note": note or action,
+                    "cause_timestamp": action_row.performed_at,
+                }
+            ]
+            await OperationsService._write_captured_effects(
+                uow,
+                capture=capture_resolve,
+                audit_event_id=int(lost_resolved_event.id),
+                operation_id=lost_row.operation_id,
+                is_system_generated=False,
+                caused_by_event_id=None,
+            )
+
         return {"status": "ok"}
 
     @staticmethod
@@ -2769,6 +2975,7 @@ class OperationsService:
             operation_id=cancelled_operation.id,
             is_system_generated=is_system,
             caused_by_event_id=getattr(uow, "audit_caused_by_event_id", None),
+            effective_at=cancelled_operation.cancelled_at,
         )
 
         logger.info("cancelled operation=%s by user=%s reason=%s", operation_id, user_id, reason)
@@ -2784,12 +2991,82 @@ class OperationsService:
         OperationsWorkflowPolicy.require_exists(operation)
         OperationsWorkflowPolicy.require_cancelled_for_restore(operation)
 
+        # Snapshot the cancelled-side metadata BEFORE the repo clears it so
+        # the audit row reflects the actual cancel state.
+        cancelled_at_before = getattr(operation, "cancelled_at", None)
+        cancelled_by_user_id_before = getattr(operation, "cancelled_by_user_id", None)
+        cancel_reason_before = getattr(operation, "cancel_reason", None)
+        previous_version = int(operation.version)
+        previous_status = "cancelled"
+
         restored = await uow.operations.restore_operation(
             operation_id=operation_id,
             restored_by_user_id=user_id,
         )
 
-        logger.info("restore_operation", operation_id=str(operation_id), user_id=str(user_id))
+        # Defensive: workflow guard already enforces status==cancelled, but
+        # an external caller (or future replay) may try to restore an
+        # already-restored op. In that case no version bump happened and no
+        # duplicate audit row should be written.
+        if restored is not None and int(restored.version) == previous_version:
+            logger.info(
+                "restore_operation_noop",
+                operation_id=str(operation_id),
+                user_id=str(user_id),
+                previous_version=previous_version,
+            )
+            return {"operation": restored}
+
+        # ADR-0028 §3.1: causal link to the latest successful
+        # operation.cancel event (if any). Legacy operations without a
+        # cancel event remain observable through cancel_event_missing=true.
+        parent_cancel_event = await uow.audit_events.find_latest_event_for_entity(
+            event_type="operation.cancel",
+            entity_type="operation",
+            entity_id=str(operation_id),
+            outcome="success",
+        )
+        parent_event_id = parent_cancel_event.event_id if parent_cancel_event is not None else None
+
+        changes: dict[str, object] = {
+            "previous_status": previous_status,
+            "new_status": getattr(restored, "status", "draft"),
+            "previous_version": previous_version,
+            "new_version": int(restored.version) if restored is not None else previous_version,
+            "cancelled_at_before": cancelled_at_before.isoformat() if cancelled_at_before else None,
+            "cancelled_by_user_id_before": (
+                str(cancelled_by_user_id_before) if cancelled_by_user_id_before else None
+            ),
+            "cancel_reason_before": cancel_reason_before,
+            "restored_by_user_id": str(user_id),
+        }
+        if parent_event_id is None:
+            changes["cancel_event_missing"] = True
+
+        await record_audit_event(
+            uow,
+            event_type="operation.restore",
+            actor_user_id=user_id,
+            site_id=getattr(restored, "site_id", None) or getattr(operation, "site_id", None),
+            entity_type="operation",
+            entity_id=str(operation_id),
+            summary=(
+                f"Пользователь восстановил операцию №{getattr(restored, 'short_id', '')}"
+                if getattr(restored, "short_id", None)
+                else "Операция восстановлена из отмены"
+            ),
+            changes=changes,
+            outcome="success",
+            parent_event_id=parent_event_id,
+        )
+
+        logger.info(
+            "restore_operation",
+            operation_id=str(operation_id),
+            user_id=str(user_id),
+            parent_event_id=str(parent_event_id) if parent_event_id else None,
+            cancel_event_missing=parent_event_id is None,
+        )
         return {"operation": restored}
 
     @staticmethod

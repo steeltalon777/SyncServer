@@ -253,10 +253,15 @@ async def test_storekeeper_cannot_change_effective_at_after_submit(
 
 
 @pytest.mark.asyncio
-async def test_chief_storekeeper_can_change_effective_at_for_submitted_operation(
+async def test_chief_storekeeper_cannot_change_effective_at_for_submitted_operation(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """ADR-0028 §2: effective_at is draft-only mutable. Chief on a submitted
+    operation must receive 409 from the workflow guard, even when permission
+    is granted (chief has global access; permission guard passes, workflow
+    guard fails).
+    """
     seed = await _seed_fixture(session_factory)
     operation = await _create_operation(
         client,
@@ -279,7 +284,98 @@ async def test_chief_storekeeper_can_change_effective_at_for_submitted_operation
         json={"effective_at": new_effective_at.isoformat()},
     )
 
+    assert update_response.status_code == 409
+    assert "effective_at" in update_response.json()["detail"]
+    # operation was NOT mutated
+    refresh = await client.get(
+        f"/api/v1/operations/{operation['id']}",
+        headers={"X-User-Token": seed["chief_token"]},
+    )
+    assert refresh.status_code == 200
+    assert refresh.json()["status"] == "submitted"
+    assert refresh.json()["effective_at"] != new_effective_at.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_root_cannot_change_effective_at_for_cancelled_operation(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """ADR-0028 §2: cancelled operations are fail-closed for effective_at."""
+    seed = await _seed_fixture(session_factory)
+    operation = await _create_operation(
+        client,
+        token=seed["root_token"],
+        site_id=seed["site_id"],
+        item_id=seed["item_id"],
+    )
+
+    submit_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/submit",
+        headers={"X-User-Token": seed["root_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+
+    cancel_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/cancel",
+        headers={"X-User-Token": seed["root_token"]},
+        json={"cancel": True, "reason": "test"},
+    )
+    assert cancel_response.status_code == 200
+
+    update_response = await client.patch(
+        f"/api/v1/operations/{operation['id']}/effective-at",
+        headers={"X-User-Token": seed["root_token"]},
+        json={"effective_at": datetime(2026, 1, 23, 12, 0, tzinfo=timezone.utc).isoformat()},
+    )
+
+    assert update_response.status_code == 409
+    assert "effective_at" in update_response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_root_can_change_effective_at_for_restored_draft(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """ADR-0028 §2: restored operations are draft again and accept effective_at."""
+    seed = await _seed_fixture(session_factory)
+    operation = await _create_operation(
+        client,
+        token=seed["root_token"],
+        site_id=seed["site_id"],
+        item_id=seed["item_id"],
+    )
+
+    submit_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/submit",
+        headers={"X-User-Token": seed["root_token"]},
+        json={"submit": True},
+    )
+    assert submit_response.status_code == 200
+
+    cancel_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/cancel",
+        headers={"X-User-Token": seed["root_token"]},
+        json={"cancel": True, "reason": "test"},
+    )
+    assert cancel_response.status_code == 200
+
+    restore_response = await client.post(
+        f"/api/v1/operations/{operation['id']}/restore",
+        headers={"X-User-Token": seed["root_token"]},
+        json={"restore": True},
+    )
+    assert restore_response.status_code == 200
+    assert restore_response.json()["status"] == "draft"
+
+    new_effective_at = datetime(2026, 1, 24, 9, 0, tzinfo=timezone.utc)
+    update_response = await client.patch(
+        f"/api/v1/operations/{operation['id']}/effective-at",
+        headers={"X-User-Token": seed["root_token"]},
+        json={"effective_at": new_effective_at.isoformat()},
+    )
+
     assert update_response.status_code == 200
-    updated_operation = update_response.json()
-    assert updated_operation["status"] == "submitted"
-    assert datetime.fromisoformat(updated_operation["effective_at"]) == new_effective_at
+    assert datetime.fromisoformat(update_response.json()["effective_at"]) == new_effective_at

@@ -12,11 +12,23 @@ class OperationsWorkflowPolicy:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
     @staticmethod
-    def require_not_cancelled_for_effective_at_change(operation) -> None:
-        if operation.status == "cancelled":
+    def require_draft_for_effective_at_change(operation) -> None:
+        """Fail-closed draft-only guard for effective_at PATCH (ADR-0028 §2).
+
+        Only `status == 'draft'` is mutable; submitted, cancelled and any
+        unknown/legacy status return HTTP 409. Existing workflow guards
+        (operations_policy.require_operation_effective_at_permission)
+        are responsible for 403/role checks; this guard is orthogonal and
+        ensures service-direct callers see the same fail-closed semantics
+        as the route.
+        """
+        if operation.status != "draft":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="cannot change effective_at for cancelled operation",
+                detail=(
+                    "cannot change effective_at: only draft operations allow "
+                    f"effective_at changes (current status: {operation.status})"
+                ),
             )
 
     @staticmethod

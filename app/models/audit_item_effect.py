@@ -90,6 +90,15 @@ class AuditItemEffect(Base):
         nullable=True,
     )
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Business timestamp of when the balance mutation became effective
+    # (ADR-0028 §5). Distinct from created_at (physical insert time).
+    # Producers must set it explicitly; server_default is a compatibility
+    # safety net only.
+    effective_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -109,4 +118,5 @@ class AuditItemEffect(Base):
         Index("ix_audit_item_effects_site_id", "site_id"),
         Index("ix_audit_item_effects_operation_id", "operation_id"),
         Index("ix_audit_item_effects_effect_type", "effect_type"),
+        Index("ix_audit_item_effects_effective_at", "effective_at"),
     )
