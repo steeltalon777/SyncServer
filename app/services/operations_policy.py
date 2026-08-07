@@ -10,10 +10,12 @@ from app.services.uow import UnitOfWork
 class OperationsPolicy:
     """Centralized access rules for operations and acceptance workflows."""
 
-    READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
+    # ADR-0030: agent has observer-level business read and draft creation,
+    # but no site operate / submit / lifecycle authority.
+    READ_ROLES = {"chief_storekeeper", "storekeeper", "observer", "agent"}
     WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
     TEMPORARY_ITEM_CREATE_ROLES = {"chief_storekeeper", "storekeeper"}
-    CREATE_DRAFT_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
+    CREATE_DRAFT_ROLES = {"chief_storekeeper", "storekeeper", "observer", "agent"}
 
     @staticmethod
     def require_read_site(identity: Identity, site_id: int) -> None:
@@ -69,6 +71,28 @@ class OperationsPolicy:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="only the operation creator, chief_storekeeper, or root may modify this draft",
+            )
+
+    @staticmethod
+    def require_agent_own_draft(identity: Identity, operation) -> None:
+        """ADR-0030 / TZ-AGENT-ROLE-SYNCSERVER §6.3, §6.6: agent may touch only
+        its own draft operations.
+
+        For non-agent identities this is a no-op (routes call it only inside
+        the agent branch). For the agent role the operation must be a draft
+        created by the same agent user, otherwise 403.
+        """
+        if identity.role != "agent":
+            return
+        if operation.status != "draft":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="agent may only modify its own draft operations",
+            )
+        if operation.created_by_user_id != identity.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="agent may only modify its own draft operations",
             )
 
     @staticmethod

@@ -31,7 +31,8 @@ from app.services.uow import UnitOfWork
 router = APIRouter(prefix="/catalog")
 logger = structlog.get_logger()
 
-ALLOWED_CATALOG_READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
+# TZ-AGENT-ROLE-SYNCSERVER §4.2: agent read >= observer read for business catalog data.
+ALLOWED_CATALOG_READ_ROLES = {"chief_storekeeper", "storekeeper", "observer", "agent"}
 DEFAULT_CATEGORY_READ_INCLUDES = {
     "parent",
     "parent_chain_summary",
@@ -167,7 +168,11 @@ async def list_sites(
                 "permissions": {
                     "can_view": True,
                     "can_operate": identity.has_global_business_access or identity.role in {"chief_storekeeper", "storekeeper"},
-                    "can_manage_catalog": identity.has_global_business_access or identity.role == "chief_storekeeper",
+                    # TZ §4.3: agent sees all active sites with can_manage_catalog=true,
+                    # can_operate=false (no site-operation authority).
+                    "can_manage_catalog": identity.has_global_business_access
+                    or identity.role == "chief_storekeeper"
+                    or identity.is_agent,
                 },
             }
             for site in sites

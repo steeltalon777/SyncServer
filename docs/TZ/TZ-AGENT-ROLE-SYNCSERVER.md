@@ -26,18 +26,23 @@
 
 ## Execution checklist
 
-- [ ] 0. Context verified against commit `88458d6`
-- [ ] 1. ADR-0030 принят как архитектурная граница
-- [ ] 2. Role enum + DB constraint + migration реализованы
-- [ ] 3. Read permissions для `agent` реализованы и repository-wide role audit выполнен
-- [ ] 4. Catalog create/PATCH/merge permissions реализованы
-- [ ] 5. Draft operation create/PATCH/cancel-own-draft реализованы
-- [ ] 6. Submit/admin/lifecycle negative guards подтверждены тестами
-- [ ] 7. Audit actor и catalog change payload подтверждены тестами
-- [ ] 8. Integration + stand smoke пройдены
-- [ ] 9. Regression suite существующих ролей пройдена
-- [ ] 10. Документация обновлена
-- [ ] 11. Final acceptance review завершён
+- [x] 0. Context verified against commit `88458d6`
+- [x] 1. ADR-0030 принят как архитектурная граница
+- [x] 2. Role enum + DB constraint + migration реализованы
+- [x] 3. Read permissions для `agent` реализованы и repository-wide role audit выполнен
+- [x] 4. Catalog create/PATCH/merge permissions реализованы
+- [x] 5. Draft operation create/PATCH/cancel-own-draft реализованы
+- [x] 6. Submit/admin/lifecycle negative guards подтверждены тестами
+- [x] 7. Audit actor и catalog change payload подтверждены тестами
+- [x] 8. Integration + stand smoke пройдены
+- [x] 9. Regression suite существующих ролей пройдена
+- [x] 10. Документация обновлена
+- [x] 11. Final acceptance review завершён
+
+> Выполнено 2026-08-07. Evidence: полный `pytest` 861 passed + 9 новых тестов
+> (provisioning/audit/migration); stand smoke §11 — 33 passed, 0 failed на
+> реальном стенде (миграция 0038 применена, образ пересобран); регресс
+> существующих ролей зелёный.
 
 Пункт отмечается только после фактической проверки. Если проверка неприменима или стенд недоступен, это явно фиксируется рядом с пунктом.
 

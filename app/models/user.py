@@ -42,7 +42,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
-        comment="Domain role: 'root', 'chief_storekeeper', 'storekeeper', 'observer'"
+        comment="Domain role: 'root', 'chief_storekeeper', 'storekeeper', 'observer', 'agent'"
     )
     default_site_id: Mapped[int | None] = mapped_column(
         Integer,
@@ -82,7 +82,7 @@ class User(Base):
         Index("ux_users_user_token", "user_token", unique=True),
         Index("ix_users_default_site_id", "default_site_id"),  # новый индекс
         CheckConstraint(
-            "role IN ('root', 'chief_storekeeper', 'storekeeper', 'observer')",
+            "role IN ('root', 'chief_storekeeper', 'storekeeper', 'observer', 'agent')",
             name="ck_users_role"
         ),
     )

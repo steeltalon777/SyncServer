@@ -24,7 +24,8 @@ from fastapi.responses import HTMLResponse, Response
 router = APIRouter(prefix="/documents")
 logger = structlog.get_logger()
 
-READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
+# TZ-AGENT-ROLE-SYNCSERVER §4.1: agent business read >= observer read.
+READ_ROLES = {"chief_storekeeper", "storekeeper", "observer", "agent"}
 WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
 
 

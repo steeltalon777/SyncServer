@@ -86,6 +86,11 @@ class Identity:
         """Business-supervisor access across all sites."""
         return self.is_root or self.role == "chief_storekeeper"
 
+    @property
+    def is_agent(self) -> bool:
+        """Draft/catalog LLM agent role (ADR-0030). Not a global authority."""
+        return self.user is not None and self.role == "agent"
+
     def has_site_access(self, site_id: int) -> bool:
         """Check if identity has access to a specific site."""
         if self.has_global_business_access:

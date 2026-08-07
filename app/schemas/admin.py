@@ -9,7 +9,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from app.schemas.common import ORMBaseModel
 
 
-UserRole = Literal["root", "chief_storekeeper", "storekeeper", "observer"]
+UserRole = Literal["root", "chief_storekeeper", "storekeeper", "observer", "agent"]
 
 
 # Site schemas

@@ -26,7 +26,8 @@ from app.services.uow import UnitOfWork
 router = APIRouter(prefix="/issue-objects")
 router_categories = APIRouter(prefix="/issue-object-categories")
 
-READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
+# TZ-AGENT-ROLE-SYNCSERVER §4.1: agent business read >= observer read.
+READ_ROLES = {"chief_storekeeper", "storekeeper", "observer", "agent"}
 WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
 
 

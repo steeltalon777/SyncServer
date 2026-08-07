@@ -29,14 +29,17 @@ from app.schemas.catalog import (
     BatchChangeResult,
 )
 from app.services.catalog_admin_service import CatalogAdminService
+from app.services.catalog_agent_policy import validate_agent_patch
 from app.services.uow import UnitOfWork
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/catalog/admin")
 logger = structlog.get_logger()
 
 
 async def _require_catalog_admin(identity: Identity) -> None:
+    """TZ §5.1: root/chief-only guard for lifecycle actions (delete/deactivate/batch/bulk)."""
     if identity.is_root:
         return
 
@@ -47,6 +50,31 @@ async def _require_catalog_admin(identity: Identity) -> None:
         )
 
 
+async def _require_catalog_admin_or_agent(identity: Identity) -> None:
+    """TZ §5.3/§5.4: agent may create item/category/unit and merge via the
+    existing contracts. Lifecycle authority stays root/chief-only."""
+    if identity.is_agent:
+        return
+    await _require_catalog_admin(identity)
+
+
+async def _require_catalog_admin_read(identity: Identity) -> None:
+    """TZ §5.5: GET list/detail under /catalog/admin/* is opened to agent
+    (read-only surface for inactive/deleted entities)."""
+    if identity.is_agent:
+        return
+    await _require_catalog_admin(identity)
+
+
+async def _require_catalog_patch(identity: Identity, payload: BaseModel, entity_kind: str) -> None:
+    """TZ §5.2: agent PATCH only through the centralized allow-list; known fields
+    outside the allow-list are rejected with 403 before the mutation service runs."""
+    if identity.is_agent:
+        validate_agent_patch(entity_kind, payload.model_dump(exclude_unset=True))
+        return
+    await _require_catalog_admin(identity)
+
+
 @router.post("/units", response_model=UnitResponse)
 async def create_unit(
     payload: UnitCreateRequest,
@@ -55,8 +83,9 @@ async def create_unit(
     identity: Identity = Depends(require_user_identity),
 ) -> UnitResponse:
     service = CatalogAdminService()
+    # TZ §5.1: 403 raised before any mutation runs — outside the uow transaction.
+    await _require_catalog_admin_or_agent(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         unit = await service.create_unit(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info("create_unit", request_id=get_request_id(request), unit_id=unit.id, user_id=identity.user_id)
@@ -71,8 +100,9 @@ async def bulk_create_units(
     identity: Identity = Depends(require_user_identity),
 ) -> UnitBulkCreateResponse:
     service = CatalogAdminService()
+    # TZ §5.5: bulk create stays root/chief-only — 403 raised before the transaction.
+    await _require_catalog_admin(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         units = await service.bulk_create_units(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info("bulk_create_units", request_id=get_request_id(request), count=len(units), user_id=identity.user_id)
@@ -88,8 +118,10 @@ async def update_unit(
     identity: Identity = Depends(require_user_identity),
 ) -> UnitResponse:
     service = CatalogAdminService()
+    # TZ §5.1: 403 must be raised before the mutation service runs — outside the uow
+    # transaction so a rejected agent request cannot roll back unrelated writes.
+    await _require_catalog_patch(identity=identity, payload=payload, entity_kind="unit")
     async with uow:
-        await _require_catalog_admin(identity=identity)
         unit = await service.update_unit(uow, unit_id, payload, updated_by_user_id=identity.user_id)
 
     logger.info("update_unit", request_id=get_request_id(request), unit_id=unit.id, user_id=identity.user_id)
@@ -104,8 +136,9 @@ async def create_category(
     identity: Identity = Depends(require_user_identity),
 ) -> CategoryResponse:
     service = CatalogAdminService()
+    # TZ §5.1: 403 raised before any mutation runs — outside the uow transaction.
+    await _require_catalog_admin_or_agent(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         category = await service.create_category(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info(
@@ -125,8 +158,9 @@ async def bulk_create_categories(
     identity: Identity = Depends(require_user_identity),
 ) -> CategoryBulkCreateResponse:
     service = CatalogAdminService()
+    # TZ §5.5: bulk create stays root/chief-only — 403 raised before the transaction.
+    await _require_catalog_admin(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         categories = await service.bulk_create_categories(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info(
@@ -147,8 +181,9 @@ async def update_category(
     identity: Identity = Depends(require_user_identity),
 ) -> CategoryResponse:
     service = CatalogAdminService()
+    # TZ §5.1: 403 raised before the mutation service — outside the uow transaction.
+    await _require_catalog_patch(identity=identity, payload=payload, entity_kind="category")
     async with uow:
-        await _require_catalog_admin(identity=identity)
         category = await service.update_category(uow, category_id, payload, updated_by_user_id=identity.user_id)
 
     logger.info(
@@ -168,8 +203,9 @@ async def create_item(
     identity: Identity = Depends(require_user_identity),
 ) -> ItemResponse:
     service = CatalogAdminService()
+    # TZ §5.1: 403 raised before any mutation runs — outside the uow transaction.
+    await _require_catalog_admin_or_agent(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         item = await service.create_item(uow, payload, created_by_user_id=identity.user_id)
 
     logger.info("create_item", request_id=get_request_id(request), item_id=item.id, user_id=identity.user_id)
@@ -185,8 +221,9 @@ async def update_item(
     identity: Identity = Depends(require_user_identity),
 ) -> ItemResponse:
     service = CatalogAdminService()
+    # TZ §5.1: 403 raised before the mutation service — outside the uow transaction.
+    await _require_catalog_patch(identity=identity, payload=payload, entity_kind="item")
     async with uow:
-        await _require_catalog_admin(identity=identity)
         item = await service.update_item(uow, item_id, payload, updated_by_user_id=identity.user_id)
 
     logger.info("update_item", request_id=get_request_id(request), item_id=item.id, user_id=identity.user_id)
@@ -201,8 +238,9 @@ async def get_unit(
     identity: Identity = Depends(require_user_identity),
 ) -> UnitResponse:
     service = CatalogAdminService()
+    # TZ §5.5: GET list/detail is opened to agent (read-only) — guard before transaction.
+    await _require_catalog_admin_read(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         unit = await service.get_unit(uow, unit_id)
 
     logger.info("get_unit", request_id=get_request_id(request), unit_id=unit.id, user_id=identity.user_id)
@@ -217,8 +255,9 @@ async def delete_unit(
     identity: Identity = Depends(require_user_identity),
 ) -> None:
     service = CatalogAdminService()
+    # TZ §5.5: delete stays root/chief-only — agent gets 403 before the transaction.
+    await _require_catalog_admin(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         await service.delete_unit(uow, unit_id, identity.user_id)
 
     logger.info("delete_unit", request_id=get_request_id(request), unit_id=unit_id, user_id=identity.user_id)
@@ -235,8 +274,9 @@ async def list_units(
     page_size: int = Query(50, ge=1, le=200),
 ) -> UnitListResponse:
     service = CatalogAdminService()
+    # TZ §5.5: GET list/detail is opened to agent (read-only) — guard before transaction.
+    await _require_catalog_admin_read(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         units, total_count = await service.list_units(
             uow,
             include_inactive=include_inactive,
@@ -268,8 +308,9 @@ async def get_category(
     identity: Identity = Depends(require_user_identity),
 ) -> CategoryResponse:
     service = CatalogAdminService()
+    # TZ §5.5: GET list/detail is opened to agent (read-only) — guard before transaction.
+    await _require_catalog_admin_read(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         category = await service.get_category(uow, category_id)
 
     logger.info("get_category", request_id=get_request_id(request), category_id=category.id, user_id=identity.user_id)
@@ -284,8 +325,9 @@ async def delete_category(
     identity: Identity = Depends(require_user_identity),
 ) -> None:
     service = CatalogAdminService()
+    # TZ §5.5: delete stays root/chief-only — agent gets 403 before the transaction.
+    await _require_catalog_admin(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         await service.delete_category(uow, category_id, identity.user_id)
 
     logger.info("delete_category", request_id=get_request_id(request), category_id=category_id, user_id=identity.user_id)
@@ -302,8 +344,9 @@ async def list_categories(
     page_size: int = Query(50, ge=1, le=200),
 ) -> CategoryListResponse:
     service = CatalogAdminService()
+    # TZ §5.5: GET list/detail is opened to agent (read-only) — guard before transaction.
+    await _require_catalog_admin_read(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         categories, total_count = await service.list_categories(
             uow,
             include_inactive=include_inactive,
@@ -335,8 +378,9 @@ async def get_item(
     identity: Identity = Depends(require_user_identity),
 ) -> ItemResponse:
     service = CatalogAdminService()
+    # TZ §5.5: GET list/detail is opened to agent (read-only) — guard before transaction.
+    await _require_catalog_admin_read(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         item = await service.get_item(uow, item_id)
 
     logger.info("get_item", request_id=get_request_id(request), item_id=item.id, user_id=identity.user_id)
@@ -351,8 +395,9 @@ async def delete_item(
     identity: Identity = Depends(require_user_identity),
 ) -> None:
     service = CatalogAdminService()
+    # TZ §5.5: delete stays root/chief-only — agent gets 403 before the transaction.
+    await _require_catalog_admin(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         await service.delete_item(uow, item_id, identity.user_id)
 
     logger.info("delete_item", request_id=get_request_id(request), item_id=item_id, user_id=identity.user_id)
@@ -369,8 +414,9 @@ async def list_items(
     page_size: int = Query(50, ge=1, le=200),
 ) -> ItemListResponse:
     service = CatalogAdminService()
+    # TZ §5.5: GET list/detail is opened to agent (read-only) — guard before transaction.
+    await _require_catalog_admin_read(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         items, total_count = await service.list_items(
             uow,
             include_inactive=include_inactive,
@@ -401,7 +447,7 @@ async def merge_items(
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
 ) -> ItemResponse:
-    await _require_catalog_admin(identity=identity)
+    await _require_catalog_admin_or_agent(identity=identity)
     service = CatalogAdminService()
     async with uow:
         target = await service.merge_items(
@@ -425,7 +471,7 @@ async def merge_categories(
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
 ) -> CategoryResponse:
-    await _require_catalog_admin(identity=identity)
+    await _require_catalog_admin_or_agent(identity=identity)
     service = CatalogAdminService()
     async with uow:
         target = await service.merge_categories(
@@ -459,9 +505,11 @@ async def apply_catalog_batch(
     Supported actions: create, update, deactivate, delete
     """
     service = CatalogAdminService()
-    
+
+    # TZ §5.5: /catalog/admin/batch intentionally stays root/chief-only — agent gets
+    # 403 before the transaction (batch mixes create/update/deactivate/delete/merge).
+    await _require_catalog_admin(identity=identity)
     async with uow:
-        await _require_catalog_admin(identity=identity)
         results, summary = await service.apply_batch(uow=uow, payload=payload, identity=identity)
     
     # Determine overall status

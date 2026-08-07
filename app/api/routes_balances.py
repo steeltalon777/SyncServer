@@ -18,7 +18,8 @@ from app.services.uow import UnitOfWork
 router = APIRouter(prefix="/balances")
 logger = structlog.get_logger()
 
-READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
+# ADR-0030: agent has observer-level read access to balances.
+READ_ROLES = {"chief_storekeeper", "storekeeper", "observer", "agent"}
 
 
 def _require_read_access(identity: Identity) -> None:

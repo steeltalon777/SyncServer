@@ -12,6 +12,7 @@ ROLE_ROOT = "root"
 ROLE_CHIEF_STOREKEEPER = "chief_storekeeper"
 ROLE_STOREKEEPER = "storekeeper"
 ROLE_OBSERVER = "observer"
+ROLE_AGENT = "agent"
 
 class AccessService:
     """Domain access and permission service using new UserAccessScope model."""
@@ -153,6 +154,19 @@ class AccessService:
                 "can_manage_catalog": True,
                 "can_manage_root_admin": user.is_root,
                 "is_root": user.is_root,
+            }
+
+        # ADR-0030 / TZ-AGENT-ROLE-SYNCSERVER §4.3: agent permissions are
+        # global and scope-independent. can_create_operations means draft
+        # creation, not submit authority.
+        if user.role == ROLE_AGENT:
+            return {
+                "can_read_operations": True,
+                "can_create_operations": True,
+                "can_read_balances": True,
+                "can_manage_catalog": True,
+                "can_manage_root_admin": False,
+                "is_root": False,
             }
 
         # Check scope for non-root users

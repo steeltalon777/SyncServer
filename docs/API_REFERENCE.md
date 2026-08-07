@@ -18,7 +18,7 @@ Authorization model:
 - all clients use the same token headers and role/scope checks
 - access is determined by user role plus `UserAccessScope`
 - `UserAccessScope.can_operate` and `can_manage_catalog` govern site-scoped operational and management rights
-- read visibility (can_view) is global for all read-capable roles (observer, storekeeper, chief_storekeeper, root) — all sites are visible per `Functional and WorkLogik.md`
+- read visibility (can_view) is global for all read-capable roles (observer, agent, storekeeper, chief_storekeeper, root) — all sites are visible per `Functional and WorkLogik.md`
 
 ## Error Model
 Most errors return FastAPI default:
@@ -134,7 +134,7 @@ Merge endpoints (catalog admin):
 Bulk catalog admin creation:
 - endpoints accept JSON body `{ "items": [...] }`
 - behavior is atomic: if one row conflicts or fails validation, the whole request is rolled back
-- auth rules: `root` and `chief_storekeeper` may access catalog admin; `storekeeper` and `observer` are denied
+- auth rules: `root` and `chief_storekeeper` have full catalog admin access; `agent` may create Item/Category/Unit, PATCH business fields via the server-side allow-list (ADR-0030) and run Item/Category merge, but cannot delete/deactivate entities or use `/catalog/admin/batch`; `storekeeper` and `observer` are denied
 - category bulk create supports `parent_id` references to already existing categories; `client_key` / `parent_key` tree import is not part of this contract
 
 Bulk units example:
@@ -254,7 +254,7 @@ Payload notes:
 Access:
 - root: all sites
 - chief_storekeeper: all sites as global business supervisor
-- storekeeper/observer: all visible sites (global read visibility per `Functional and WorkLogik.md`)
+- storekeeper/observer/agent: all visible sites (global read visibility per `Functional and WorkLogik.md`)
 
 `GET /balances` list rows are UI-ready and include:
 - `site_id`, `site_name`
@@ -276,7 +276,7 @@ Endpoints:
 Access:
 - root: все сайты
 - chief_storekeeper: все сайты как глобальный бизнес-супервизор
-- storekeeper/observer: все видимые сайты (глобальная read visibility согласно `Functional and WorkLogik.md`)
+- storekeeper/observer/agent: все видимые сайты (глобальная read visibility согласно `Functional and WorkLogik.md`)
 
 ### GET /lost-assets
 
@@ -389,7 +389,7 @@ Access:
 Access:
 - root: all sites
 - chief_storekeeper: all sites as global business supervisor
-- storekeeper/observer: all visible sites (global read visibility per `Functional and WorkLogik.md`)
+- storekeeper/observer/agent: all visible sites (global read visibility per `Functional and WorkLogik.md`)
 
 `GET /reports/item-movement` returns aggregated rows with:
 - `site_id`, `site_name`

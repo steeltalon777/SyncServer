@@ -13977,7 +13977,8 @@ _No request body_
         "root",
         "chief_storekeeper",
         "storekeeper",
-        "observer"
+        "observer",
+        "agent"
       ],
       "title": "Role",
       "default": "observer"
@@ -14089,7 +14090,8 @@ _No request body_
         "root",
         "chief_storekeeper",
         "storekeeper",
-        "observer"
+        "observer",
+        "agent"
       ],
       "title": "Role",
       "default": "observer"
@@ -14264,7 +14266,8 @@ _No request body_
             "root",
             "chief_storekeeper",
             "storekeeper",
-            "observer"
+            "observer",
+            "agent"
           ]
         },
         {
@@ -14341,7 +14344,8 @@ _No request body_
         "root",
         "chief_storekeeper",
         "storekeeper",
-        "observer"
+        "observer",
+        "agent"
       ],
       "title": "Role",
       "default": "observer"

@@ -12,6 +12,7 @@ CANONICAL_ROLES = [
     "chief_storekeeper",
     "storekeeper",
     "observer",
+    "agent",
 ]
 
 

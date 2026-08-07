@@ -7,6 +7,7 @@ Accepted
 Decision date: 2026-08-07.
 Verified against `steeltalon777/SyncServer` `dev@88458d667da3ddb97c2d2e1a59122cdefa0b9a58`.
 Implementation specification: `docs/TZ/TZ-AGENT-ROLE-SYNCSERVER.md` rev.2.
+Implemented: 2026-08-07 (migration `0038_add_agent_role`, `agent` in `UserRole`/`CANONICAL_ROLES`/`Identity.is_agent`, observer-parity business read, catalog create/PATCH allow-list/merge policy in `app/services/catalog_agent_policy.py`, agent own-draft operations path, agent branch in `/auth/sites` and `/auth/context`).
 
 ## Context
 

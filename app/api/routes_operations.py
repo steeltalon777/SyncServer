@@ -219,25 +219,32 @@ async def update_operation(
         if not operation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
-        OperationsPolicy.require_operate_site(identity, operation.site_id)
-        OperationsPolicy.require_operation_owner_or_supervisor(identity, operation)
-        if operation.operation_type == "MOVE":
-            source_site_id = update_data.source_site_id if "source_site_id" in update_data.model_fields_set else operation.source_site_id
-            destination_site_id = (
-                update_data.destination_site_id
-                if "destination_site_id" in update_data.model_fields_set
-                else operation.destination_site_id
-            )
-            OperationsPolicy.require_move_access(identity, source_site_id, destination_site_id)
+        # ADR-0030 / TZ-AGENT-ROLE-SYNCSERVER §6.3: agent edits only its own
+        # draft via a dedicated own-draft path. require_move_access is NOT used
+        # as an auth gate for agent (it implies site-operate semantics); MOVE
+        # structural validation is performed by OperationsService.update_operation.
+        if identity.role == "agent":
+            OperationsPolicy.require_agent_own_draft(identity, operation)
+        else:
+            OperationsPolicy.require_operate_site(identity, operation.site_id)
+            OperationsPolicy.require_operation_owner_or_supervisor(identity, operation)
+            if operation.operation_type == "MOVE":
+                source_site_id = update_data.source_site_id if "source_site_id" in update_data.model_fields_set else operation.source_site_id
+                destination_site_id = (
+                    update_data.destination_site_id
+                    if "destination_site_id" in update_data.model_fields_set
+                    else operation.destination_site_id
+                )
+                OperationsPolicy.require_move_access(identity, source_site_id, destination_site_id)
 
-        # Если меняется тип, нужно перепроверить права доступа к складам
-        if "operation_type" in update_data.model_fields_set and update_data.operation_type is not None:
-            new_type = update_data.operation_type
-            if new_type == "MOVE":
-                src = update_data.source_site_id or operation.source_site_id
-                dst = update_data.destination_site_id or operation.destination_site_id
-                if src and dst:
-                    OperationsPolicy.require_move_access(identity, src, dst)
+            # Если меняется тип, нужно перепроверить права доступа к складам
+            if "operation_type" in update_data.model_fields_set and update_data.operation_type is not None:
+                new_type = update_data.operation_type
+                if new_type == "MOVE":
+                    src = update_data.source_site_id or operation.source_site_id
+                    dst = update_data.destination_site_id or operation.destination_site_id
+                    if src and dst:
+                        OperationsPolicy.require_move_access(identity, src, dst)
 
         if update_data.lines is not None and any(
             line.temporary_item is not None for line in update_data.lines
@@ -366,9 +373,16 @@ async def cancel_operation(
         if not operation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
 
-        OperationsPolicy.require_operate_site(identity, operation.site_id)
+        # ADR-0030 / TZ-AGENT-ROLE-SYNCSERVER §6.6: agent may cancel only its
+        # own draft. require_operate_site / require_move_access are bypassed
+        # for agent (no site-operate semantics); the existing cancel policy
+        # already allows the creator of a draft and forbids submitted non-root.
+        if identity.role == "agent":
+            OperationsPolicy.require_agent_own_draft(identity, operation)
+        else:
+            OperationsPolicy.require_operate_site(identity, operation.site_id)
         OperationsPolicy.require_operation_cancel_permission(identity, operation)
-        if operation.operation_type == "MOVE":
+        if identity.role != "agent" and operation.operation_type == "MOVE":
             OperationsPolicy.require_move_access(identity, operation.source_site_id, operation.destination_site_id)
 
         result = await OperationsService.cancel_operation(

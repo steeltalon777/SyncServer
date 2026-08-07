@@ -31,6 +31,24 @@ def _has_global_business_access(user: User) -> bool:
     return user.is_root or user.role == "chief_storekeeper"
 
 
+def _is_agent(user: User) -> bool:
+    return user.role == "agent"
+
+
+def _site_payload(site, *, can_view: bool, can_operate: bool, can_manage_catalog: bool) -> dict:
+    return {
+        "site_id": site.id,
+        "code": site.code,
+        "name": site.name,
+        "is_active": site.is_active,
+        "permissions": {
+            "can_view": can_view,
+            "can_operate": can_operate,
+            "can_manage_catalog": can_manage_catalog,
+        },
+    }
+
+
 def _user_sync_payload(user: User) -> dict:
     payload = _user_payload(user)
     payload["user_token"] = str(user.user_token)
@@ -181,17 +199,24 @@ async def get_user_sites(
             return {
                 "is_root": user.is_root,
                 "available_sites": [
-                    {
-                        "site_id": site.id,
-                        "code": site.code,
-                        "name": site.name,
-                        "is_active": site.is_active,
-                        "permissions": {
-                            "can_view": True,
-                            "can_operate": True,
-                            "can_manage_catalog": True,
-                        },
-                    }
+                    _site_payload(site, can_view=True, can_operate=True, can_manage_catalog=True)
+                    for site in sites
+                ],
+            }
+
+        # ADR-0030 / TZ-AGENT-ROLE-SYNCSERVER §4.3: agent sees all active
+        # business sites as a reference directory, without site-operate rights.
+        if _is_agent(user):
+            sites, _ = await uow.sites.list_sites(
+                filter=SiteFilter(is_active=True),
+                user_site_ids=None,
+                page=1,
+                page_size=1000,
+            )
+            return {
+                "is_root": False,
+                "available_sites": [
+                    _site_payload(site, can_view=True, can_operate=False, can_manage_catalog=True)
                     for site in sites
                 ],
             }
@@ -213,17 +238,12 @@ async def get_user_sites(
         return {
             "is_root": False,
             "available_sites": [
-                {
-                    "site_id": site.id,
-                    "code": site.code,
-                    "name": site.name,
-                    "is_active": site.is_active,
-                    "permissions": {
-                        "can_view": scope_by_site[site.id].can_view,
-                        "can_operate": scope_by_site[site.id].can_operate,
-                        "can_manage_catalog": scope_by_site[site.id].can_manage_catalog,
-                    },
-                }
+                _site_payload(
+                    site,
+                    can_view=scope_by_site[site.id].can_view,
+                    can_operate=scope_by_site[site.id].can_operate,
+                    can_manage_catalog=scope_by_site[site.id].can_manage_catalog,
+                )
                 for site in sites
             ],
         }
@@ -248,17 +268,21 @@ async def get_auth_context(
                 page_size=1000,
             )
             available_sites = [
-                {
-                    "site_id": site.id,
-                    "code": site.code,
-                    "name": site.name,
-                    "is_active": site.is_active,
-                    "permissions": {
-                        "can_view": True,
-                        "can_operate": True,
-                        "can_manage_catalog": True,
-                    },
-                }
+                _site_payload(site, can_view=True, can_operate=True, can_manage_catalog=True)
+                for site in sites
+            ]
+            accessible_site_ids = [site["site_id"] for site in available_sites]
+        elif _is_agent(user):
+            # ADR-0030 / TZ-AGENT-ROLE-SYNCSERVER §4.3: agent sees all active
+            # business sites, but can_operate=false (no submit/site-operate).
+            sites, _ = await uow.sites.list_sites(
+                filter=SiteFilter(is_active=True),
+                user_site_ids=None,
+                page=1,
+                page_size=1000,
+            )
+            available_sites = [
+                _site_payload(site, can_view=True, can_operate=False, can_manage_catalog=True)
                 for site in sites
             ]
             accessible_site_ids = [site["site_id"] for site in available_sites]
@@ -276,17 +300,12 @@ async def get_auth_context(
             else:
                 sites = []
             available_sites = [
-                {
-                    "site_id": site.id,
-                    "code": site.code,
-                    "name": site.name,
-                    "is_active": site.is_active,
-                    "permissions": {
-                        "can_view": scope_by_site[site.id].can_view,
-                        "can_operate": scope_by_site[site.id].can_operate,
-                        "can_manage_catalog": scope_by_site[site.id].can_manage_catalog,
-                    },
-                }
+                _site_payload(
+                    site,
+                    can_view=scope_by_site[site.id].can_view,
+                    can_operate=scope_by_site[site.id].can_operate,
+                    can_manage_catalog=scope_by_site[site.id].can_manage_catalog,
+                )
                 for site in sites
             ]
 
@@ -303,6 +322,13 @@ async def get_auth_context(
             permissions_summary = await access_service.get_user_permissions_uuid(
                 user_id=user.id,
                 site_id=default_site["site_id"],
+            )
+        elif _is_agent(user):
+            # ADR-0030 §4.3: agent permissions are global and scope-independent,
+            # so the summary is valid even without any site / default_site.
+            permissions_summary = await access_service.get_user_permissions_uuid(
+                user_id=user.id,
+                site_id=0,
             )
         else:
             permissions_summary = {
