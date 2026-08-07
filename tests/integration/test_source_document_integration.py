@@ -206,26 +206,39 @@ async def test_scenario_5_rename_item_between_create_and_submit():
         )
 
         uow = UnitOfWork(session)
-        result = await OperationsService.create_operation_from_source_document(
-            uow=uow, payload=payload, user_id=user_id,
-        )
-        op = result["operation"]
+        try:
+            result = await OperationsService.create_operation_from_source_document(
+                uow=uow, payload=payload, user_id=user_id,
+            )
+            op = result["operation"]
 
-        # Rename item between create and submit
-        new_name = f"{original_name} (RENAMED {datetime.now(UTC).isoformat()})"
-        item.name = new_name
-        await session.flush()
+            # Rename item between create and submit
+            new_name = f"{original_name} (RENAMED {datetime.now(UTC).isoformat()})"
+            item.name = new_name
+            await session.flush()
 
-        await OperationsService.submit_operation(
-            uow=uow, operation_id=op.id, user_id=user_id,
-        )
+            await OperationsService.submit_operation(
+                uow=uow, operation_id=op.id, user_id=user_id,
+            )
 
-        fresh_op = await uow.operations.get_operation_by_id(op.id)
-        line = fresh_op.lines[0]
+            fresh_op = await uow.operations.get_operation_by_id(op.id)
+            line = fresh_op.lines[0]
 
-        assert line.item_name_snapshot == new_name, \
-            f"Expected '{new_name}', got '{line.item_name_snapshot}'"
-        await session.commit()
+            assert line.item_name_snapshot == new_name, \
+                f"Expected '{new_name}', got '{line.item_name_snapshot}'"
+            await session.commit()
+        finally:
+            # Restore the shared item's name so this test does not pollute the
+            # persistent DB. Rollback first: on the failure path this releases
+            # the uncommitted rename lock held by this session (no-op after a
+            # successful commit). Then restore the original name in a fresh
+            # session. Runs even when the assertion above fails.
+            await session.rollback()
+            async with SessionFactory() as restore_session:
+                item_to_restore = await restore_session.get(Item, item_id)
+                if item_to_restore is not None:
+                    item_to_restore.name = original_name
+                    await restore_session.commit()
 
 
 @pytest.mark.integration
