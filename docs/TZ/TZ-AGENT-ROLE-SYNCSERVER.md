@@ -1,289 +1,283 @@
-# TZ: SyncServer — Доменная роль `agent` для LLM и безопасный доступ к каталогу
+# TZ: SyncServer — доменная роль `agent` для LLM
 
-> Источник задачи: GitHub Issue
-> `steeltalon777/warehouse_solution-#18`
-> «FEAT: SyncServer — доменная роль agent для LLM и безопасный доступ к каталогу»
-> (2026-08-07, status: Ready to Work, repository: `steeltalon777/warehouse_solution-`).
+> Revision: 2 — executor-ready
+> Проверено по `steeltalon777/SyncServer`, ветка `dev`, commit `88458d667da3ddb97c2d2e1a59122cdefa0b9a58` (`3.3 pre ready`), 2026-08-07.
+> Источник продуктового требования: `steeltalon777/warehouse_solution-#18`.
+> Архитектурное решение: `docs/adr/0030-agent-domain-role.md`.
 
-## Execution Checklist
+## 0. Executive summary
 
-- [ ] 0. Context verified
-- [ ] 1. Architecture boundaries confirmed
-- [ ] 2. Implementation level 1 complete — role enum, check constraint, default guard
-- [ ] 3. Unit/component tests complete — role/identity/policy unit tests
-- [ ] 4. Integration tests with real dependencies complete — DB-backed authz tests
-- [ ] 5. Stand smoke tests complete — real SyncServer + Postgres
-- [ ] 6. UI automation tests complete — N/A (server-only feature; covered by 5)
-- [ ] 7. User scenario tests complete — agent draft→chief submit happy path
-- [ ] 8. Regression checks complete — существующие 4 роли без регрессий
-- [ ] 9. Documentation updated — DOMAIN_MODEL, Role Matrix, Functional, API_MAP, ADR
-- [ ] 10. Final acceptance review complete
+Добавить в SyncServer пятую доменную роль `agent` для доверенного LLM-агента главного кладовщика.
 
-## Check Rules
+Ключевой принцип:
 
-- Architect (этот документ) создаёт чек-лист и критерии приёмки.
-- Executor-агенты отмечают пункты 0–9 только после собственной проверки.
-- QA-проверяющий отмечает пункт 10 только после рассмотрения evidence.
-- Пропущенные проверки остаются `[ ]` с пометкой «стенд недоступен» или «feature not applicable».
+- SyncServer является единственной границей реальных полномочий;
+- agent работает только под собственным `X-User-Token`;
+- agent имеет широкий read-доступ к бизнес-данным;
+- agent может создавать и изменять каталог в ограниченном сервером наборе действий;
+- agent может создавать и редактировать только собственные `draft`-операции;
+- agent не может `submit`-ить операции и не может самостоятельно изменить подтверждённое складское состояние;
+- отдельный catalog approval/submit workflow не вводится;
+- токен `chief_storekeeper` агенту не передаётся и не подменяется.
+
+Поведенческое правило «PATCH/MERGE существующего каталога только после явной команды кладовщика» остаётся в agent wrapper/system prompt. Это UX/behaviour rule, а не security boundary SyncServer.
 
 ---
 
-## 1. Purpose
+## Execution checklist
 
-Добавить в SyncServer самостоятельную доменную роль `agent`,
-которая представляет доверенного LLM-агента главного кладовщика.
+- [ ] 0. Context verified against commit `88458d6`
+- [ ] 1. ADR-0030 принят как архитектурная граница
+- [ ] 2. Role enum + DB constraint + migration реализованы
+- [ ] 3. Read permissions для `agent` реализованы и repository-wide role audit выполнен
+- [ ] 4. Catalog create/PATCH/merge permissions реализованы
+- [ ] 5. Draft operation create/PATCH/cancel-own-draft реализованы
+- [ ] 6. Submit/admin/lifecycle negative guards подтверждены тестами
+- [ ] 7. Audit actor и catalog change payload подтверждены тестами
+- [ ] 8. Integration + stand smoke пройдены
+- [ ] 9. Regression suite существующих ролей пройдена
+- [ ] 10. Документация обновлена
+- [ ] 11. Final acceptance review завершён
 
-`agent`:
-
-- читает каталог, единицы, категории, склады, остатки, операции и
-  репозитории основного UI;
-- создаёт и правит каталог через штатные сервисы (`items`, `categories`,
-  `units`), используя только разрешённые бизнес-поля;
-- выполняет штатный merge ТМЦ и категорий через существующие
-  endpoint'ы `items/merge` и `categories/merge`;
-- создаёт и редактирует только `draft`-операции;
-- **не** подтверждает операции, **не** отменяет подтверждённые,
-  **не** восстанавливает отменённые, **не** управляет
-  пользователями / устройствами / токенами / складами;
-- **не** изменяет служебные merge/system-поля напрямую.
-
-Все ограничения должны быть **серверными**, а не свойством
-skill/system prompt/CLI-обвязки.
-
-`agent` всегда работает под собственным `X-User-Token`. Подмена
-его токена на токен главного кладовщика запрещена.
-
-На текущем этапе отдельный human approval/Submission workflow для
-каталога **не вводится**: правило «PATCH/MERGE только после явной
-команды кладовщика» живёт в agent wrapper / system prompt.
+Пункт отмечается только после фактической проверки. Если проверка неприменима или стенд недоступен, это явно фиксируется рядом с пунктом.
 
 ---
 
-## 2. Source Requirements
+## 1. Scope
 
-- Issue `steeltalon777/warehouse_solution-#18` — текст issue, раздел
-  «Архитектурное решение» и далее (разрешённые/запрещённые действия,
-  audit, поведенческое правило вне SyncServer).
-- Корневой `Functional and WorkLogik.md` — канонический источник
-  функциональных требований; роль `agent` добавляется как новая роль
-  (расширение существующего множества `root/chief_storekeeper/storekeeper/observer`).
-  Это требует обновления раздела II и `Role Matrix.md`.
-- `Role Matrix.md` — текущая матрица 4×N; роль `agent` добавляется
-  отдельной колонкой (см. §10).
-- `SyncServer/AGENTS.md` и `SyncServer/AI_CONTEXT.md` — правила
-  слоистой архитектуры (API → services → repos → PostgreSQL через
-  `UnitOfWork`); бизнес-правила и authz остаются в сервисах и
-  политике.
-- `SyncServer/docs/adr/0005-token-auth-and-site-scoped-access.md` —
-  `X-User-Token` / `X-Device-Token`, `User.is_root`, `User.role`,
-  `UserAccessScope`. Роль `agent` не получает site scopes по
-  умолчанию (см. §6) и не считается `has_global_business_access`.
-- `SyncServer/docs/adr/0002-layered-architecture-with-unit-of-work.md`
-  — все мутации через `UnitOfWork`; route остаётся тонким; auth
-  логика выносится в политику.
-- `SyncServer/docs/adr/0001-syncserver-source-of-truth.md` —
-  SyncServer остаётся единственным источником истины для каталога и
-  операций; agent не пишет в обход него.
-- Существующие политики:
-  `SyncServer/app/services/operations_policy.py`,
-  `SyncServer/app/services/operations_workflow_policy.py`,
-  `SyncServer/app/api/admin_common.py`,
-  `SyncServer/app/services/access_service.py`,
-  `SyncServer/app/services/access_service_v2.py`,
-  `SyncServer/app/services/catalog_admin_service.py`.
+### 1.1. Разрешено роли `agent`
 
-### Out of Scope
+#### Business read
 
-- Новые сущности `CatalogChangeRequest`, `CatalogMergeRequest`,
-  `CatalogApproval`.
-- Server-side state machine «submit/approve» для изменений каталога.
-- Token impersonation (`agent-token` подменять на `chief_storekeeper-token`).
-- Расширение `chief_storekeeper` (выдача его прав агенту).
-- Прямой PATCH `merged_into_id`, `deleted_at`, `is_active` через
-  обычные PATCH endpoint'ы.
-- Прямой `submit` операций агентом.
+`agent` должен иметь как минимум тот же read-доступ к обычным бизнес-данным, который сейчас имеет `observer`.
 
----
+Обязательные поверхности:
 
-## 3. Current State Snapshot
+- каталог Items / Categories / Units;
+- дерево и browse/read catalog endpoints;
+- Sites как бизнес-справочник;
+- balances;
+- operations, кроме текущих root-only ограничений на cancelled;
+- бизнес-read endpoints основного UI, если они уже разрешены `observer`.
 
-### 3.1. Auth и role enum
+Правило для исполнителя: выполнить repository-wide audit всех hard-coded role lists/comparisons. Если endpoint является обычным бизнес-read и сейчас разрешён `observer`, `agent` также должен получить read. Технические, machine/sync и admin endpoints автоматически не расширять.
 
-- `SyncServer/app/models/user.py` — `User.role: String(32)`,
-  `CheckConstraint("role IN ('root', 'chief_storekeeper', 'storekeeper', 'observer')")`.
-  Добавление `agent` требует обновления `Literal[...]` в
-  `app/schemas/admin.py:12` и миграции `alembic`.
-- `SyncServer/app/schemas/admin.py:12` —
-  `UserRole = Literal["root","chief_storekeeper","storekeeper","observer"]`.
-  Используется в `UserCreate`, `UserUpdate`, фильтрах.
-- `SyncServer/app/services/admin_users_service.py:31` —
-  `validate_user_role_payload` уже валидирует `role != "root"` для
-  admin API (root создаётся только bootstrap'ом). Расширение enum
-  до `agent` совместимо с этим правилом.
-- `SyncServer/app/services/identity_service.py` и
-  `app/core/identity.py` — `Identity` уже отдаёт
-  `role`, `is_root`, `has_global_business_access`, `can_*` методы.
-  `agent` должен попадать в `Identity.role`, но **не** в
-  `has_global_business_access`.
+#### Catalog mutations
 
-### 3.2. Authz-решения в коде
+Разрешить через существующие специализированные API/service paths:
 
-- `SyncServer/app/api/admin_common.py:10` —
-  `CANONICAL_ROLES = ["root","chief_storekeeper","storekeeper","observer"]`
-  подаётся в `GET /api/v1/admin/roles`. Должен включать `agent`.
-- `SyncServer/app/api/admin_common.py:18` —
-  `require_admin_basic` пропускает только `is_root` или
-  `role == "chief_storekeeper"`. `agent` не должен проходить.
-- `SyncServer/app/api/routes_catalog_admin.py:39` —
-  `_require_catalog_admin` — то же правило, должно остаться
-  для back-office admin; agent будет иметь **отдельный guard**.
-- `SyncServer/app/services/operations_policy.py`:
-  - `READ_ROLES = {"chief_storekeeper","storekeeper","observer"}`
-    (operations read).
-  - `WRITE_ROLES = {"chief_storekeeper","storekeeper"}` (operations
-    create, submit).
-  - `CREATE_DRAFT_ROLES = {"chief_storekeeper","storekeeper","observer"}`
-    — agent надо явно добавить.
-  - `require_operation_submit_permission` —
-    `has_global_business_access` или `role == "storekeeper"`.
-    Для `agent` должен возвращать 403.
-  - `require_operation_cancel_permission` — для submitted → только
-    root; для draft → creator, chief, root. agent — не creator
-    бизнес-операции, но сам draft создал — должен иметь право
-    отменять **свои** draft.
-  - `require_root_for_restore` — только root; agent → 403.
-  - `require_operation_effective_at_permission` —
-    `has_global_business_access` или (draft + creator). agent →
-    только свои draft.
-  - `require_temporary_item_moderation` — только chief/root;
-    agent → 403.
-  - `require_lost_resolve_access` — только chief/root;
-    agent → 403.
+- `POST /api/v1/catalog/admin/items`;
+- `POST /api/v1/catalog/admin/categories`;
+- `POST /api/v1/catalog/admin/units`;
+- `PATCH /api/v1/catalog/admin/items/{id}` с allow-list полей;
+- `PATCH /api/v1/catalog/admin/categories/{id}` с allow-list полей;
+- `PATCH /api/v1/catalog/admin/units/{id}` с allow-list полей;
+- `POST /api/v1/catalog/admin/items/merge`;
+- `POST /api/v1/catalog/admin/categories/merge`.
 
-### 3.3. Catalog admin / merge
+Допускается открыть для agent GET list/detail endpoints внутри `/catalog/admin/*`, если они нужны для чтения inactive/deleted сущностей. Они read-only и не дают lifecycle authority.
 
-- `SyncServer/app/services/catalog_admin_service.py` —
-  `merge_items`, `merge_categories`, `update_item`,
-  `update_category`, `update_unit`, `create_item`,
-  `create_category`, `create_unit` принимают `*_by_user_id` и пишут
-  audit через `record_audit_event(actor_user_id=...)`.
-- `SyncServer/app/api/routes_catalog_admin.py` — все write endpoint'ы
-  catalog admin защищены `_require_catalog_admin`. Под `agent` они
-  должны открываться частично:
-  - POST `/catalog/admin/units`, `/categories`, `/items` —
-    разрешить;
-  - PATCH `/catalog/admin/units/{id}`, `/categories/{id}`,
-    `/items/{id}` — разрешить с фильтром полей;
-  - POST `/catalog/admin/items/merge`, `/categories/merge` —
-    разрешить;
-  - GET `/catalog/admin/units`, `/categories`, `/items` (списки и
-    отдельные) — разрешить для чтения;
-  - DELETE `/catalog/admin/units/{id}`, `/categories/{id}`,
-    `/items/{id}` — запретить (catalog lifecycle обход через soft
-    delete + active=false; agent не должен иметь возможности
-    удалять/деактивировать).
-  - POST `/catalog/admin/batch` — применить allow-list к каждому
-    change, запретить delete/deactivate для `agent`.
-  - POST `/catalog/admin/units/bulk`, `/categories/bulk` — разрешить
-    create только.
+#### Draft operations
 
-### 3.4. Audit
+Разрешить:
 
-- `SyncServer/app/services/audit_helper.py:17` —
-  `record_audit_event(actor_user_id=...)` уже хранит реальный UUID
-  актёра. `actor_role` как поле в `audit_events` на текущий момент
-  не сохраняется — он восстанавливается через join с `users.role`.
-- `SyncServer/app/models/audit_event.py` — таблица `audit_events`.
-  В этой TZ роль `agent` хранится в `actor_user_id`; отдельный
-  `actor_role` snapshot можно добавить позже отдельным изменением
-  (см. §11 риски).
+- `POST /api/v1/operations`;
+- `POST /api/v1/operations/from-source-document`;
+- `PATCH /api/v1/operations/{id}` только для draft, созданного этим же agent-user;
+- `PATCH /api/v1/operations/{id}/effective-at` только для собственного draft;
+- `POST /api/v1/operations/{id}/cancel` только для собственного draft.
 
-### 3.5. Identity / token
+PATCH собственного draft использует существующий `OperationUpdate` contract. Не вводить отдельное искусственное ограничение «agent не меняет operation_type/source_site_id/destination_site_id»: draft не имеет складского эффекта, а текущий `OperationsService.update_operation` уже валидирует допустимые комбинации типа и реквизитов. Agent не получает права обходить эти проверки.
 
-- `SyncServer/app/api/deps.py:104` — `require_user_identity`
-  резолвит `X-User-Token` в `Identity(user=...)` независимо от роли.
-  Никакой impersonation по `X-User-Token` другого пользователя.
-- `SyncServer/app/api/routes_auth.py`:
-  - `GET /api/v1/auth/me` — уже возвращает `role` пользователя.
-    Поле `role` приходит прямо из `user.role`, поэтому `agent`
-    отобразится без изменений.
-  - `GET /api/v1/auth/context` — `permissions_summary` строится
-    через `access_service.get_user_permissions_uuid`, который
-    отдаёт `False` для не-root/non-chief. agent должен видеть
-    свой `role`, но `can_manage_catalog` и `can_create_operations`
-    должны быть либо **True** (где явно разрешено) либо **False**
-    (где запрещено) — см. §6.
+### 1.2. Запрещено роли `agent`
+
+- submit/finalize операции;
+- acceptance (`accept-lines`) и другие действия, создающие/подтверждающие складской эффект;
+- cancel submitted operation;
+- restore cancelled operation;
+- corrections submit;
+- изменение submitted operation;
+- temporary item moderation;
+- lost asset resolution;
+- удаление/деактивация существующих Item/Category/Unit;
+- управление users;
+- user token read/rotation;
+- управление devices и device tokens;
+- создание/изменение sites;
+- access scopes;
+- admin audit/configuration;
+- root/system-admin bypass;
+- token impersonation;
+- прямое изменение merge/system полей в обход merge service.
+
+`DELETE /operations/{id}` в первой реализации роли agent не открывать. Это не требуется Issue #18 и не нужно для основного сценария «подготовил draft → chief submit».
+
+### 1.3. Явно out of scope
+
+- `CatalogChangeRequest`, `CatalogMergeRequest`, `CatalogApproval`;
+- catalog submit/approve state machine;
+- capability token/grant framework;
+- impersonation chief token;
+- отдельная agent-device модель;
+- `actor_role` snapshot column в audit;
+- offline-agent через client core;
+- новые batch semantics;
+- изменения `bootstrap_root.py` и `rotate_tokens.py`;
+- изменения Warehouse_web/BFF только ради роли agent.
 
 ---
 
-## 4. Architecture Boundaries
+## 2. Verified current state
 
-### 4.1. SyncServer owns
+Проверено на `dev@88458d6`.
 
-- Расширение `users.role` enum (DB check constraint + Pydantic
-  literal).
-- Серверная authz-политика роли `agent`.
-- Поле-allow-list для PATCH каталога (проверяется в сервисах).
-- Серверный запрет submit/merge-bypass/restore.
-- Audit: actor_user_id остаётся UUID агента (без переименования).
-- Документация: `DOMAIN_MODEL.md`, `Role Matrix.md`,
-  `Functional and WorkLogik.md` (через ADR-override в этом же TZ),
-  `API_MAP.md`.
+### 2.1. Role model
 
-### 4.2. Warehouse_web (BFF) owns
+Текущее состояние:
 
-- Не получает SyncServer-токен агента. Django хранит binding
-  Django-user → SyncUser (role=agent) и проксирует запросы от
-  своего серверного кода, а не от браузера.
-- `apps/sync_client/client.py` уже умеет проксировать
-  `X-User-Token`. Никакой клиент-специфичной логики для `agent`
-  добавлять не требуется.
+- `app/models/user.py`: `role` — `String(32)` с DB `CheckConstraint` на `root/chief_storekeeper/storekeeper/observer`;
+- `app/schemas/admin.py`: `UserRole = Literal["root", "chief_storekeeper", "storekeeper", "observer"]`;
+- `app/api/admin_common.py`: `CANONICAL_ROLES` содержит четыре роли;
+- `Identity.has_global_business_access` возвращает `is_root or role == "chief_storekeeper"`.
 
-### 4.3. warehouse-storekeeper (agent wrapper) owns
+После изменения `agent` добавляется в enum/constraint, но **не** добавляется в `has_global_business_access`.
 
-- Системный prompt с правилом «PATCH/MERGE только после явной
-  команды кладовщика». Это **вне** SyncServer и не считается
-  границей безопасности.
-- Обновить `syncserver.env.example` и `SKILL.md`, чтобы агент
-  использовал токен роли `agent`, а не `chief_storekeeper`.
+### 2.2. Existing user creation path
 
-### 4.4. SyncServer tests owns
+Новый bootstrap path не нужен.
 
-- Расширение unit-тестов в `tests/test_operations_permissions.py`,
-  `tests/test_auth_routes.py`, `tests/test_user_admin_flow.py`,
-  `tests/test_admin_root_permissions.py`, `tests/test_catalog_*`.
-- Новый файл `tests/test_agent_role_authz.py` — матрица сценариев
-  issue #18.
+После расширения `UserRole` существующие root-only потоки уже подходят для создания agent-user:
 
-### 4.5. Functional and WorkLogik (canonical)
+- `POST /api/v1/auth/sync-user`;
+- `POST /api/v1/admin/users`.
 
-- Добавить пункт 2.1.5 «agent» в раздел II с явной ссылкой на
-  ADR-0030 (новый, см. §13) и эту TZ.
-- `Role Matrix.md` — добавить колонку `agent` и строки «Создать
-  черновик», «Подтвердить операцию», «Управлять справочником»,
-  «Управлять пользователями», «PATCH/MERGE каталога» и т.д.
+`AdminUsersService.validate_user_role_payload` запрещает только создание root через admin API, поэтому `role=agent, is_root=false` естественно вписывается в текущий flow.
+
+Токен agent-user генерируется штатной моделью `User.user_token`. Существующий root-only token management применяется к нему как к обычному non-root user.
+
+### 2.3. Operations policy
+
+В `app/services/operations_policy.py`:
+
+```python
+READ_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
+WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
+CREATE_DRAFT_ROLES = {"chief_storekeeper", "storekeeper", "observer"}
+```
+
+`require_operation_submit_permission` уже fail-closed для любой роли кроме root/chief/storekeeper.
+
+`require_operation_cancel_permission` уже разрешает cancel draft его creator и запрещает submitted всем, кроме root.
+
+`require_operation_effective_at_permission` уже разрешает изменение собственного draft.
+
+Главный технический разрыв: route `PATCH /operations/{id}` и `POST /operations/{id}/cancel` вызывают `require_operate_site` раньше owner/cancel policy. Поэтому agent, несмотря на ownership draft, сейчас будет остановлен 403. Для agent нужен отдельный own-draft path без выдачи site operate permission.
+
+### 2.4. Operation service
+
+`OperationsService.update_operation` уже:
+
+- требует существование operation;
+- требует `draft` через workflow policy;
+- валидирует MOVE source/destination;
+- валидирует смену operation type;
+- валидирует строки;
+- пишет `operation.update` audit с реальным `actor_user_id`.
+
+Не дублировать эти бизнес-инварианты в agent policy.
+
+### 2.5. Catalog schemas/service
+
+Текущий `ItemUpdateRequest` содержит:
+
+- `sku`;
+- `name`;
+- `category_id`;
+- `unit_id`;
+- `description`;
+- `hashtags`;
+- `is_active`.
+
+`requires_review` и merge/system fields в `ItemUpdateRequest` **не входят**. Не описывать их как существующие PATCH-поля.
+
+`CategoryUpdateRequest` содержит `name/code/parent_id/sort_order/is_active`.
+
+`UnitUpdateRequest` содержит `name/symbol/sort_order/is_active`.
+
+`CatalogAdminService.update_*` уже пишет audit `changes={old,new}`. `merge_items` и `merge_categories` являются существующей доменной merge-логикой и должны переиспользоваться без копирования.
+
+### 2.6. `/admin/roles`
+
+`GET /api/v1/admin/roles` сейчас защищён `require_admin_basic`, то есть доступен root/chief, а не обычным пользователям.
+
+Требование: response должен содержать `agent` для админского UI. **Самому agent открывать `/admin/roles` не нужно.** Собственную роль он видит через `/auth/me` и `/auth/context`.
+
+### 2.7. Read role sets
+
+Как минимум отдельные hard-coded read role sets подтверждены в:
+
+- `app/services/operations_policy.py`;
+- `app/api/routes_catalog.py`;
+- `app/api/routes_balances.py`.
+
+Исполнитель обязан сделать repo-wide поиск `root`, `chief_storekeeper`, `storekeeper`, `observer`, `READ_ROLES`, `ALLOWED_*_ROLES` и классифицировать каждое совпадение. Не добавлять `agent` механически во все наборы.
 
 ---
 
-## 5. Domain Model Changes
+## 3. Domain model and migration
 
-### 5.1. `users.role`
+### 3.1. Role enum
 
-- **Column type:** без изменений (`String(32)`).
-- **Check constraint:**
-  `role IN ('root','chief_storekeeper','storekeeper','observer','agent')`.
-- **Pydantic literal:** `UserRole = Literal["root","chief_storekeeper","storekeeper","observer","agent"]`.
-- **`CANONICAL_ROLES`** в `app/api/admin_common.py`:
-  `["root","chief_storekeeper","storekeeper","observer","agent"]`.
-- **Alembic migration** (новая ревизия, `down_revision` =
-  последний существующий): `op.drop_constraint("ck_users_role", "users", type_="check")`
-  + `op.create_check_constraint("ck_users_role", "users", "role IN ('root','chief_storekeeper','storekeeper','observer','agent')")`.
-  Миграция **не** меняет существующие строки; добавление нового
-  значения в `IN` обратно совместимо.
+Обновить:
 
-### 5.2. `Identity` (`app/core/identity.py`)
+```python
+UserRole = Literal[
+    "root",
+    "chief_storekeeper",
+    "storekeeper",
+    "observer",
+    "agent",
+]
+```
 
-Добавить derived-метод (без ломки обратной совместимости):
+`CANONICAL_ROLES`:
+
+```python
+[
+    "root",
+    "chief_storekeeper",
+    "storekeeper",
+    "observer",
+    "agent",
+]
+```
+
+`User.role` comment также привести к пяти ролям.
+
+### 3.2. Alembic
+
+Текущий head на проверенном commit: `0037_audit_item_effects_effective_at`.
+
+Создать следующую ревизию, если head не изменился к моменту исполнения. Исполнитель **обязан повторно проверить Alembic head перед созданием файла**, а не слепо использовать номер из TZ.
+
+Upgrade:
+
+1. drop `ck_users_role`;
+2. recreate constraint с `agent`.
+
+Existing rows не изменять.
+
+Downgrade не должен молча превращать agent-users в observer. Перед сужением constraint:
+
+- проверить наличие `users.role='agent'`;
+- если такие строки есть — завершить downgrade явной ошибкой с инструкцией оператору сначала вручную переназначить роль;
+- если agent rows нет — вернуть старый constraint.
+
+Так rollback не меняет доменную идентичность пользователей скрыто.
+
+### 3.3. Identity
+
+Допустимо добавить convenience property:
 
 ```python
 @property
@@ -291,630 +285,563 @@ def is_agent(self) -> bool:
     return self.user is not None and self.user.role == "agent"
 ```
 
-`agent` не входит в `has_global_business_access`, не имеет
-site-scoped прав через `UserAccessScope` (agent не управляет
-складами и не оперирует), но при catalog read/operations
-read получает доступ ко всем сайтам (catalog global).
+Это не является новым authority flag.
 
-### 5.3. `OperationsPolicy` (`app/services/operations_policy.py`)
-
-- Добавить `"agent"` в `CREATE_DRAFT_ROLES`.
-- В `require_create_draft(identity, site_id)`:
-  - для `agent` — пропускать, **без** проверки site scope.
-- `READ_ROLES`: agent уже попадает под существующий
-  `{"chief_storekeeper","storekeeper","observer"}` **только** если
-  в него добавить. Для read operations agent должен видеть все
-  draft + submitted. Решение: agent добавляется в
-  `READ_ROLES` (через `has_global_business_access` agent не
-  проходит, поэтому нужна явная ветка).
-- `require_operation_submit_permission`: для `agent` сразу 403
-  (иначе он пройдёт через `has_global_business_access`? нет, не
-  пройдёт — но `role == "storekeeper"` тоже False, и функция
-  выдаст 403 уже сейчас). Требуется явный fail-closed комментарий
-  и unit-тест «agent submit draft → 403».
-- `require_operation_cancel_permission`:
-  - draft, creator == agent: разрешить (своя draft);
-  - draft, creator != agent: 403;
-  - submitted: 403 (как у всех не-root);
-  - cancelled → no-op: 409.
-- `require_operation_effective_at_permission`:
-  - draft + creator == agent: разрешить;
-  - иначе 403.
-- `require_root_for_restore`: agent → 403.
-- `require_operation_delete_permission`:
-  - draft ещё нельзя удалять (по workflow `cancelled` нужен),
-    agent не удаляет чужие; для agent — только свои
-    cancelled, либо 403 для draft.
-- `require_temporary_item_moderation`: agent → 403.
-- `require_lost_resolve_access`: agent → 403.
-- `require_assets_read_access`: agent видит `lost-assets`,
-  `issued-assets`, `pending-acceptance` (read) — для этого
-  добавить `agent` в `READ_ROLES` (см. выше).
-- `require_move_access`: agent не управляет операциями, выходящими
-  за draft; при попытке создать/обновить MOVE из agent-token →
-  403 (`WRITE_ROLES` не включает agent).
-
-### 5.4. Catalog admin policy (новый helper)
-
-Ввести helper в `app/services/access_service.py` (или новый
-`app/services/agent_policy.py`):
+Не менять:
 
 ```python
-class AgentPolicy:
-    """Server-side authorization for the LLM 'agent' role.
-
-    The server is the only source of truth. Skill/system-prompt
-    guards are NOT relied upon.
-    """
-
-    AGENT_ITEM_PATCH_FIELDS: frozenset[str] = frozenset(
-        {"name", "sku", "description", "category_id", "unit_id"}
-    )
-    AGENT_CATEGORY_PATCH_FIELDS: frozenset[str] = frozenset(
-        {"name", "code", "parent_id", "sort_order"}
-    )
-    AGENT_UNIT_PATCH_FIELDS: frozenset[str] = frozenset(
-        {"name", "symbol", "sort_order"}
-    )
-
-    @staticmethod
-    def require_agent(identity: Identity) -> None: ...
-    @staticmethod
-    def filter_item_patch(payload: ItemUpdateRequest) -> ItemUpdateRequest: ...
-    @staticmethod
-    def filter_category_patch(payload: CategoryUpdateRequest) -> CategoryUpdateRequest: ...
-    @staticmethod
-    def filter_unit_patch(payload: UnitUpdateRequest) -> UnitUpdateRequest: ...
+has_global_business_access == (is_root or role == "chief_storekeeper")
 ```
 
-Правила:
+---
 
-- Если в payload присутствует поле **вне** allow-list, service
-  выбрасывает `HTTPException(403, "field <X> is not editable for agent")`.
-- Если в payload присутствует запрещённое поле, в т.ч.
-  `is_active`, `requires_review`, `review_status`,
-  `merged_into_id`, `merged_at`, `merged_by_user_id`,
-  `merge_comment`, `deleted_at`, `deleted_by_user_id`,
-  `created_by_user_id`, `updated_by_user_id` — тот же 403.
-- `is_active` всегда запрещено менять агенту (обход lifecycle).
-- `create_*` (Item/Category/Unit) разрешает **все** поля
-  create-payload'а, кроме `is_active` если оно выставлено
-  `False` без явного `?force=` (по умолчанию `True`). Это
-  предотвращает случайное создание «неактивных» ТМЦ.
-- `merge_items` / `merge_categories` — отдельные endpoint'ы, без
-  bypass через PATCH. Метод должен принимать только
-  `source_*_id`, `target_*_id`, `comment`. Прямой PATCH
-  `merged_into_id` запрещён (см. §5.6).
+## 4. Read permissions
 
-### 5.5. Catalog admin routes (`app/api/routes_catalog_admin.py`)
+### 4.1. Принцип
 
-Заменить `_require_catalog_admin` на два guard'а:
+Для обычного business read:
 
-- `_require_catalog_admin_or_agent(identity)` — открывает
-  read/create/patch/merge для agent и chief/root.
-- `_require_catalog_admin(identity)` — оставить для delete,
-  batch-delete, batch-deactivate (chief/root only).
+```text
+agent read >= observer read
+```
 
-| Endpoint | root | chief | agent | storekeeper | observer |
-|---|---|---|---|---|---|
-| `GET /catalog/admin/{units,categories,items}` | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `GET /catalog/admin/{units,categories,items}/{id}` | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `POST /catalog/admin/{units,categories,items}` | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `POST /catalog/admin/{units,categories}/bulk` | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `PATCH /catalog/admin/{units,categories,items}/{id}` | ✅ | ✅ | ✅ (allow-list) | ❌ | ❌ |
-| `POST /catalog/admin/items/merge` | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `POST /catalog/admin/categories/merge` | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `POST /catalog/admin/batch` | ✅ | ✅ | ✅ (allow-list) | ❌ | ❌ |
-| `DELETE /catalog/admin/{units,categories,items}/{id}` | ✅ | ✅ | ❌ | ❌ | ❌ |
+Исключения сохраняют существующую политику:
 
-### 5.6. Anti-bypass правила
+- cancelled operations остаются root-only;
+- admin endpoints остаются admin-only;
+- device sync / machine integration / технические endpoints не открываются только из-за появления роли agent.
 
-- В `ItemUpdateRequest` / `CategoryUpdateRequest` /
-  `UnitUpdateRequest` оставить текущие поля; **service** отвечает
-  за фильтрацию. В `ItemUpdateRequest` уже есть `is_active`,
-  `requires_review` и т.д. — `AgentPolicy` отфильтрует их.
-- Прямой PATCH `merged_into_id` через `ItemUpdateRequest` не
-  предусмотрен схемой; проверить явно в `update_item`, что
-  атрибут `merged_into_id` (и `merged_at`, `merged_by_user_id`,
-  `merge_comment`) **никогда** не записывается обычным
-  `update_item` — это уже так (см.
-  `app/services/catalog_admin_service.py:847`). Добавить unit-тест
-  «agent не может выставить merged_into_id через PATCH».
-- `update_item` для agent: нельзя `is_active` в payload.
-- Merge bypass через PATCH `Item.category_id = <target>` без
-  вызова `merge_items` — допустимо (это простое перемещение
-  одной категории), но `merged_into_id` и `merged_at` НЕ
-  выставляются.
+### 4.2. Обязательные изменения
 
-### 5.7. Operations routes
+Добавить `agent`:
 
-- `POST /operations` (create draft) — agent проходит
-  `require_create_draft`.
-- `POST /operations/from-source-document` — agent проходит
-  `require_create_draft`. Дополнительно: schema
-  `SourceDocumentOperationCreate` не допускает `temporary_item`
-  по построению, поэтому `require_temporary_item_create` не
-  нужен.
-- `PATCH /operations/{id}` — для agent только свои draft:
-  - `require_operate_site(identity, site_id)` сейчас пропускает
-    только chief/root/storekeeper. agent не проходит. Нужна
-    отдельная ветка: agent → если draft && creator == agent
-    && status == draft, разрешить update lines (но не operation_type
-    и не site, см. ADR-0025/0027).
-  - Рекомендация: добавить в `OperationsPolicy`
-    `require_agent_update_own_draft(identity, operation)` —
-    fail-closed helper, который заменяет
-    `require_operate_site` для agent и принимает только свои
-    draft.
-- `PATCH /operations/{id}/effective-at` — agent может менять
-  effective_at **только** для своих draft (см.
-  `require_operation_effective_at_permission`).
-- `POST /operations/{id}/submit` — agent 403.
-- `POST /operations/{id}/cancel`:
-  - draft, creator == agent: 200;
-  - draft, creator != agent: 403;
-  - submitted: 403.
-- `POST /operations/{id}/restore` — agent 403.
-- `DELETE /operations/{id}` — agent только свои cancelled.
-- `POST /corrections/{op}/{corr}/submit` — corrections submit.
-  Текущий код требует 403 для не chief/root. agent → 403.
+- в `OperationsPolicy.READ_ROLES`;
+- в `routes_catalog.py::ALLOWED_CATALOG_READ_ROLES`;
+- в `routes_balances.py::READ_ROLES`.
 
-### 5.8. Admin routes
+После repo-wide audit добавить agent в аналогичные **business-read** sets, где сейчас присутствует observer.
 
-- `require_admin_basic(identity)` — оставить `is_root` или
-  `role == "chief_storekeeper"`. agent не проходит.
-- `require_root_admin(identity)` — без изменений.
-- Все `/admin/users*`, `/admin/devices*`, `/admin/sites*`,
-  `/admin/access/*`, `/admin/audit/*` — agent 403.
-- `GET /api/v1/admin/roles` — должен включать `agent` (т.е.
-  `CANONICAL_ROLES` уже расширен).
+### 4.3. Sites/auth context
 
-### 5.9. Auth endpoints
+Agent не использует `UserAccessScope` для глобального business read и draft preparation.
 
-- `GET /api/v1/auth/me` — без изменений, отдаёт `role: "agent"`.
-- `GET /api/v1/auth/context` — `permissions_summary`:
-  - `can_read_operations`: True;
-  - `can_create_operations`: True (только draft);
-  - `can_read_balances`: True;
-  - `can_manage_catalog`: True (с allow-list);
-  - `can_manage_root_admin`: False;
-  - `is_root`: False.
-- `GET /api/v1/auth/sites` — agent получает все активные сайты
-  (catalog global). Реализация: добавить ветку `is_agent or
-  has_global_business_access` в `routes_auth.py:get_user_sites` и
-  `get_auth_context` (или унифицировать через Identity helper).
+`GET /auth/sites` для agent должен вернуть активные sites с permissions:
 
-### 5.10. Audit
+```json
+{
+  "can_view": true,
+  "can_operate": false,
+  "can_manage_catalog": true
+}
+```
 
-- `actor_user_id` = agent user UUID. `actor_role` явно НЕ
-  подменяется на `chief_storekeeper`.
-- Audit payload для catalog patch: до/после по allow-listed
-  полям; `merged_into_id`/`is_active` в payload не пишутся.
-- Audit payload для merge: source/target ids.
-- Audit payload для operation draft create/patch: agent user id.
-- Запись `actor_role` как явного поля в `audit_events` —
-  **out of scope** этой TZ. См. §11 risk R-2.
+`can_operate=false` важно: agent не имеет submit/site-operation authority.
+
+`GET /auth/context`:
+
+```json
+{
+  "can_read_operations": true,
+  "can_create_operations": true,
+  "can_read_balances": true,
+  "can_manage_catalog": true,
+  "can_manage_root_admin": false,
+  "is_root": false
+}
+```
+
+`can_create_operations=true` здесь означает создание draft, а не submit.
+
+Предпочтительно реализовать agent branch централизованно в `AccessService.get_user_permissions_uuid` и auth sites/context logic, не добавляя agent в global-business helper.
 
 ---
 
-## 6. Site Scoping и access
+## 5. Catalog authorization
 
-`agent` — глобальная роль для catalog-уровня. Site scopes через
-`UserAccessScope` **не используются** для `agent`:
+### 5.1. Guard model
 
-- `UserAccessScope` предназначен для storekeeper/observer
-  (per-site `can_view`, `can_operate`, `can_manage_catalog`).
-- У `agent` нет складского «физического» контекста; он готовит
-  данные для главного кладовщика. Поэтому:
-  - Catalog read/CRUD/merge — глобально (catalog global).
-  - Operations create/patch — без site-scope проверки
-    (`require_create_draft` без `can_operate_at_site`).
-  - Operations submit/accept/cancel submitted/restore —
-    запрещено.
+Сохранить существующий `_require_catalog_admin` для root/chief-only действий.
 
-`Identity.has_global_business_access` остаётся
-`(is_root or role == "chief_storekeeper")`. `agent` не попадает
-в `has_global_business_access`. Глобальность catalog read для
-agent реализуется явной веткой в `routes_auth.py` и в
-`routes_catalog.py` (`ALLOWED_CATALOG_READ_ROLES` включает
-`agent`).
+Добавить небольшой server-side policy/helper для разрешённых agent catalog действий. Название не принципиально (`AgentPolicy`, `CatalogAgentPolicy`, `CatalogPermissionsPolicy`), но правила должны быть централизованы, а routes не должны содержать россыпь ad-hoc сравнений ролей.
 
-`ALLOWED_CATALOG_READ_ROLES = {"chief_storekeeper","storekeeper","observer","agent"}`.
+Policy не «фильтрует и молча выбрасывает» запрещённые поля. Если agent прислал известное PATCH-поле вне allow-list, запрос должен быть отклонён 403 до вызова mutation service.
+
+### 5.2. PATCH allow-list
+
+#### Item
+
+```text
+name
+sku
+description
+category_id
+unit_id
+hashtags
+```
+
+`hashtags` является обычным business-полем текущего `ItemUpdateRequest` и должно быть доступно agent.
+
+Запрещённое существующее PATCH-поле:
+
+```text
+is_active
+```
+
+Merge/system fields (`merged_into_id`, `merged_at`, `deleted_at` и т.д.) текущим `ItemUpdateRequest` не экспонируются и не должны добавляться.
+
+#### Category
+
+```text
+name
+code
+parent_id
+sort_order
+```
+
+Запрещено:
+
+```text
+is_active
+```
+
+#### Unit
+
+```text
+name
+symbol
+sort_order
+```
+
+Запрещено:
+
+```text
+is_active
+```
+
+### 5.3. Create
+
+Agent использует существующие create schemas без отдельного agent DTO:
+
+- `ItemCreateRequest`;
+- `CategoryCreateRequest`;
+- `UnitCreateRequest`.
+
+Не вводить отдельную approval/state machine.
+
+Все текущие CatalogAdminService validations сохраняются. `requires_review` на create Item остаётся частью существующего create contract; эта TZ не добавляет agent право модерировать review items.
+
+### 5.4. Merge
+
+Разрешить agent только через:
+
+- `CatalogAdminService.merge_items`;
+- `CatalogAdminService.merge_categories`.
+
+Не дублировать merge code и не разрешать прямое выставление merge fields.
+
+Все текущие freeze/balance/audit/inventory-subject/ADJUSTMENT invariants merge должны пройти существующие regression tests плюс agent-specific tests.
+
+### 5.5. Catalog endpoints matrix
+
+| Endpoint class | agent |
+|---|---|
+| primary `/catalog/*` read | YES |
+| `/catalog/read/*` browse | YES |
+| `/catalog/admin/*` GET list/detail | MAY/YES, read-only |
+| POST item/category/unit | YES |
+| PATCH item/category/unit | YES, allow-list |
+| item/category merge | YES |
+| DELETE item/category/unit | NO |
+| deactivate existing entity | NO |
+| `/catalog/admin/batch` | NO in v1 |
+| bulk create | NO in v1 unless executor proves required by current agent client |
+
+`/catalog/admin/batch` намеренно остаётся root/chief-only: он смешивает create/update/deactivate/delete/merge и не нужен для выполнения Issue #18. Agent может выполнить требуемые операции через специализированные endpoints. Это уменьшает authz surface и количество новых веток.
 
 ---
 
-## 7. Data Model & Migration
+## 6. Operations authorization
 
-Одна новая Alembic-ревизия, например
-`SyncServer/alembic/versions/0038_add_agent_role.py` с
-`down_revision = "0037_audit_item_effects_effective_at"`:
+### 6.1. Role groups
+
+Изменить:
 
 ```python
-def upgrade() -> None:
-    op.drop_constraint("ck_users_role", "users", type_="check")
-    op.create_check_constraint(
-        "ck_users_role",
-        "users",
-        "role IN ('root','chief_storekeeper','storekeeper','observer','agent')",
-    )
-
-
-def downgrade() -> None:
-    # Сначала привести существующие роли 'agent' к 'observer' (безопасный fallback).
-    op.execute(
-        "UPDATE users SET role = 'observer' WHERE role = 'agent'"
-    )
-    op.drop_constraint("ck_users_role", "users", type_="check")
-    op.create_check_constraint(
-        "ck_users_role",
-        "users",
-        "role IN ('root','chief_storekeeper','storekeeper','observer')",
-    )
+READ_ROLES = {"chief_storekeeper", "storekeeper", "observer", "agent"}
+CREATE_DRAFT_ROLES = {"chief_storekeeper", "storekeeper", "observer", "agent"}
 ```
 
-Downgrade — defensive: заменяет `agent` на `observer` (наименее
-привилегированная существующая роль), потом сужает check.
+Не менять:
 
-Поле `is_root` остаётся `False` для agent. Bootstrap agent-user'а
-выполняется через существующий `/api/v1/auth/sync-user` (root-only)
-или через `scripts/bootstrap_root.py` (расширение). Это часть
-этой TZ (см. §9).
+```python
+WRITE_ROLES = {"chief_storekeeper", "storekeeper"}
+TEMPORARY_ITEM_CREATE_ROLES = {"chief_storekeeper", "storekeeper"}
+```
 
----
+Agent не получает site operate permission.
 
-## 8. API Surface
+### 6.2. Create draft
 
-Существующие endpoint'ы; никаких новых маршрутов не вводится.
+`require_create_draft` уже не проверяет scopes. После добавления роли agent создание draft работает через существующий flow.
 
-| Endpoint | agent | notes |
-|---|---|---|
-| `GET /api/v1/auth/me` | ✅ | `role=agent` |
-| `GET /api/v1/auth/sites` | ✅ | все активные сайты (catalog global) |
-| `GET /api/v1/auth/context` | ✅ | `permissions_summary` см. §5.9 |
-| `GET /api/v1/admin/roles` | ✅ (read) | массив включает `agent` |
-| `GET /api/v1/admin/users*` | ❌ | 403 |
-| `GET /api/v1/admin/devices*` | ❌ | 403 |
-| `GET /api/v1/admin/sites*` | ❌ | 403 |
-| `GET /api/v1/admin/access/*` | ❌ | 403 |
-| `GET /api/v1/admin/audit/*` | ❌ | 403 |
-| `GET /api/v1/catalog/{units,categories,items,sites}` | ✅ | read |
-| `GET /api/v1/catalog/*` (browse) | ✅ | read |
-| `GET /api/v1/catalog/admin/{units,categories,items}` | ✅ | read (с фильтрами) |
-| `GET /api/v1/catalog/admin/{units,categories,items}/{id}` | ✅ | read |
-| `POST /api/v1/catalog/admin/{units,categories,items}` | ✅ | create |
-| `POST /api/v1/catalog/admin/{units,categories}/bulk` | ✅ | bulk create |
-| `PATCH /api/v1/catalog/admin/{units,categories,items}/{id}` | ✅ | allow-list |
-| `POST /api/v1/catalog/admin/items/merge` | ✅ | штатный merge |
-| `POST /api/v1/catalog/admin/categories/merge` | ✅ | штатный merge |
-| `POST /api/v1/catalog/admin/batch` | ✅ | apply allow-list, запрет delete/deactivate |
-| `DELETE /api/v1/catalog/admin/{units,categories,items}/{id}` | ❌ | 403 |
-| `GET /api/v1/balances*` | ✅ | read |
-| `GET /api/v1/operations*` | ✅ | read |
-| `GET /api/v1/operations/{id}` | ✅ | read (без cancelled-list) |
-| `POST /api/v1/operations` | ✅ | draft only |
-| `POST /api/v1/operations/from-source-document` | ✅ | draft only |
-| `PATCH /api/v1/operations/{id}` | ✅ | только свои draft |
-| `PATCH /api/v1/operations/{id}/effective-at` | ✅ | только свои draft |
-| `POST /api/v1/operations/{id}/submit` | ❌ | 403 |
-| `POST /api/v1/operations/{id}/cancel` | ✅ (свои draft) / ❌ submitted | по workflow |
-| `POST /api/v1/operations/{id}/restore` | ❌ | 403 |
-| `DELETE /api/v1/operations/{id}` | ❌ (draft) / ✅ (свои cancelled) | 403 для draft |
-| `POST /api/v1/operations/{id}/corrections/{cid}/submit` | ❌ | 403 |
-| `GET /api/v1/documents*` | ✅ | read |
-| `GET /api/v1/reports*` | ✅ | read |
-| `GET /api/v1/diagnostics/*` | ✅ | read (ui-events) |
-| `POST /api/v1/diagnostics/ui-events/batch` | ✅ | agent-as-user |
-| `GET /api/v1/review-items/*` | ✅ | read |
-| `GET /api/v1/issue-objects/*` | ✅ | read |
-| `GET /api/v1/machines/*` | ✅ | read |
-| `GET /api/v1/health/*` | ✅ | read |
+Если `OperationCreate.lines` содержит `temporary_item`, `require_temporary_item_create` должен вернуть agent 403. Agent имеет отдельное право создавать постоянный catalog Item и не должен получать legacy temporary-item authority.
 
-Agent не получает никаких новых URL. Все изменения — серверные
-guard'ы и policy.
+### 6.3. PATCH own draft
 
----
+Текущий route сначала вызывает `require_operate_site`, из-за чего agent не сможет PATCH собственного draft.
 
-## 9. Bootstrap & Seeding
+Добавить явный own-draft auth path:
 
-`SyncServer/scripts/bootstrap_root.py` расширяется опциональной
-секцией `--agent-username` (например `agent_minimax`):
-создаёт `User(role="agent", is_root=False, is_active=True, is_actor_for_agent=True)`
-с собственным `user_token`, печатает токен, не заменяет
-`chief_storekeeper` token и не имперсонирует. По умолчанию
-agent-user **не** создаётся, чтобы избежать случайной выдачи
-прав. Idempotent: повторный запуск обновляет `is_active` и
-печатает существующий токен (без ротации).
+```text
+if identity.role == "agent":
+    require operation.status == draft
+    require operation.created_by_user_id == identity.user_id
+else:
+    existing require_operate_site + owner/supervisor flow
+```
 
-`scripts/rotate_tokens.py` не должен трогать agent-token без
-явного флага `--agent` (по умолчанию — нет).
+Workflow/business validation остаётся в `OperationsService.update_operation`.
+
+Agent может использовать весь существующий `OperationUpdate` contract для собственного draft. Не создавать agent-specific урезанный contract.
+
+Agent не может добавлять `temporary_item` lines: существующий `require_temporary_item_create` остаётся обязательным.
+
+### 6.4. MOVE draft
+
+Не использовать `require_move_access` как auth gate для agent-owned draft, потому что этот helper включает `require_operate_site` и тем самым выдаёт/требует site-operation semantics.
+
+Для agent-owned draft структурные MOVE invariants проверяет `OperationsService.update_operation`:
+
+- source/destination required;
+- source != destination;
+- operation `site_id` соответствует source;
+- referenced sites exist там, где это уже проверяется текущим service flow.
+
+Если executor вынесет structural validation в отдельный helper, этот helper не должен выдавать agent право submit/operate.
+
+### 6.5. effective_at
+
+После добавления agent в READ_ROLES существующий `require_operation_effective_at_permission` уже корректно разрешает изменение `effective_at` creator'у draft.
+
+### 6.6. Cancel own draft
+
+Для `POST /operations/{id}/cancel` agent-owned draft должен быть разрешён.
+
+Как и PATCH, route не должен сначала требовать `require_operate_site` для agent. После bypass site-operate guard использовать существующий `require_operation_cancel_permission`, который уже разрешает creator'у draft и запрещает submitted non-root.
+
+### 6.7. Submit and irreversible actions
+
+Agent должен fail closed:
+
+- `/operations/{id}/submit` → 403/domain `RoleNotPermitted` envelope;
+- submitted cancel → 403;
+- restore → 403;
+- acceptance → 403;
+- correction submit → 403;
+- lost resolve → 403;
+- temporary moderation → 403.
+
+Не добавлять agent в `WRITE_ROLES`, `can_accept_at_site`, `has_global_business_access` или root/chief checks ради обхода конкретного теста.
 
 ---
 
-## 10. Test Ladder
+## 7. Admin and token management
 
-Все уровни применяются в порядке; пропущенные остаются `[ ]` с
-блокер-нотой.
+### 7.1. Admin access
 
-### L1 — Static checks
+`require_admin_basic` и `require_root_admin` не менять.
 
-- `python -m pytest` (после изменений) — фактически запускает
-  unit-тесты, но не делает type-check отдельно.
-- `mypy SyncServer/app` (опционально, если включён в CI).
-- `alembic upgrade head` против dev-стенда.
+Agent не получает `/admin/*` authority.
 
-### L2 — Unit tests (syncserver, app/services + app/api)
+`GET /admin/roles` остаётся root/chief-only; `CANONICAL_ROLES` просто начинает возвращать пятое значение `agent` администратору.
 
-Новый файл `SyncServer/tests/test_agent_role_authz.py`:
+### 7.2. Agent user provisioning
 
-- `test_agent_role_accepted_as_valid_domain_role`
-- `test_admin_roles_includes_agent`
-- `test_auth_me_returns_role_agent`
-- `test_auth_context_returns_role_agent_with_correct_permissions`
-- `test_agent_can_read_catalog_items_categories_units_sites`
-- `test_agent_can_create_item`
-- `test_agent_can_create_category`
-- `test_agent_can_create_unit`
-- `test_agent_can_patch_item_allowed_fields`
-- `test_agent_cannot_patch_item_is_active`
-- `test_agent_cannot_patch_item_merged_into_id_via_schema`
-- `test_agent_cannot_patch_item_requires_review`
-- `test_agent_can_patch_category_allowed_fields`
-- `test_agent_can_patch_unit_allowed_fields`
-- `test_agent_can_merge_items_through_existing_endpoint`
-- `test_agent_can_merge_categories_through_existing_endpoint`
-- `test_agent_merge_preserves_all_existing_invariants`
-- `test_agent_can_create_draft_operation`
-- `test_agent_can_patch_own_draft_operation`
-- `test_agent_cannot_submit_draft_403`
-- `test_agent_cannot_edit_submitted_operation`
-- `test_agent_cannot_restore_cancelled_operation`
-- `test_agent_cannot_cancel_submitted_operation`
-- `test_agent_cannot_cancel_other_users_draft`
-- `test_agent_cannot_manage_users_403`
-- `test_agent_cannot_manage_devices_403`
-- `test_agent_cannot_manage_sites_403`
-- `test_agent_cannot_rotate_user_tokens_403`
-- `test_agent_token_is_not_treated_as_chief`
-- `test_agent_cannot_use_root_bypass_in_any_endpoint`
-- `test_audit_records_actor_agent_for_item_create`
-- `test_audit_records_actor_agent_for_item_patch`
-- `test_audit_records_actor_agent_for_item_merge`
-- `test_audit_records_actor_agent_for_draft_operation_create`
-- `test_audit_does_not_record_chief_storekeeper_when_actor_was_agent`
-- `test_batch_endpoint_drops_disallowed_changes_for_agent`
-- `test_batch_endpoint_rejects_delete_changes_for_agent`
-- `test_batch_endpoint_rejects_deactivate_changes_for_agent`
-- `test_agent_token_header_does_not_impersonate_chief`
-- `test_agent_isolated_from_other_user_drafts`
+Новый CLI/bootstrap не создавать.
 
-Расширение существующих файлов:
+Provisioning procedure:
 
-- `tests/test_user_admin_flow.py` — `test_admin_users_create_with_role_agent_succeeds`
-  (через root), `test_admin_users_list_includes_agent`.
-- `tests/test_operations_permissions.py` —
-  параметризовать существующие тесты на роль `agent`.
-- `tests/test_catalog_admin_audit.py`,
-  `tests/test_catalog_merge.py`,
-  `tests/test_catalog_batch.py` — добавить сценарии с `agent`.
-- `tests/test_auth_routes.py` — `test_auth_me_for_agent`,
-  `test_auth_context_for_agent`, `test_admin_roles_includes_agent`.
-- `tests/test_admin_root_permissions.py` — негативные сценарии
-  agent на admin endpoints.
+1. root создаёт/sync'ит non-root user `role=agent` через существующий admin/sync-user flow;
+2. сервер выдаёт/хранит собственный `user_token`;
+3. этот token помещается в конфигурацию agent wrapper;
+4. agent вызывает SyncServer с `X-User-Token: <agent token>`.
 
-### L3 — Component tests (Django BFF / sync_client)
-
-- `Warehouse_web/tests/` — `test_bff_passes_agent_token` (BFF
-  проксирует agent-token без изменений), `test_bff_rejects_browser_agent_token`
-  (агент-токен не отдаётся в браузер).
-
-### L4 — Integration tests (DB-backed)
-
-- Существующие `tests/test_alembic_migrations.py` —
-  `test_role_agent_in_check_constraint_after_migration`.
-- Существующие `tests/test_audit_*` — проверка actor_user_id для
-  роли `agent`.
-
-### L5 — Stand smoke tests
-
-- `pytest -m stand` (если включён) или прямой curl против dev-стенда:
-  - `GET /api/v1/health` — OK.
-  - `GET /api/v1/auth/me` с agent-token — `role: agent`.
-  - `POST /catalog/admin/items` с agent-token — создаёт
-    (после bootstrap).
-  - `POST /catalog/admin/items/merge` с agent-token — выполняет merge.
-  - `POST /operations/{id}/submit` с agent-token — 403.
-  - `POST /admin/users` с agent-token — 403.
-- Фиксация evidence в `tests/stand/...` или в GitHub Project Issue
-  comment.
-
-### L6 — UI automation
-
-- Не применимо (server-only feature). `[ ]` с пометкой
-  «N/A — server-only authz; covered by L2/L4/L5».
-
-### L7 — User scenario
-
-- Сценарий «агент готовит draft → chief подтверждает»:
-  1. Bootstrap agent-user и chief-user.
-  2. Agent создаёт Item, Category.
-  3. Agent merge двух Items.
-  4. Agent создаёт draft operation.
-  5. Chief заходит, видит draft, submit'ит.
-  6. Audit показывает actor=agent для шагов 2–4 и actor=chief
-     для шага 5.
-
-### L8 — Regression
-
-- Прогон всех существующих unit/integration тестов
-  (`python -m pytest`) — все 4 роли без регрессий.
-- Отдельная выборка `tests/test_root_permissions.py` /
-  `tests/test_admin_root_permissions.py` — agent не должен
-  влиять.
-
-### L9 — Documentation
-
-- `SyncServer/DOMAIN_MODEL.md` — раздел Roles, раздел Catalog
-  lifecycle, раздел Operations.
-- `SyncServer/docs/API_REFERENCE.md` — обновить раздел Auth
-  (роли), Catalog Admin, Operations.
-- `SyncServer/docs/API_MAP.md` (если не помечен STALE) —
-  привести к актуальной ролевой модели.
-- `Role Matrix.md` (workspace root) — добавить колонку `agent`.
-- `Functional and WorkLogik.md` — пункт 2.1.5, плюс явная
-  ссылка на ADR-0030 (новый) и эту TZ.
-- `warehouse-storekeeper/SKILL.md`,
-  `warehouse-storekeeper/references/AUTH.md`,
-  `warehouse-storekeeper/templates/syncserver.env.example` —
-  agent-tokens и правила.
-- Новая `docs/adr/0030-agent-domain-role.md` — описывает
-  расширение role enum и серверные границы.
-
-### L10 — Final acceptance
-
-- Все `[ ]` L0–L9 закрыты, evidence-таблица собрана.
-- Issue #18 в `Warehouse Solution` Project — перевод в `Done`
-  Reviewer'ом.
+Никаких fallback/alias к chief token.
 
 ---
 
-## 11. Risks & Open Questions
+## 8. Audit
 
-- **R-1: agent + cancelled operations visibility.**
-  Сейчас `can_view_cancelled_operations` доступно только root.
-  agent видит draft, submitted; cancelled — нет. Это
-  сознательное ограничение (issue #18 не требует cancelled
-  visibility), но стоит подтвердить.
-- **R-2: actor_role snapshot в audit.**
-  Сейчас `audit_events` хранит только `actor_user_id`. Поиск
-  по роли актёра требует join. Это out of scope этой TZ.
-  Если в будущем audit UI потребуется фильтровать по
-  `actor_role=agent`, добавим отдельной задачей.
-- **R-3: bootstrap agent-user.**
-  `bootstrap_root.py` сейчас создаёт только root + Django device.
-  Расширение под agent-user — часть этой TZ. Альтернатива —
-  отдельная TZ для bootstrap. Выбор: оставить в этой TZ (single
-  PR, единая ответственность).
-- **R-4: agent + TemporaryItem / ReviewItem.**
-  `require_temporary_item_moderation` остаётся chief/root. agent
-  может видеть review items (read) и temporary items, но не
-  модерировать. Подтверждено Issue body.
-- **R-5: agent + machines / issue-objects.**
-  Issue не упоминает machines/issue-objects как часть запрета,
-  но `machine_service` использует `has_global_business_access`
-  (chief/root). agent → 403 на write. Read — открыть. Уточнить
-  в Issue comment после старта.
-- **R-6: agent в Django BFF.**
-  BFF должен корректно проксировать agent-token. Существующий
-  `apps/sync_client/client.py` это уже делает, если
-  `SyncUserBinding` хранит правильный `role=agent`. Подтвердить
-  при review.
-- **R-7: PATCH /operations/{id} — site/type.**
-  Текущая логика `update_operation` через
-  `require_operate_site` блокирует agent. Нужна новая ветка
-  «agent own draft only». Сложность — обработка `operation_type`
-  change, MOVE site changes. Решение: agent не меняет
-  `operation_type` и `site_id`; только строки и метаполя
-  (notes, effective_at).
+### 8.1. Actor
+
+Для всех agent mutations:
+
+```text
+actor_user_id = agent user UUID
+```
+
+Не подменять actor на chief.
+
+Текущая audit schema не хранит `actor_role` snapshot. Это не требуется этой задачей.
+
+### 8.2. Existing audit reuse
+
+Подтвердить тестами, что существующий код уже даёт требуемую evidence:
+
+- catalog create: entity id + actor;
+- catalog update: `changes` old/new + actor;
+- catalog merge: source/target + actor;
+- operation draft create/update/cancel: actor = agent.
+
+Если существующий merge audit не содержит source/target в достаточной форме, исправить только payload/resource evidence, не создавать новый audit subsystem.
 
 ---
 
-## 12. Execution Strategy
+## 9. Repository-wide role audit
 
-Последовательная (sequential) стратегия:
+Перед кодированием executor выполняет поиск минимум по:
 
-1. **M1 — Domain & Migration.**
-   - Alembic revision `0038_add_agent_role.py`.
-   - Pydantic literal `UserRole`.
-   - `CANONICAL_ROLES` + `is_agent` property.
-   - `AgentPolicy` module.
-   - `require_admin_basic` оставлен без изменений.
+```text
+"observer"
+"storekeeper"
+"chief_storekeeper"
+CANONICAL_ROLES
+READ_ROLES
+WRITE_ROLES
+ALLOWED_*_ROLES
+has_global_business_access
+can_manage_catalog
+require_admin_basic
+require_operate_site
+```
 
-2. **M2 — Catalog policy.**
-   - Расширение `routes_catalog_admin.py` guards.
-   - `AgentPolicy.filter_*_patch` применён в
-     `catalog_admin_service.update_*`.
-   - `routes_catalog_admin.py:batch` — apply allow-list.
-   - delete/deactivate → 403 для agent.
+Каждое совпадение классифицируется:
 
-3. **M3 — Operations policy.**
-   - Расширение `OperationsPolicy`:
-     `agent` в `CREATE_DRAFT_ROLES`, новый
-     `require_agent_update_own_draft`, fail-closed submit/cancel
-     submitted/restore.
-   - Расширение `routes_operations.py` guards.
+1. business read → добавить agent, если observer уже имеет read;
+2. draft preparation → добавить agent только где требуется этой TZ;
+3. submit/accept/lifecycle/admin → agent не добавлять;
+4. technical/machine/device sync → не менять без отдельного требования.
 
-4. **M4 — Auth & admin.**
-   - `routes_auth.py:auth_sites`/`auth_context` —
-     `is_agent or has_global_business_access` для sites.
-   - `routes_admin.py` (без изменений, но проверить, что
-     `/admin/roles` уже включает `agent` после M1).
-
-5. **M5 — Tests.**
-   - `test_agent_role_authz.py` (новый).
-   - Расширение существующих тестов.
-
-6. **M6 — Bootstrap & scripts.**
-   - `scripts/bootstrap_root.py --agent-username`.
-   - `scripts/rotate_tokens.py --agent` (опционально).
-
-7. **M7 — Documentation.**
-   - DOMAIN_MODEL, API_REFERENCE, API_MAP.
-   - `Role Matrix.md`, `Functional and WorkLogik.md`.
-   - ADR-0030.
-   - warehouse-storekeeper docs.
-
-Каждый milestone — отдельный коммит в `dev` ветке SyncServer.
-Параллельная работа между milestone'ами невозможна из-за общего
-файла `users` (миграция) и общего `routes_catalog_admin.py`
-(guards). Sequential — обязательно.
-
-Для будущего Swarm (если задача разрастётся): independent
-shards — M2 (catalog policy) и M3 (operations policy) могут
-идти параллельно **после** M1, при условии, что `AgentPolicy`
-и `is_agent` уже доступны. M5 (tests) — после M2+M3. M7 (docs)
-— после M5. Maximum useful threads: 2 (M2 + M3) в стадии 2, 1
-во всех остальных.
+В финальном evidence приложить список изменённых role sets/guards. Это защита от ситуации «роль добавили в три файла, четвёртый забыли».
 
 ---
 
-## 13. Required Follow-up Artifacts
+## 10. Tests
 
-- **ADR-0030** в `SyncServer/docs/adr/0030-agent-domain-role.md` —
-  расширение `users.role` enum, серверные границы agent,
-  явный отказ от catalog approval workflow.
-- **TZ-FUNCTIONAL-agent-role** (если требуется) в
-  `workspace/docs/TZ/` — фиксация расширения `Role Matrix.md`
-  и `Functional and WorkLogik.md`.
-- **Issue comment** в GitHub Issue #18 со ссылкой на эту TZ и
-  на ADR-0030 (комментарий architect, не closing).
+### 10.1. Role and provisioning
+
+- [ ] DB accepts `role=agent` after migration
+- [ ] Pydantic `UserRole` accepts `agent`
+- [ ] root `POST /auth/sync-user` can create/update `role=agent`
+- [ ] root admin user create can create `role=agent`
+- [ ] `/admin/roles`, called by authorized admin, contains `agent`
+- [ ] agent itself still gets 403 on `/admin/roles`
+- [ ] `/auth/me` returns `role=agent`
+- [ ] `/auth/context` returns correct agent summary
+- [ ] `/auth/sites` returns all active business sites with `can_operate=false`, `can_manage_catalog=true`
+
+### 10.2. Business read
+
+- [ ] agent reads catalog items/categories/units/tree/browse
+- [ ] agent reads balances globally
+- [ ] agent reads operations globally subject to existing cancelled rule
+- [ ] repository-wide observer business-read parity audit has no missed role gate
+
+### 10.3. Catalog create
+
+- [ ] agent creates Item
+- [ ] agent creates Category
+- [ ] agent creates Unit
+- [ ] existing uniqueness/FK/category-cycle validations still apply
+
+### 10.4. Catalog PATCH
+
+- [ ] Item: name allowed
+- [ ] Item: sku allowed
+- [ ] Item: description allowed
+- [ ] Item: category_id allowed
+- [ ] Item: unit_id allowed
+- [ ] Item: hashtags allowed
+- [ ] Item: is_active rejected for agent
+- [ ] Category allowed fields succeed
+- [ ] Category is_active rejected
+- [ ] Unit allowed fields succeed
+- [ ] Unit is_active rejected
+- [ ] merge/system fields cannot be mutated through ordinary PATCH
+- [ ] chief/root existing PATCH abilities do not regress
+
+### 10.5. Merge
+
+- [ ] agent item merge succeeds through existing merge endpoint
+- [ ] agent category merge succeeds through existing merge endpoint
+- [ ] freeze/inventory/balance/audit invariants of existing merge remain green
+- [ ] direct merge-field mutation remains impossible
+
+### 10.6. Operations
+
+- [ ] agent creates draft
+- [ ] agent creates source-document draft
+- [ ] agent can PATCH own draft lines
+- [ ] agent can PATCH own draft notes/effective_at
+- [ ] agent can change operation_type/relevant MOVE fields of own draft subject to existing domain validation
+- [ ] agent cannot PATCH another user's draft
+- [ ] agent cannot PATCH submitted operation
+- [ ] agent cannot create/use temporary_item through draft flow
+- [ ] agent can cancel own draft
+- [ ] agent cannot cancel another user's draft
+- [ ] agent cannot cancel submitted operation
+- [ ] agent submit → 403/domain RoleNotPermitted
+- [ ] agent restore → 403
+- [ ] agent acceptance → 403
+- [ ] agent correction submit → 403
+- [ ] agent delete operation → 403 in v1
+
+### 10.7. Admin/security
+
+- [ ] agent cannot manage users
+- [ ] agent cannot read/rotate user tokens
+- [ ] agent cannot manage devices/device tokens
+- [ ] agent cannot create/update sites
+- [ ] agent cannot manage access scopes
+- [ ] agent cannot gain root/chief bypass
+- [ ] agent never uses chief token in tests/fixtures
+
+### 10.8. Audit
+
+- [ ] item create actor_user_id = agent
+- [ ] item patch actor_user_id = agent and changes old/new preserved
+- [ ] merge actor_user_id = agent with source/target evidence
+- [ ] operation draft create/update/cancel actor_user_id = agent
+- [ ] no event rewrites actor to chief
+
+### 10.9. Regression
+
+Run full existing SyncServer test suite. Existing behavior of root/chief/storekeeper/observer must remain green.
+
+Particularly re-run:
+
+- auth/admin tests;
+- catalog CRUD/merge/batch tests;
+- operations permissions/workflow/submit tests;
+- balances/read tests;
+- audit tests;
+- migration tests.
+
+`/catalog/admin/batch` must remain unchanged for existing authorized roles.
+
+---
+
+## 11. Stand smoke
+
+Against real SyncServer + Postgres:
+
+1. migrate to head;
+2. create agent-user via existing root API;
+3. capture agent token through authorized provisioning flow;
+4. `GET /auth/me` → role agent;
+5. read catalog + balances + operations;
+6. create category/unit/item;
+7. PATCH item allowed field;
+8. PATCH item `is_active` → 403;
+9. merge two test items;
+10. create draft operation;
+11. PATCH own draft;
+12. submit same draft with agent token → 403;
+13. submit same draft with chief token → success, if domain data allows;
+14. verify audit actor separation: catalog/draft = agent, submit = chief;
+15. agent `/admin/users` → 403.
+
+Smoke test data must use dedicated test entities and be cleaned using existing test/stand procedure. Не добавлять production repair scripts ради smoke.
+
+---
+
+## 12. Documentation changes
+
+В SyncServer обновить:
+
+- `DOMAIN_MODEL.md`;
+- role/auth sections in `docs/API_REFERENCE.md`;
+- `API_MAP.md` if present/authoritative in this repo;
+- `AI_CONTEXT.md` / `MEMORY.md` only where role model is enumerated;
+- `docs/adr/0030-agent-domain-role.md`;
+- role comments/constants in code.
+
+В workspace-level документации обновить, если executor работает из общего workspace:
+
+- `Role Matrix.md`;
+- `Functional and WorkLogik.md` — добавить `agent` как отдельную роль и зафиксировать draft-only operation authority.
+
+Agent wrapper/skill configuration является отдельной клиентской частью. Она должна использовать новый agent token и содержать behavioural rule о явной команде на PATCH/MERGE, но изменение wrapper не должно требовать правок Warehouse_web и не должно расширять SyncServer scope.
+
+---
+
+## 13. Implementation strategy
+
+### M1 — Domain role
+
+- migration;
+- `UserRole`;
+- `CANONICAL_ROLES`;
+- optional `Identity.is_agent`;
+- unit tests role/provisioning.
+
+### M2 — Read/auth context
+
+- catalog read roles;
+- balances read roles;
+- operations read roles;
+- `/auth/sites` + `/auth/context`;
+- repo-wide role audit.
+
+### M3 — Catalog mutations
+
+- centralized catalog agent policy/helper;
+- selected create/PATCH/merge route guards;
+- PATCH allow-list;
+- keep delete/batch denied;
+- catalog tests/audit tests.
+
+### M4 — Draft operations
+
+- own-draft route path for PATCH;
+- own-draft cancel path;
+- preserve submit fail-closed;
+- tests.
+
+### M5 — Integration/regression
+
+- DB-backed authz tests;
+- full suite;
+- stand smoke;
+- evidence table.
+
+### M6 — Docs/final review
+
+- update domain/API docs;
+- ADR final wording;
+- workspace role docs if available;
+- final acceptance.
+
+M2 and M3 may be parallelized only after M1 if agents do not edit the same policy files. Otherwise execute sequentially. Не создавать искусственные milestones/commits только ради соответствия этому документу; commit granularity определяется реальными cohesive changes.
 
 ---
 
 ## 14. Definition of Done
 
-1. Alembic revision `0038_add_agent_role.py` применяется на
-   dev и prod (после code review) без потери данных.
-2. `GET /api/v1/admin/roles` возвращает
-   `["root","chief_storekeeper","storekeeper","observer","agent"]`.
-3. `GET /api/v1/auth/me` и `/auth/context` с agent-token
-   возвращают `role: "agent"` и корректный `permissions_summary`.
-4. Agent может читать каталог, единицы, категории, склады,
-   остатки, операции; может создавать Item/Category/Unit; может
-   PATCH'ить только allow-listed поля; может вызывать
-   `items/merge` и `categories/merge`.
-5. Agent не может submit/accept/cancel submitted/restore
-   операций; не может управлять пользователями/устройствами/
-   складами/токенами.
-6. Audit `actor_user_id` всегда равен UUID agent-user'а; в
-   audit нигде не появляется actor=chief_storekeeper, когда
-   HTTP-запрос выполнял agent.
-7. Существующие 4 роли (root, chief_storekeeper, storekeeper,
-   observer) не получают регрессий; все существующие тесты
-   `python -m pytest` проходят.
-8. Документация (DOMAIN_MODEL.md, Role Matrix.md,
-   Functional and WorkLogik.md, API_MAP.md, ADR-0030,
-   warehouse-storekeeper SKILL.md) обновлена.
-9. Нет новых catalog approval / submission workflow.
-10. `Identity` agent никогда не мапится в `has_global_business_access`;
-    `_has_global_business_access` остаётся `(is_root or
-    role == "chief_storekeeper")`.
+Feature считается готовой, когда одновременно выполнено:
+
+1. `agent` является валидной пятой доменной ролью DB + schemas.
+2. Agent-user создаётся штатным root admin/sync-user flow; bootstrap не менялся.
+3. Agent использует собственный user token; impersonation отсутствует.
+4. Agent имеет business-read не уже observer и видит нужные глобальные warehouse данные.
+5. Agent может create Item/Category/Unit.
+6. Agent может PATCH разрешённые business fields существующего каталога, включая `hashtags` Item, но не `is_active`.
+7. Agent может merge Items/Categories только через существующие merge services.
+8. `/catalog/admin/batch`, delete/deactivate и admin authority agent не получили.
+9. Agent может create/PATCH/cancel собственный draft, включая существующие draft-edit поля, но не temporary item flow.
+10. Agent не может submit/accept/restore/cancel submitted или изменить submitted operation.
+11. `has_global_business_access` остаётся только root/chief.
+12. Audit сохраняет реальный agent `actor_user_id`; chief submit остаётся отдельным actor.
+13. Full regression suite существующих ролей зелёный.
+14. Stand smoke подтверждает `agent draft -> chief submit` end-to-end.
+15. Не добавлены catalog approval/submission workflow, agent bootstrap path или token impersonation.
