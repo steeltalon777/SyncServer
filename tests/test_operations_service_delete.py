@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.services.operation_submit_errors import OperationNotFoundError
 from app.services.operations_service import OperationsService
 
 
@@ -79,7 +80,11 @@ async def test_delete_operation_rejects_missing() -> None:
         ),
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(OperationNotFoundError) as exc:
         await OperationsService.delete_operation(uow=uow, operation_id=uuid4(), user_id=uuid4())
 
-    assert exc.value.status_code == 404
+    assert exc.value.http_status == 404
+    assert exc.value.problem_class == "operation-not-found"
+    envelope = exc.value.to_envelope()
+    assert envelope.code == "operation_not_found"
+    assert envelope.errors[0].code == "operation_not_found"

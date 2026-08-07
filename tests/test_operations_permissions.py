@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from app.core.identity import Identity
 from app.models.user import User
 from app.models.user_access_scope import UserAccessScope
+from app.services.operation_submit_errors import OperationSubmitError, RoleNotPermittedError
 from app.services.operations_policy import OperationsPolicy
 
 
@@ -193,11 +194,14 @@ def test_storekeeper_may_cancel_only_own_draft_not_submitted() -> None:
     OperationsPolicy.require_operation_cancel_permission(identity, own_draft)
 
     # storekeeper cannot cancel own submitted — root-only
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(RoleNotPermittedError) as exc:
         OperationsPolicy.require_operation_cancel_permission(identity, own_submitted)
 
-    assert exc.value.status_code == 403
-    assert "only root" in exc.value.detail.lower()
+    assert exc.value.http_status == 403
+    assert exc.value.problem_class == "operation-cancel-rejected"
+    envelope = exc.value.to_envelope()
+    assert envelope.code == "operation_cancel_rejected"
+    assert envelope.errors[0].code == "role_not_permitted"
 
 
 def test_chief_storekeeper_can_cancel_own_draft_but_not_submitted() -> None:
@@ -209,11 +213,11 @@ def test_chief_storekeeper_can_cancel_own_draft_but_not_submitted() -> None:
     OperationsPolicy.require_operation_cancel_permission(identity, own_draft)
 
     # chief cannot cancel submitted — root-only
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(RoleNotPermittedError) as exc:
         OperationsPolicy.require_operation_cancel_permission(identity, own_submitted)
 
-    assert exc.value.status_code == 403
-    assert "only root" in exc.value.detail.lower()
+    assert exc.value.http_status == 403
+    assert exc.value.to_envelope().errors[0].code == "role_not_permitted"
 
 
 def test_root_can_cancel_submitted_draft_and_own_draft() -> None:
@@ -242,10 +246,11 @@ def test_storekeeper_cannot_cancel_other_draft() -> None:
     identity = _identity(role="storekeeper", scopes=[_scope(10)])
     other_draft = _operation(uuid4(), status="draft")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(RoleNotPermittedError) as exc:
         OperationsPolicy.require_operation_cancel_permission(identity, other_draft)
 
-    assert exc.value.status_code == 403
+    assert exc.value.http_status == 403
+    assert exc.value.to_envelope().errors[0].code == "role_not_permitted"
 
 
 def test_storekeeper_can_accept_only_at_target_site_with_operate_scope() -> None:
@@ -379,10 +384,10 @@ def test_storekeeper_can_create_draft_any_site() -> None:
 def test_chief_storekeeper_cannot_cancel_submitted() -> None:
     identity = _identity(role="chief_storekeeper")
     op = _operation(uuid4(), status="submitted")
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(RoleNotPermittedError) as exc:
         OperationsPolicy.require_operation_cancel_permission(identity, op)
-    assert exc.value.status_code == 403
-    assert "only root" in exc.value.detail.lower()
+    assert exc.value.http_status == 403
+    assert exc.value.problem_class == "operation-cancel-rejected"
 
 
 def test_root_can_cancel_submitted() -> None:
@@ -394,9 +399,10 @@ def test_root_can_cancel_submitted() -> None:
 def test_observer_cannot_cancel_any_operation() -> None:
     identity = _identity(role="observer", scopes=[_scope(1)])
     other_draft = _operation(uuid4(), status="draft")
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(RoleNotPermittedError) as exc:
         OperationsPolicy.require_operation_cancel_permission(identity, other_draft)
-    assert exc.value.status_code == 403
+    assert exc.value.http_status == 403
+    assert exc.value.to_envelope().errors[0].code == "role_not_permitted"
 
 
 def test_require_read_site_no_scope_check() -> None:
@@ -404,3 +410,104 @@ def test_require_read_site_no_scope_check() -> None:
     identity = _identity(role="storekeeper", scopes=[_scope(1)])
     OperationsPolicy.require_read_site(identity, 1)
     OperationsPolicy.require_read_site(identity, 999)
+
+
+# ---------------------------------------------------------------------------
+# Cancel-flow authz domain errors (TZ-OPERATION_CANCEL_DOMAIN_ERRORS §6.2, ADR-0027 §9)
+# ---------------------------------------------------------------------------
+
+def test_require_operate_site_rejects_non_write_role() -> None:
+    """observer is not in WRITE_ROLES → RoleNotPermittedError (was HTTPException 403)."""
+    identity = _identity(role="observer", scopes=[_scope(10, can_operate=False)])
+
+    with pytest.raises(RoleNotPermittedError) as exc:
+        OperationsPolicy.require_operate_site(identity, 10)
+
+    assert exc.value.http_status == 403
+    assert exc.value.problem_class == "operation-cancel-rejected"
+    envelope = exc.value.to_envelope()
+    assert envelope.type == "urn:warehouse:problem:operation-cancel-rejected"
+    assert envelope.errors[0].code == "role_not_permitted"
+
+
+def test_require_operate_site_rejects_unscoped_site() -> None:
+    """storekeeper without operate scope on the site → RoleNotPermittedError."""
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+
+    with pytest.raises(RoleNotPermittedError) as exc:
+        OperationsPolicy.require_operate_site(identity, 99)
+
+    assert exc.value.http_status == 403
+    assert exc.value.to_envelope().errors[0].code == "role_not_permitted"
+
+
+def test_require_operate_site_accepts_global_access() -> None:
+    identity = _identity(role="chief_storekeeper")
+    OperationsPolicy.require_operate_site(identity, 999)
+
+
+def test_require_move_access_rejects_missing_sites_with_http_422() -> None:
+    """MOVE without source/destination stays a plain HTTPException (422), not a domain error."""
+    identity = _identity(role="root", is_root=True)
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_move_access(identity, None, None)
+
+    assert exc.value.status_code == 422
+    assert "source_site_id" in exc.value.detail
+
+
+def test_require_move_access_rejects_partial_sites_with_http_422() -> None:
+    identity = _identity(role="root", is_root=True)
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_move_access(identity, 1, None)
+
+    assert exc.value.status_code == 422
+
+
+def test_require_move_access_rejects_unscoped_source_with_domain_error() -> None:
+    """require_move_access delegates to require_operate_site → RoleNotPermittedError."""
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+
+    with pytest.raises(RoleNotPermittedError) as exc:
+        OperationsPolicy.require_move_access(identity, 99, 10)
+
+    assert exc.value.http_status == 403
+    assert exc.value.to_envelope().errors[0].code == "role_not_permitted"
+
+
+def test_require_move_access_accepts_scoped_source() -> None:
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+    OperationsPolicy.require_move_access(identity, 10, 99)
+
+
+def test_require_operation_cancel_permission_submitted_forbidden_for_storekeeper() -> None:
+    """Submitted operations are root-only: storekeeper gets RoleNotPermittedError."""
+    identity = _identity(role="storekeeper", scopes=[_scope(10)])
+    submitted = _operation(uuid4(), status="submitted")
+
+    with pytest.raises(RoleNotPermittedError) as exc:
+        OperationsPolicy.require_operation_cancel_permission(identity, submitted)
+
+    assert exc.value.http_status == 403
+    assert exc.value.problem_class == "operation-cancel-rejected"
+    assert exc.value.to_envelope().errors[0].code == "role_not_permitted"
+
+
+def test_require_operation_cancel_permission_cancelled_guard_stays_http_409() -> None:
+    """Already-cancelled guard remains a plain HTTPException (409), not a domain error."""
+    identity = _identity(role="root", is_root=True)
+    cancelled_op = _operation(uuid4(), status="cancelled")
+
+    with pytest.raises(HTTPException) as exc:
+        OperationsPolicy.require_operation_cancel_permission(identity, cancelled_op)
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "operation is already cancelled"
+
+
+def test_require_operation_cancel_permission_root_passes_submitted() -> None:
+    identity = _identity(role="storekeeper", is_root=True)
+    submitted = _operation(uuid4(), status="submitted")
+    OperationsPolicy.require_operation_cancel_permission(identity, submitted)

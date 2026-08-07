@@ -20,6 +20,7 @@ from app.core.search_utils import normalize_for_storage
 from app.models.audit_item_effect import AuditItemEffect
 from app.models.category import Category
 from app.models.item import Item
+from app.models.operation import Operation
 from app.schemas.asset_register import OperationAcceptLinePayload
 from app.schemas.catalog import ItemsResolveRequest
 from app.schemas.operation import (
@@ -147,6 +148,7 @@ class OperationsService:
             raise OperationInWrongStateError(
                 current_state=operation.status,
                 allowed_states=["draft"],
+                problem_class="operation-submit-rejected",
             ) from exc
 
     @staticmethod
@@ -159,22 +161,26 @@ class OperationsService:
         """
         try:
             OperationsPolicy.require_operate_site(identity, operation.site_id)
-        except HTTPException as exc:
+        except (HTTPException, RoleNotPermittedError) as exc:
+            if isinstance(exc, RoleNotPermittedError):
+                raise RoleNotPermittedError(problem_class="operation-submit-rejected") from exc
             if exc.status_code == status.HTTP_403_FORBIDDEN:
-                raise RoleNotPermittedError() from exc
+                raise RoleNotPermittedError(problem_class="operation-submit-rejected") from exc
             raise
         try:
             OperationsPolicy.require_operation_submit_permission(identity, operation)
         except HTTPException as exc:
             if exc.status_code == status.HTTP_403_FORBIDDEN:
-                raise RoleNotPermittedError() from exc
+                raise RoleNotPermittedError(problem_class="operation-submit-rejected") from exc
             raise
         if operation.operation_type == "MOVE":
             try:
                 OperationsPolicy.require_move_access(identity, operation.source_site_id, operation.destination_site_id)
-            except HTTPException as exc:
+            except (HTTPException, RoleNotPermittedError) as exc:
+                if isinstance(exc, RoleNotPermittedError):
+                    raise RoleNotPermittedError(problem_class="operation-submit-rejected") from exc
                 if exc.status_code == status.HTTP_403_FORBIDDEN:
-                    raise RoleNotPermittedError() from exc
+                    raise RoleNotPermittedError(problem_class="operation-submit-rejected") from exc
                 raise
 
     @staticmethod
@@ -422,12 +428,155 @@ class OperationsService:
 
         if deficits or issued_deficits:
             if deficits:
-                raise InsufficientStockError(deficits=[deficit for _, deficit in deficits])
+                raise InsufficientStockError(
+                    deficits=[deficit for _, deficit in deficits],
+                    problem_class="operation-submit-rejected",
+                )
             # Warehouse deficits have priority (TZ §5.1). Issued-only flows
             # (ISSUE_RETURN) land here; if both ever co-occur the warehouse
             # error is raised above and the issued deficits are dropped for
             # debug logging only.
-            raise InsufficientIssuedBalanceError(deficits=[deficit for _, deficit in issued_deficits])
+            raise InsufficientIssuedBalanceError(
+                deficits=[deficit for _, deficit in issued_deficits],
+                problem_class="operation-submit-rejected",
+            )
+
+    @staticmethod
+    async def _check_cancel_balance_sufficiency(uow: UnitOfWork, *, operation: Operation) -> None:
+        """Two-phase aggregated balance check for cancel-flow rollback.
+
+        Mirror of _check_submit_balance_sufficiency with inverse deltas:
+        - RECEIVE rollback decreases warehouse at operation.site_id
+        - EXPENSE/WRITE_OFF rollback increases warehouse at operation.site_id
+        - ADJUSTMENT rollback inverts the original delta
+        - MOVE rollback increases warehouse at source_site_id, decreases at destination_site_id
+        - ISSUE/ISSUE_RETURN rollback: warehouse at operation.site_id AND issued at issue_object_id
+        - WRITE_OFF with issue_object_id rollback: issued only
+
+        Raises InsufficientStockError / InsufficientIssuedBalanceError with
+        StockDeficit / IssuedStockDeficit (item.name, site.name,
+        operation_line_ids[]). Called by cancel_operation BEFORE
+        _apply_balance_delta / _upsert_issued / direct _ensure_sufficient_balance.
+        """
+        dict_warehouse: dict[tuple[int, int], list] = {}
+        dict_issued: dict[tuple[int, int], list] = {}
+        op_type = operation.operation_type
+
+        def _line_sort_key(line):
+            line_number = getattr(line, "line_number", None)
+            if line_number is not None:
+                return (False, int(line_number))
+            return (True, int(getattr(line, "id", 0)))
+
+        # Phase 1: one pass over lines ordered by line_number.
+        for line in sorted(operation.lines, key=_line_sort_key):
+            if line.inventory_subject_id is None:
+                continue
+            subject_id = int(line.inventory_subject_id)
+            quantity = Decimal(line.qty)
+            accepted_qty = Decimal(line.accepted_qty)
+            if op_type == "RECEIVE":
+                if operation.acceptance_required:
+                    if accepted_qty > 0:
+                        dict_warehouse.setdefault((operation.site_id, subject_id), []).append((line, accepted_qty))
+                else:
+                    dict_warehouse.setdefault((operation.site_id, subject_id), []).append((line, quantity))
+                continue
+            if op_type == "WRITE_OFF" and operation.issue_object_id is not None:
+                # Rollback restores the issued register (`_upsert_issued` with
+                # positive delta); a warehouse/issued deficit is impossible.
+                continue
+            if op_type in DECREMENT_OPERATION_TYPES:
+                # Rollback increases the warehouse balance.
+                continue
+            if op_type == "ADJUSTMENT":
+                dict_warehouse.setdefault((operation.site_id, subject_id), []).append((line, quantity))
+                continue
+            if op_type == "MOVE":
+                if operation.acceptance_required:
+                    if accepted_qty > 0:
+                        dict_warehouse.setdefault((operation.destination_site_id, subject_id), []).append(
+                            (line, accepted_qty)
+                        )
+                else:
+                    dict_warehouse.setdefault((operation.destination_site_id, subject_id), []).append((line, quantity))
+                continue
+            if op_type == "ISSUE":
+                if operation.issue_object_id is None:
+                    # Invariant violation — caught later inside cancel_operation.
+                    continue
+                dict_issued.setdefault((operation.issue_object_id, subject_id), []).append((line, quantity))
+                continue
+            if op_type == "ISSUE_RETURN":
+                dict_warehouse.setdefault((operation.site_id, subject_id), []).append((line, quantity))
+                continue
+
+        deficits: list[tuple[int, StockDeficit]] = []
+        issued_deficits: list[tuple[int, IssuedStockDeficit]] = []
+        site_name_cache: dict[int, str] = {}
+        subject_cache: dict[int, object] = {}
+        unit_cache: dict[int, object] = {}
+
+        # Phase 2: global key order → one lock per unique key, no deadlock.
+        for key in sorted(dict_warehouse.keys()):
+            site_id, subject_id = key
+            balance = await uow.balances.get_for_update(site_id=site_id, inventory_subject_id=subject_id)
+            available = Decimal(balance.qty) if balance is not None else Decimal("0")
+            lines = dict_warehouse[key]
+            sum_required = sum((qty for _, qty in lines), Decimal("0"))
+            if sum_required > available:
+                first_line_number = min(int(getattr(line, "line_number", 0)) for line, _ in lines)
+                deficit = await OperationsService._build_stock_deficit(
+                    uow,
+                    site_id=site_id,
+                    subject_id=subject_id,
+                    lines=lines,
+                    available=available,
+                    site_name_cache=site_name_cache,
+                    subject_cache=subject_cache,
+                    unit_cache=unit_cache,
+                )
+                deficits.append((first_line_number, deficit))
+
+        for key in sorted(dict_issued.keys()):
+            issue_object_id, subject_id = key
+            balance = await uow.asset_registers.get_issued_balance(
+                issue_object_id=issue_object_id,
+                inventory_subject_id=subject_id,
+            )
+            available = Decimal(balance.qty) if balance is not None else Decimal("0")
+            lines = dict_issued[key]
+            sum_required = sum((qty for _, qty in lines), Decimal("0"))
+            if sum_required > available:
+                first_line_number = min(int(getattr(line, "line_number", 0)) for line, _ in lines)
+                issued_deficits.append((
+                    first_line_number,
+                    await OperationsService._build_issued_stock_deficit(
+                        uow,
+                        issue_object_id=issue_object_id,
+                        subject_id=subject_id,
+                        lines=lines,
+                        available=available,
+                        subject_cache=subject_cache,
+                        unit_cache=unit_cache,
+                    ),
+                ))
+
+        deficits.sort(key=lambda item: item[0])
+        issued_deficits.sort(key=lambda item: item[0])
+
+        if deficits or issued_deficits:
+            if deficits:
+                raise InsufficientStockError(
+                    deficits=[deficit for _, deficit in deficits],
+                    problem_class="operation-cancel-rejected",
+                )
+            # Warehouse deficits have priority (TZ §5.1); issued-only flows
+            # land here.
+            raise InsufficientIssuedBalanceError(
+                deficits=[deficit for _, deficit in issued_deficits],
+                problem_class="operation-cancel-rejected",
+            )
 
     @staticmethod
     async def _validate_operation_type(operation_type: OperationType) -> None:
@@ -1950,7 +2099,11 @@ class OperationsService:
             # Step 6: optimistic version check (skipped only when the client
             # did not pass expected_version; state/rights checks never skip).
             if expected_version is not None and int(operation.version) != expected_version:
-                raise StaleVersionError(expected_version, int(operation.version))
+                raise StaleVersionError(
+                    expected_version,
+                    int(operation.version),
+                    problem_class="operation-submit-rejected",
+                )
 
             # Step 7: re-authorisation on the locked operation.
             if identity is not None:
@@ -2730,6 +2883,10 @@ class OperationsService:
         balance_effects_capture: list[dict] = []
 
         if operation.status == "submitted":
+            # PHASE 0: aggregated read-only pre-check (TZ-OPERATION_CANCEL_DOMAIN_ERRORS §5).
+            # Raises InsufficientStockError / InsufficientIssuedBalanceError → envelope.
+            await OperationsService._check_cancel_balance_sufficiency(uow, operation=operation)
+
             for line in operation.lines:
                 await OperationsService._ensure_line_inventory_subject(uow, line)
                 quantity = Decimal(line.qty)
@@ -2816,9 +2973,9 @@ class OperationsService:
                     )
                 elif operation.operation_type == "MOVE":
                     if operation.source_site_id is None or operation.destination_site_id is None:
-                        raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            detail="MOVE operation requires source_site_id and destination_site_id",
+                        raise OperationInWrongStateError(
+                            current_state="invalid",
+                            allowed_states=["draft", "submitted"],
                         )
                     if operation.acceptance_required:
                         if pending_qty > 0:
@@ -2897,7 +3054,10 @@ class OperationsService:
                         )
                 elif operation.operation_type == "ISSUE":
                     if operation.issue_object_id is None:
-                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="ISSUE requires issue_object_id")
+                        raise OperationInWrongStateError(
+                            current_state="invalid",
+                            allowed_states=["draft", "submitted"],
+                        )
                     await OperationsService._upsert_issued(
                         uow,
                         issue_object_id=operation.issue_object_id,
@@ -2917,7 +3077,10 @@ class OperationsService:
                     )
                 elif operation.operation_type == "ISSUE_RETURN":
                     if operation.issue_object_id is None:
-                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="ISSUE_RETURN requires issue_object_id")
+                        raise OperationInWrongStateError(
+                            current_state="invalid",
+                            allowed_states=["draft", "submitted"],
+                        )
                     await OperationsService._apply_balance_delta(
                         uow,
                         site_id=operation.site_id,

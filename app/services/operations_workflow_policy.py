@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
+from app.services.operation_submit_errors import OperationInWrongStateError, OperationNotFoundError
+
 
 class OperationsWorkflowPolicy:
     """Status and acceptance-state guards for operation workflow transitions."""
@@ -9,7 +11,7 @@ class OperationsWorkflowPolicy:
     @staticmethod
     def require_exists(operation) -> None:
         if not operation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
+            raise OperationNotFoundError(operation_id=getattr(operation, "id", None))
 
     @staticmethod
     def require_draft_for_effective_at_change(operation) -> None:
@@ -76,7 +78,7 @@ class OperationsWorkflowPolicy:
     @staticmethod
     def require_not_cancelled_for_cancel(operation) -> None:
         if operation.status == "cancelled":
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="operation is already cancelled")
+            raise OperationInWrongStateError(current_state="cancelled", allowed_states=["draft", "submitted"])
 
     @staticmethod
     def require_cancelled_for_restore(operation) -> None:

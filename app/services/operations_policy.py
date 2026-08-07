@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 
 from app.core.identity import Identity
 from app.schemas.admin import SiteFilter
+from app.services.operation_submit_errors import RoleNotPermittedError
 from app.services.uow import UnitOfWork
 
 
@@ -29,9 +30,9 @@ class OperationsPolicy:
         if identity.has_global_business_access:
             return
         if identity.role not in OperationsPolicy.WRITE_ROLES:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="operate permission required")
+            raise RoleNotPermittedError()
         if not identity.can_operate_at_site(site_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user has no operate access to site")
+            raise RoleNotPermittedError()
 
     @staticmethod
     def require_create_draft(identity: Identity, site_id: int) -> None:
@@ -178,19 +179,13 @@ class OperationsPolicy:
         if operation.status == "submitted":
             if identity.is_root:
                 return
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="only root may cancel submitted operations",
-            )
+            raise RoleNotPermittedError()
         # Draft operations: creator, chief_storekeeper, or root
         if identity.has_global_business_access:
             return
         if operation.created_by_user_id == identity.user_id:
             return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="only the operation creator, chief_storekeeper, or root may cancel this operation",
-        )
+        raise RoleNotPermittedError()
 
     @staticmethod
     def require_root_for_restore(identity: Identity) -> None:

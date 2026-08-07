@@ -437,7 +437,7 @@ def _base_uow(operation, balance_qty: Decimal | None = None):
             upsert_issued=AsyncMock(),
             upsert_pending=AsyncMock(),
             upsert_lost=AsyncMock(),
-            get_issued_balance=AsyncMock(),
+            get_issued_balance=AsyncMock(return_value=SimpleNamespace(qty=Decimal("10"))),
         ),
         operations=SimpleNamespace(
             get_operation_by_id=AsyncMock(

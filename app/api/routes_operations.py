@@ -357,7 +357,15 @@ async def delete_operation(
     logger.info("delete_operation", request_id=get_request_id(request), id=operation_id, user=identity.user_id)
 
 
-@router.post("/{operation_id}/cancel", response_model=OperationResponse)
+@router.post(
+    "/{operation_id}/cancel",
+    response_model=OperationResponse,
+    responses={
+        403: {"model": ProblemEnvelope, "description": "Role not permitted"},
+        404: {"model": ProblemEnvelope, "description": "Operation not found"},
+        409: {"model": ProblemEnvelope, "description": "Cancel rejected"},
+    },
+)
 async def cancel_operation(
     operation_id: UUID,
     cancel_data: OperationCancel,
@@ -365,13 +373,14 @@ async def cancel_operation(
     uow: UnitOfWork = Depends(get_uow),
     identity: Identity = Depends(require_user_identity),
 ) -> OperationResponse:
+    """Cancel operation. Возвращает envelope доменных ошибок в формате ADR-0027
+    (type urn:warehouse:problem:operation-cancel-rejected, code operation_cancel_rejected)."""
     if not cancel_data.cancel:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="cancel must be true")
 
     async with uow:
         operation = await uow.operations.get_operation_by_id(operation_id)
-        if not operation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="operation not found")
+        OperationsWorkflowPolicy.require_exists(operation)
 
         # ADR-0030 / TZ-AGENT-ROLE-SYNCSERVER §6.6: agent may cancel only its
         # own draft. require_operate_site / require_move_access are bypassed
@@ -381,6 +390,13 @@ async def cancel_operation(
             OperationsPolicy.require_agent_own_draft(identity, operation)
         else:
             OperationsPolicy.require_operate_site(identity, operation.site_id)
+
+        # TZ-OPERATION_CANCEL_DOMAIN_ERRORS §6.3: check workflow state before
+        # require_operation_cancel_permission so a repeated cancel yields the
+        # domain envelope (operation_in_wrong_state) instead of the raw
+        # HTTPException raised by that policy's cancelled-state guard.
+        OperationsWorkflowPolicy.require_not_cancelled_for_cancel(operation)
+
         OperationsPolicy.require_operation_cancel_permission(identity, operation)
         if identity.role != "agent" and operation.operation_type == "MOVE":
             OperationsPolicy.require_move_access(identity, operation.source_site_id, operation.destination_site_id)

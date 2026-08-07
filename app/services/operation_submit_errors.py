@@ -74,6 +74,8 @@ class OperationSubmitError(Exception):
     def _code(self) -> str:
         if self.problem_class == "operation-not-found":
             return "operation_not_found"
+        if self.problem_class == "operation-cancel-rejected":
+            return "operation_cancel_rejected"
         return "operation_submit_rejected"
 
     def _detail(self) -> str:
@@ -90,8 +92,14 @@ def _build_unit_ref(deficit: StockDeficit | IssuedStockDeficit) -> UnitRef | Non
 
 
 class InsufficientStockError(OperationSubmitError):
-    def __init__(self, deficits: list[StockDeficit]) -> None:
+    def __init__(
+        self,
+        deficits: list[StockDeficit],
+        *,
+        problem_class: str = "operation-cancel-rejected",
+    ) -> None:
         super().__init__()
+        self.problem_class = problem_class
         self.deficits = deficits
 
     def _errors(self) -> list[ProblemError]:
@@ -118,8 +126,14 @@ class InsufficientStockError(OperationSubmitError):
 
 
 class InsufficientIssuedBalanceError(OperationSubmitError):
-    def __init__(self, deficits: list[IssuedStockDeficit]) -> None:
+    def __init__(
+        self,
+        deficits: list[IssuedStockDeficit],
+        *,
+        problem_class: str = "operation-cancel-rejected",
+    ) -> None:
         super().__init__()
+        self.problem_class = problem_class
         self.deficits = deficits
 
     def _errors(self) -> list[ProblemError]:
@@ -143,8 +157,15 @@ class InsufficientIssuedBalanceError(OperationSubmitError):
 
 
 class StaleVersionError(OperationSubmitError):
-    def __init__(self, expected_version: int, actual_version: int) -> None:
+    def __init__(
+        self,
+        expected_version: int,
+        actual_version: int,
+        *,
+        problem_class: str = "operation-cancel-rejected",
+    ) -> None:
         super().__init__()
+        self.problem_class = problem_class
         self.expected_version = expected_version
         self.actual_version = actual_version
 
@@ -163,8 +184,15 @@ class StaleVersionError(OperationSubmitError):
 
 
 class OperationInWrongStateError(OperationSubmitError):
-    def __init__(self, current_state: str, allowed_states: list[str]) -> None:
+    def __init__(
+        self,
+        current_state: str,
+        allowed_states: list[str],
+        *,
+        problem_class: str = "operation-cancel-rejected",
+    ) -> None:
         super().__init__()
+        self.problem_class = problem_class
         self.current_state = current_state
         self.allowed_states = allowed_states
 
@@ -202,6 +230,10 @@ class OperationNotFoundError(OperationSubmitError):
 
 class RoleNotPermittedError(OperationSubmitError):
     http_status = 403
+
+    def __init__(self, *, problem_class: str = "operation-cancel-rejected") -> None:
+        super().__init__()
+        self.problem_class = problem_class
 
     def _errors(self) -> list[ProblemError]:
         return [RoleNotPermittedErrorSchema(code="role_not_permitted", scope="operation")]

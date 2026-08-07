@@ -1,13 +1,16 @@
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 
+from app.services.operation_submit_errors import OperationInWrongStateError, OperationNotFoundError
 from app.services.operations_workflow_policy import OperationsWorkflowPolicy
 
 
 def _operation(*, status: str = "draft", acceptance_required: bool = False, acceptance_state: str = "pending"):
     return SimpleNamespace(
+        id=uuid4(),
         status=status,
         acceptance_required=acceptance_required,
         acceptance_state=acceptance_state,
@@ -92,11 +95,24 @@ def test_delete_rejects_submitted_operation() -> None:
 def test_cancel_rejects_already_cancelled_operation() -> None:
     operation = _operation(status="cancelled")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(OperationInWrongStateError) as exc:
         OperationsWorkflowPolicy.require_not_cancelled_for_cancel(operation)
 
-    assert exc.value.status_code == 409
-    assert exc.value.detail == "operation is already cancelled"
+    assert not isinstance(exc.value, HTTPException)
+    assert exc.value.http_status == 409
+    assert exc.value.current_state == "cancelled"
+    assert exc.value.allowed_states == ["draft", "submitted"]
+    assert exc.value.problem_class == "operation-cancel-rejected"
+    envelope = exc.value.to_envelope()
+    assert envelope.code == "operation_cancel_rejected"
+    assert envelope.errors[0].code == "operation_in_wrong_state"
+    assert envelope.errors[0].current_state == "cancelled"
+    assert envelope.errors[0].allowed_states == ["draft", "submitted"]
+
+
+def test_cancel_accepts_non_cancelled_operation() -> None:
+    for status in ("draft", "submitted"):
+        OperationsWorkflowPolicy.require_not_cancelled_for_cancel(_operation(status=status))
 
 
 def test_effective_at_change_allows_draft() -> None:
@@ -147,8 +163,19 @@ def test_effective_at_change_rejects_unknown_status() -> None:
 
 
 def test_exists_guard_rejects_missing_operation() -> None:
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(OperationNotFoundError) as exc:
         OperationsWorkflowPolicy.require_exists(None)
 
-    assert exc.value.status_code == 404
-    assert exc.value.detail == "operation not found"
+    assert not isinstance(exc.value, HTTPException)
+    assert exc.value.http_status == 404
+    assert exc.value.operation_id is None
+    assert exc.value.problem_class == "operation-not-found"
+    envelope = exc.value.to_envelope()
+    assert envelope.type == "urn:warehouse:problem:operation-not-found"
+    assert envelope.code == "operation_not_found"
+    assert envelope.errors[0].code == "operation_not_found"
+
+
+def test_exists_guard_accepts_existing_operation() -> None:
+    operation = _operation(status="draft")
+    OperationsWorkflowPolicy.require_exists(operation)
