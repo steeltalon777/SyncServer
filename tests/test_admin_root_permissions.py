@@ -220,9 +220,7 @@ async def test_site_mutation_allows_root(
         headers={"X-User-Token": str(root.user_token)},
         json={"name": "Updated Root Site"},
     )
-    # Guard passes (not 403). 500 is a pre-existing bug in AdminSitesService.update_site
-    # (MissingGreenlet after flush without refresh), out of scope for this task.
-    assert patch_resp.status_code != 403
+    assert patch_resp.status_code == 200
 
 
 # ── User admin endpoints (all require root) ─────────────────────────────

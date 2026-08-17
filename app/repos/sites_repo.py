@@ -39,6 +39,7 @@ class SitesRepo:
         )
         self.session.add(site)
         await self.session.flush()
+        await self.session.refresh(site)
         return site
 
     async def update_site(
@@ -61,6 +62,7 @@ class SitesRepo:
             if is_active is not None:
                 site.is_active = is_active
             await self.session.flush()
+            await self.session.refresh(site)
         return site
 
     async def list_sites(
