@@ -32,6 +32,8 @@ from app.schemas.operation import (
 from app.services.catalog_read_service import CatalogReadService
 from app.services.document_service import DocumentService, draft_document_type_for_operation, submit_document_type_for_operation, _compute_operation_display_number
 from app.services.audit_helper import record_audit_event
+from app.services.operation_line_errors import OperationLinesInvalidError
+from app.schemas.operation_line_error import OperationLineError
 from app.services.operation_submit_errors import (
     InsufficientIssuedBalanceError,
     InsufficientStockError,
@@ -84,6 +86,131 @@ class OperationsService:
                 detail="temporary backing item cannot be used directly via item_id",
             )
         return item
+
+    @staticmethod
+    async def _batch_resolve_and_validate_lines(
+        uow: UnitOfWork,
+        lines: list,
+        operation_id: UUID | None = None,
+    ) -> dict[int, int]:
+        """Batch resolve all persisted item_ids, canonicalize, detect duplicates.
+
+        Returns mapping: requested_item_id -> canonical_item_id.
+        Raises OperationLinesInvalidError if any line is invalid.
+        Temporary lines are skipped (they have no item_id).
+        """
+        # Collect persisted item_ids with their line numbers
+        line_map: dict[int, list[int]] = {}  # item_id -> [line_numbers]
+        for line in lines:
+            if line.item_id is not None and line.temporary_item is None:
+                line_map.setdefault(line.item_id, []).append(line.line_number)
+
+        if not line_map:
+            return {}
+
+        requested_ids = list(line_map.keys())
+
+        # Batch resolve via CatalogReadService
+        resolve_result = await CatalogReadService.resolve_items(
+            uow, ItemsResolveRequest(item_ids=requested_ids)
+        )
+
+        errors: list[OperationLineError] = []
+        canonical_map: dict[int, int] = {}  # requested_id -> canonical_id
+        canonical_to_lines: dict[int, list[int]] = {}  # canonical_id -> [line_numbers]
+
+        for resolved in resolve_result.items:
+            line_numbers = line_map.get(resolved.requested_id, [])
+            first_line = line_numbers[0] if line_numbers else 0
+
+            if resolved.status == "missing":
+                for ln in line_numbers:
+                    errors.append(OperationLineError(
+                        line_number=ln,
+                        item_id=resolved.requested_id,
+                        reason="item_not_found",
+                    ))
+                continue
+
+            if resolved.status == "deleted":
+                for ln in line_numbers:
+                    errors.append(OperationLineError(
+                        line_number=ln,
+                        item_id=resolved.requested_id,
+                        reason="deleted",
+                    ))
+                continue
+
+            if resolved.status == "inactive":
+                for ln in line_numbers:
+                    errors.append(OperationLineError(
+                        line_number=ln,
+                        item_id=resolved.requested_id,
+                        reason="inactive",
+                    ))
+                continue
+
+            if resolved.status == "merged" and resolved.canonical_item_id is None:
+                # Merged but canonical is unusable
+                for ln in line_numbers:
+                    errors.append(OperationLineError(
+                        line_number=ln,
+                        item_id=resolved.requested_id,
+                        reason="inactive" if resolved.reason and "inactive" in resolved.reason else "item_not_found",
+                    ))
+                continue
+
+            # Active or merged-to-canonical
+            canonical_id = resolved.canonical_item_id
+            if canonical_id is None:
+                for ln in line_numbers:
+                    errors.append(OperationLineError(
+                        line_number=ln,
+                        item_id=resolved.requested_id,
+                        reason="item_not_found",
+                    ))
+                continue
+
+            canonical_map[resolved.requested_id] = canonical_id
+
+            # Track canonical duplicates
+            for ln in line_numbers:
+                if canonical_id in canonical_to_lines:
+                    first = canonical_to_lines[canonical_id][0]
+                    errors.append(OperationLineError(
+                        line_number=ln,
+                        item_id=resolved.requested_id,
+                        reason="duplicate_item",
+                        first_line_number=first,
+                    ))
+                else:
+                    canonical_to_lines.setdefault(canonical_id, []).append(ln)
+
+        # Direct duplicate check (same requested_id in multiple lines)
+        for item_id, line_numbers in line_map.items():
+            if len(line_numbers) > 1:
+                first = line_numbers[0]
+                for ln in line_numbers[1:]:
+                    # Only add if not already reported as canonical duplicate
+                    already_reported = any(
+                        e.line_number == ln and e.reason == "duplicate_item"
+                        for e in errors
+                    )
+                    if not already_reported:
+                        errors.append(OperationLineError(
+                            line_number=ln,
+                            item_id=item_id,
+                            reason="duplicate_item",
+                            first_line_number=first,
+                        ))
+
+        if errors:
+            raise OperationLinesInvalidError(
+                errors=errors,
+                operation_id=operation_id,
+            )
+
+        return canonical_map
 
     @staticmethod
     def _ensure_temporary_payload_consistent(batch: dict[str, object], client_key: str, payload) -> None:
@@ -1129,8 +1256,6 @@ class OperationsService:
                     line.temporary_item.client_key,
                     line.temporary_item,
                 )
-            elif line.item_id is not None:
-                await OperationsService._ensure_item_usable(uow, line.item_id)
 
         if has_temporary_items:
             if operation_data.operation_type != "RECEIVE":
@@ -1138,6 +1263,11 @@ class OperationsService:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="Phase 1 supports inline temporary_item creation only for RECEIVE operations",
                 )
+
+        # Batch canonicalization: resolve all persisted item_ids, detect duplicates
+        canonical_map = await OperationsService._batch_resolve_and_validate_lines(
+            uow, operation_data.lines,
+        )
 
         issue_object_id, issue_object_name_snapshot = await OperationsService._resolve_issue_object(
             uow,
@@ -1229,8 +1359,8 @@ class OperationsService:
                     temporary_draft_payload=draft_payload,
                 )
             else:
-                # Каталожная строка — создаём как обычно
-                line_item_id = line_data.item_id
+                # Каталожная строка — используем canonical ID из batch resolve
+                line_item_id = canonical_map.get(line_data.item_id, line_data.item_id) if line_data.item_id else line_data.item_id
                 if line_item_id is None:
                     raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="line item resolution failed")
 
@@ -1656,35 +1786,12 @@ class OperationsService:
             fields_set=update_data.model_fields_set,
         )
 
-        # B5: catalog guard — batch-resolve persisted item IDs before mutation
+        # B5+batch: catalog guard — batch resolve, canonicalize, detect duplicates
+        canonical_map: dict[int, int] = {}
         if update_data.lines is not None:
-            persisted_ids = [
-                line.item_id for line in update_data.lines
-                if line.item_id is not None and line.temporary_item is None
-            ]
-            if persisted_ids:
-                resolve_result = await CatalogReadService.resolve_items(
-                    uow,
-                    ItemsResolveRequest(item_ids=persisted_ids),
-                )
-                unusable_fields = {}
-                for resolved in resolve_result.items:
-                    if resolved.status not in ("active",):
-                        if resolved.status == "merged" and resolved.canonical_item_id is not None:
-                            continue
-                        unusable_fields[f"lines.{resolved.requested_id}.item_id"] = {
-                            "status": resolved.status,
-                            "canonical_item_id": resolved.canonical_item_id,
-                        }
-                if unusable_fields:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail={
-                            "code": "catalog_item_unusable",
-                            "message": "Одна или несколько ТМЦ больше недоступны",
-                            "fields": unusable_fields,
-                        },
-                    )
+            canonical_map = await OperationsService._batch_resolve_and_validate_lines(
+                uow, update_data.lines, operation_id=operation_id,
+            )
 
             await uow.operations.delete_operation_lines(operation_id)
 
@@ -1758,7 +1865,9 @@ class OperationsService:
                             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="item_id is required",
                         )
-                    item = await OperationsService._ensure_item_usable(uow, line.item_id)
+                    # Use canonical ID from batch resolve
+                    effective_item_id = canonical_map.get(line.item_id, line.item_id)
+                    item = await OperationsService._ensure_item_usable(uow, effective_item_id)
                     unit = await uow.catalog.get_unit_by_id(item.unit_id)
                     if not unit:
                         raise HTTPException(
@@ -1771,12 +1880,12 @@ class OperationsService:
                             status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"category with id {item.category_id} not found",
                         )
-                    line_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=line.item_id)
+                    line_subject = await uow.inventory_subjects.get_or_create_for_item(item_id=effective_item_id)
                     await uow.operations.create_operation_line(
                         operation_id=operation_id,
                         line_number=line.line_number,
                         inventory_subject_id=line_subject.id,
-                        item_id=line.item_id,
+                        item_id=effective_item_id,
                         qty=line.qty,
                         batch=line.batch,
                         comment=line.comment,
@@ -2133,6 +2242,29 @@ class OperationsService:
             catalog_changes = []
             if ops_cs in ("source_document", "manual"):
                 catalog_changes = await OperationsService._freeze_catalog_snapshot(uow, operation)
+
+            # Submit-time duplicate guard: after canonical freeze, before balance effects.
+            # Two lines may now point to the same canonical item_id due to post-save merges.
+            seen_canonical: dict[int, int] = {}  # item_id -> first line_number
+            submit_duplicate_errors: list[OperationLineError] = []
+            for line in operation.lines:
+                if line.item_id is None:
+                    continue
+                if line.item_id in seen_canonical:
+                    submit_duplicate_errors.append(OperationLineError(
+                        line_number=line.line_number,
+                        item_id=line.item_id,
+                        reason="duplicate_item",
+                        first_line_number=seen_canonical[line.item_id],
+                    ))
+                else:
+                    seen_canonical[line.item_id] = line.line_number
+            if submit_duplicate_errors:
+                raise OperationLinesInvalidError(
+                    errors=submit_duplicate_errors,
+                    operation_id=operation.id,
+                    message="Canonical duplicate detected after catalog freeze",
+                )
 
             # Ensure every line has an inventory subject before the aggregate
             # balance check groups lines by (site_id, inventory_subject_id).

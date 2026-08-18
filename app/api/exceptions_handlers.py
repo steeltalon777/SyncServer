@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from app.services.operation_line_errors import OperationLinesInvalidError
 from app.services.operation_submit_errors import OperationSubmitError
 
 
@@ -14,4 +15,12 @@ async def operation_submit_error_handler(request: Request, exc: OperationSubmitE
     return JSONResponse(
         status_code=exc.http_status,
         content=envelope.model_dump(exclude_none=True),
+    )
+
+
+async def operation_lines_invalid_handler(request: Request, exc: OperationLinesInvalidError) -> JSONResponse:
+    response = exc.to_response()
+    return JSONResponse(
+        status_code=409,
+        content=response.model_dump(exclude_none=True),
     )

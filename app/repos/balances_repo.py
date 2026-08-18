@@ -117,6 +117,9 @@ class BalancesRepo:
         if filter.item_id is not None:
             stmt = stmt.where(InventorySubject.item_id == filter.item_id)
 
+        if getattr(filter, "item_ids", None) is not None:
+            stmt = stmt.where(InventorySubject.item_id.in_(filter.item_ids))
+
         if filter.inventory_subject_id is not None:
             stmt = stmt.where(Balance.inventory_subject_id == filter.inventory_subject_id)
 
@@ -142,11 +145,17 @@ class BalancesRepo:
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total_count = (await self.session.execute(count_stmt)).scalar_one()
 
-        stmt = (
-            stmt.order_by(Balance.updated_at.desc(), Site.name, Item.name, InventorySubject.item_id)
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
+        is_targeted = getattr(filter, "item_ids", None) is not None
+
+        if is_targeted:
+            # Targeted mode: no pagination truncation, return all matching rows
+            stmt = stmt.order_by(Site.name, Item.name, InventorySubject.item_id)
+        else:
+            stmt = (
+                stmt.order_by(Balance.updated_at.desc(), Site.name, Item.name, InventorySubject.item_id)
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
 
         rows = (await self.session.execute(stmt)).all()
         return [dict(row._mapping) for row in rows], int(total_count)

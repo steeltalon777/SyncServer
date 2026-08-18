@@ -208,15 +208,15 @@ class TestOperationSnapshots:
             ]
         )
 
-        with pytest.raises(HTTPException) as exc_info:
+        from app.services.operation_line_errors import OperationLinesInvalidError
+        with pytest.raises(OperationLinesInvalidError) as exc_info:
             await OperationsService.create_operation(
                 uow,
                 operation_data,
                 user.id,
             )
 
-        assert exc_info.value.status_code == 404
-        assert "item with id" in str(exc_info.value.detail)
+        assert any(e.reason == "inactive" for e in exc_info.value.errors)
 
     @pytest.mark.asyncio
     async def test_snapshots_for_deleted_catalog_items(self, uow, site, user, admin_user):

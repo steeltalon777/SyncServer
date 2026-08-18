@@ -51,6 +51,7 @@ async def list_balances(
     identity: Identity = Depends(require_user_identity),
     site_id: int | None = Query(None, description="Filter by site ID"),
     item_id: int | None = Query(None, description="Filter by item ID"),
+    item_ids: str | None = Query(None, description="Targeted item IDs (comma-separated, max 200)"),
     category_id: int | None = Query(None, description="Filter by category ID"),
     search: str | None = Query(None, description="Search in item fields"),
     only_positive: bool = Query(False, description="Show only positive balances"),
@@ -59,12 +60,49 @@ async def list_balances(
 ) -> BalanceListResponse:
     _require_read_access(identity)
 
+    parsed_item_ids = None
+    if item_ids is not None:
+        try:
+            parsed_item_ids = list(dict.fromkeys(int(x.strip()) for x in item_ids.split(",") if x.strip()))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="item_ids must be comma-separated integers",
+            )
+        if not parsed_item_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="item_ids must not be empty",
+            )
+        if len(parsed_item_ids) > 200:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="item_ids must not exceed 200 entries",
+            )
+        # Reject incompatible filters with targeted semantics
+        if search is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="search filter is incompatible with targeted item_ids",
+            )
+        if only_positive:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="only_positive filter is incompatible with targeted item_ids",
+            )
+        if category_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="category_id filter is incompatible with targeted item_ids",
+            )
+
     async with uow:
         visible_site_ids = await _resolve_visible_site_ids(uow, identity)
 
         filter_data = BalanceFilter(
             site_id=site_id,
             item_id=item_id,
+            item_ids=parsed_item_ids,
             category_id=category_id,
             search=search,
             only_positive=only_positive,
@@ -83,12 +121,13 @@ async def list_balances(
         user_id=identity.user_id,
         returned=len(items),
         total=total_count,
+        targeted=bool(parsed_item_ids),
     )
     return BalanceListResponse(
         items=items,
         total_count=total_count,
-        page=page,
-        page_size=page_size,
+        page=page if not parsed_item_ids else 1,
+        page_size=page_size if not parsed_item_ids else total_count,
     )
 
 
@@ -108,6 +147,7 @@ async def list_balances_by_site(
         identity=identity,
         site_id=site_id,
         item_id=None,
+        item_ids=None,
         category_id=None,
         search=None,
         only_positive=only_positive,

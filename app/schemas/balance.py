@@ -66,6 +66,10 @@ class BalanceFilter(BaseModel):
         default=None,
         description="[deprecated] Use inventory_subject_id for filtering",
     )
+    item_ids: list[int] | None = Field(
+        default=None,
+        description="Targeted item IDs (comma-separated). Returns all matching rows without pagination truncation. Max 200.",
+    )
     category_id: int | None = None
     search: str | None = None
     only_positive: bool = Field(default=False, description="Show only positive balances")

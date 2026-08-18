@@ -443,13 +443,12 @@ def test_operation_list_response_sorted():
 @pytest.mark.asyncio
 async def test_create_operation_response_lines_sorted(client, session_factory):
     """POST /api/v1/operations with shuffled lines must return them ordered 1..30."""
-    seed = await _seed(session_factory)
-    item_id = seed["items"][0]["item_id"]
+    seed = await _seed(session_factory, items=30)
     shuffled = _shuffled_line_numbers()
 
     data = await _create_operation(
         client, seed["root_token"], site_id=seed["site_id"],
-        lines=[_line(item_id, 1, ln) for ln in shuffled],
+        lines=[_line(seed["items"][ln - 1]["item_id"], 1, ln) for ln in shuffled],
     )
     assert [line["line_number"] for line in data["lines"]] == list(range(1, 31))
     # Physical ids are NOT monotonic with line_number (the prod bug shape)
@@ -460,15 +459,14 @@ async def test_create_operation_response_lines_sorted(client, session_factory):
 @pytest.mark.asyncio
 async def test_update_operation_response_lines_sorted(client, session_factory):
     """Three PATCHes in prod order (10..18, then 1..9, then 19..30) must end ordered 1..30."""
-    seed = await _seed(session_factory)
-    item_id = seed["items"][0]["item_id"]
+    seed = await _seed(session_factory, items=30)
     token = seed["root_token"]
     headers = {"X-User-Token": token}
 
     resp = await client.post(
         "/api/v1/operations",
         json={"operation_type": "EXPENSE", "site_id": seed["site_id"],
-              "lines": [_line(item_id, 1, ln) for ln in range(10, 19)]},
+              "lines": [_line(seed["items"][ln - 1]["item_id"], 1, ln) for ln in range(10, 19)]},
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
@@ -485,7 +483,7 @@ async def test_update_operation_response_lines_sorted(client, session_factory):
         ]
         resp = await client.patch(
             f"/api/v1/operations/{op_id}",
-            json={"lines": existing + [_line(item_id, 1, ln) for ln in batch]},
+            json={"lines": existing + [_line(seed["items"][ln - 1]["item_id"], 1, ln) for ln in batch]},
             headers=headers,
         )
         assert resp.status_code == 200, f"patch failed: {resp.text}"
@@ -497,11 +495,10 @@ async def test_update_operation_response_lines_sorted(client, session_factory):
 @pytest.mark.asyncio
 async def test_get_operation_response_lines_sorted(client, session_factory):
     """GET /api/v1/operations/{id} after shuffled insert must return lines 1..30."""
-    seed = await _seed(session_factory)
-    item_id = seed["items"][0]["item_id"]
+    seed = await _seed(session_factory, items=30)
     created = await _create_operation(
         client, seed["root_token"], site_id=seed["site_id"],
-        lines=[_line(item_id, 1, ln) for ln in _shuffled_line_numbers()],
+        lines=[_line(seed["items"][ln - 1]["item_id"], 1, ln) for ln in _shuffled_line_numbers()],
     )
     op_id = created["id"]
 
@@ -519,11 +516,10 @@ async def test_get_operation_response_lines_sorted(client, session_factory):
 @pytest.mark.asyncio
 async def test_submit_response_lines_sorted(client, session_factory):
     """POST /submit must return lines ordered 1..30 (ADR-0025, TZ-V3.1I)."""
-    seed = await _seed(session_factory)
-    item_id = seed["items"][0]["item_id"]
+    seed = await _seed(session_factory, items=30)
     created = await _create_operation(
         client, seed["root_token"], site_id=seed["site_id"],
-        lines=[_line(item_id, 1, ln) for ln in _shuffled_line_numbers()],
+        lines=[_line(seed["items"][ln - 1]["item_id"], 1, ln) for ln in _shuffled_line_numbers()],
     )
     op_id = created["id"]
 
@@ -546,15 +542,17 @@ async def test_submit_deficits_order_after_reverse_patches(client, session_facto
     the smallest line_number must come first, and its operation_line_ids must
     be ordered by line_number, not by physical insertion.
     """
-    seed = await _seed(session_factory, items=2, second_site=True, balance_qty="0.000")
+    seed = await _seed(session_factory, items=3, second_site=True, balance_qty="0.000")
     item_a = seed["items"][0]
     item_b = seed["items"][1]
+    item_c = seed["items"][2]
     # Insert in reverse business order: line 3 first, line 1 last.
+    # Each line uses a different item to avoid duplicate guard.
     created = await _create_operation(
         client, seed["root_token"], site_id=seed["site_id"], op_type="MOVE",
         destination_site_id=seed["destination_site_id"],
         lines=[
-            {"line_number": 3, "item_id": item_a["item_id"], "qty": 60},
+            {"line_number": 3, "item_id": item_c["item_id"], "qty": 60},
             {"line_number": 2, "item_id": item_b["item_id"], "qty": 40},
             {"line_number": 1, "item_id": item_a["item_id"], "qty": 60},
         ],
@@ -569,22 +567,24 @@ async def test_submit_deficits_order_after_reverse_patches(client, session_facto
     )
     assert resp.status_code == 409, resp.text
     errors = resp.json()["errors"]
-    assert len(errors) == 2
+    assert len(errors) == 3
     # Groups ordered by first line's line_number: item A (line 1) first
     assert errors[0]["item"]["id"] == item_a["item_id"]
     assert errors[1]["item"]["id"] == item_b["item_id"]
-    # operation_line_ids ordered by line_number: [line 1, line 3], NOT [line 3, line 1]
-    assert errors[0]["operation_line_ids"] == [ids_by_line[1], ids_by_line[3]]
+    assert errors[2]["item"]["id"] == item_c["item_id"]
+    # operation_line_ids ordered by line_number
+    assert errors[0]["operation_line_ids"] == [ids_by_line[1]]
+    assert errors[1]["operation_line_ids"] == [ids_by_line[2]]
+    assert errors[2]["operation_line_ids"] == [ids_by_line[3]]
 
 
 @pytest.mark.asyncio
 async def test_patch_reverse_order_then_generate_document(client, session_factory, uow: UnitOfWork):
     """Document payload after reverse-order lines must be ordered 1..N."""
-    seed = await _seed(session_factory)
-    item_id = seed["items"][0]["item_id"]
+    seed = await _seed(session_factory, items=30)
     created = await _create_operation(
         client, seed["root_token"], site_id=seed["site_id"],
-        lines=[_line(item_id, 1, ln) for ln in _shuffled_line_numbers()],
+        lines=[_line(seed["items"][ln - 1]["item_id"], 1, ln) for ln in _shuffled_line_numbers()],
     )
     op_id = created["id"]
 
