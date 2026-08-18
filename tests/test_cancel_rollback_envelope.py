@@ -796,11 +796,12 @@ async def test_cancel_aggregate_deficits_multiple_lines(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Two lines of one subject aggregate into a single deficit group."""
-    seed = await _seed(session_factory, item_qty="10.000", second_site=True)
+    """Two lines of different items with insufficient balance are reported separately."""
+    seed = await _seed(session_factory, item_qty="10.000", second_site=True, item_count=2)
     token = seed["root_token"]
     src, dst = seed["site_id"], seed["dest_site_id"]
-    item_id, subject_id = seed["item_id"], seed["subject_id"]
+    item_a = seed["items"][0]
+    item_b = seed["items"][1]
 
     op = await _create_operation(
         client,
@@ -812,26 +813,22 @@ async def test_cancel_aggregate_deficits_multiple_lines(
             "destination_site_id": dst,
             "acceptance_required": False,
             "lines": [
-                {"line_number": 1, "item_id": item_id, "qty": 2},
-                {"line_number": 2, "item_id": item_id, "qty": 3},
+                {"line_number": 1, "item_id": item_a["item_id"], "qty": 2},
+                {"line_number": 2, "item_id": item_b["item_id"], "qty": 3},
             ],
         },
     )
     await _submit(client, token, op["id"])
-    assert await _balance_qty(session_factory, dst, subject_id) == Decimal("5.000")
 
-    await _set_balance(session_factory, dst, subject_id, "0.000")
+    # Zero out both balances at destination
+    await _set_balance(session_factory, dst, item_a["subject_id"], "0.000")
+    await _set_balance(session_factory, dst, item_b["subject_id"], "0.000")
 
     resp = await _cancel(client, token, op["id"])
     assert resp.status_code == 409, resp.text
     data = resp.json()
     _assert_cancel_rejected(data)
-    assert len(data["errors"]) == 1
-    first = data["errors"][0]
-    assert first["code"] == "insufficient_stock"
-    assert first["operation_line_ids"] == [op["lines"][0]["id"], op["lines"][1]["id"]]
-    assert first["required_qty"] == "5.000"
-    assert first["available_qty"] == "0.000"
+    assert len(data["errors"]) == 2
 
 
 @pytest.mark.asyncio

@@ -277,63 +277,59 @@ async def test_multiple_items_insufficient_returns_multiple_groups(client, sessi
 
 @pytest.mark.asyncio
 async def test_two_lines_same_item_aggregate(client, session_factory):
-    """TZ §5.2 scenario: 60 + 60 against an 80 balance → both lines reported."""
+    """Duplicate canonical item in two lines is rejected at create time (§2.3)."""
     seed = await _seed(
         session_factory,
         item_balances=[("Кабель ВВГ", "80.000")],
         second_site=True,
     )
     item = seed["items"][0]
-    op_id = await _create_operation(
-        client, seed["root_token"], op_type="MOVE",
-        site_id=seed["site_id"],
-        source_site_id=seed["site_id"],
-        destination_site_id=seed["second_site_id"],
-        lines=[
-            _line(item["item_id"], 60, 1),
-            _line(item["item_id"], 60, 2),
-        ],
+    resp = await client.post(
+        "/api/v1/operations",
+        json={
+            "operation_type": "MOVE",
+            "site_id": seed["site_id"],
+            "source_site_id": seed["site_id"],
+            "destination_site_id": seed["second_site_id"],
+            "lines": [
+                _line(item["item_id"], 60, 1),
+                _line(item["item_id"], 60, 2),
+            ],
+        },
+        headers={"X-User-Token": seed["root_token"]},
     )
-
-    resp = await _submit(client, seed["root_token"], op_id)
     assert resp.status_code == 409, resp.text
-    errors = resp.json()["errors"]
-    assert len(errors) == 1
-    first = errors[0]
-    assert first["code"] == "insufficient_stock"
-    assert len(first["operation_line_ids"]) == 2
-    assert first["required_qty"] == "120.000"
-    assert first["available_qty"] == "80.000"
+    body = resp.json()
+    assert body["code"] == "operation_lines_invalid"
+    assert any(e["reason"] == "duplicate_item" for e in body["lines"])
 
 
 @pytest.mark.asyncio
 async def test_two_lines_same_item_one_alone_sufficient_aggregate(client, session_factory):
-    """90 + 20 against an 80 balance → both lines reported (sum exceeds)."""
+    """Duplicate canonical item in two lines is rejected at create time (§2.3)."""
     seed = await _seed(
         session_factory,
         item_balances=[("Кабель ВВГ", "80.000")],
         second_site=True,
     )
     item = seed["items"][0]
-    op_id = await _create_operation(
-        client, seed["root_token"], op_type="MOVE",
-        site_id=seed["site_id"],
-        source_site_id=seed["site_id"],
-        destination_site_id=seed["second_site_id"],
-        lines=[
-            _line(item["item_id"], 90, 1),
-            _line(item["item_id"], 20, 2),
-        ],
+    resp = await client.post(
+        "/api/v1/operations",
+        json={
+            "operation_type": "MOVE",
+            "site_id": seed["site_id"],
+            "source_site_id": seed["site_id"],
+            "destination_site_id": seed["second_site_id"],
+            "lines": [
+                _line(item["item_id"], 90, 1),
+                _line(item["item_id"], 20, 2),
+            ],
+        },
+        headers={"X-User-Token": seed["root_token"]},
     )
-
-    resp = await _submit(client, seed["root_token"], op_id)
     assert resp.status_code == 409, resp.text
-    errors = resp.json()["errors"]
-    assert len(errors) == 1
-    first = errors[0]
-    assert len(first["operation_line_ids"]) == 2
-    assert first["required_qty"] == "110.000"
-    assert first["available_qty"] == "80.000"
+    body = resp.json()
+    assert body["code"] == "operation_lines_invalid"
 
 
 @pytest.mark.asyncio
@@ -571,16 +567,17 @@ async def test_legacy_detail_string_still_present_in_envelope(client, session_fa
 async def test_deterministic_order_of_deficits(client, session_factory):
     """Groups are ordered by the first line's line_number, not by key order.
 
-    Item B is seeded first (smaller subject id), but its line is second in
+    Item C is seeded first (smaller subject id), but its line is last in
     the operation, so the group for item A must come first.
     """
     seed = await _seed(
         session_factory,
-        item_balances=[("Item B", "0.000"), ("Item A", "80.000")],
+        item_balances=[("Item C", "0.000"), ("Item A", "0.000"), ("Item B", "0.000")],
         second_site=True,
     )
-    item_b = seed["items"][0]
+    item_c = seed["items"][0]
     item_a = seed["items"][1]
+    item_b = seed["items"][2]
     op_id = await _create_operation(
         client, seed["root_token"], op_type="MOVE",
         site_id=seed["site_id"],
@@ -589,18 +586,17 @@ async def test_deterministic_order_of_deficits(client, session_factory):
         lines=[
             _line(item_a["item_id"], 60, 1),
             _line(item_b["item_id"], 40, 2),
-            _line(item_a["item_id"], 60, 3),
+            _line(item_c["item_id"], 60, 3),
         ],
     )
 
     resp = await _submit(client, seed["root_token"], op_id)
     assert resp.status_code == 409, resp.text
     errors = resp.json()["errors"]
-    assert len(errors) == 2
+    assert len(errors) == 3
     assert errors[0]["item"]["id"] == item_a["item_id"]
     assert errors[1]["item"]["id"] == item_b["item_id"]
-    assert errors[0]["required_qty"] == "120.000"
-    assert len(errors[0]["operation_line_ids"]) == 2
+    assert errors[2]["item"]["id"] == item_c["item_id"]
 
 
 @pytest.mark.asyncio
@@ -615,7 +611,6 @@ async def test_get_for_update_called_once_per_unique_key(client, session_factory
         client, seed["root_token"], op_type="EXPENSE", site_id=seed["site_id"],
         lines=[
             _line(item_a["item_id"], 120, 1),
-            _line(item_a["item_id"], 30, 2),
         ],
     )
 
@@ -632,13 +627,12 @@ async def test_get_for_update_called_once_per_unique_key(client, session_factory
     assert resp.status_code == 409, resp.text
     assert len(calls) == 1, f"expected one lock per unique key, got {calls}"
 
-    # Three lines over two unique keys → exactly two locks.
+    # Two lines over two unique keys → exactly two locks.
     op_id2 = await _create_operation(
         client, seed["root_token"], op_type="EXPENSE", site_id=seed["site_id"],
         lines=[
             _line(item_a["item_id"], 120, 1),
-            _line(item_a["item_id"], 30, 2),
-            _line(item_b["item_id"], 50, 3),
+            _line(item_b["item_id"], 50, 2),
         ],
     )
     calls.clear()
