@@ -422,6 +422,70 @@ class TestAgentCatalogPatch:
         assert item_after.name == "Clean Rename"
         assert item_after.merged_into_id is None
 
+    @pytest.mark.asyncio
+    async def test_agent_patch_deleted_at_ignored_on_item(
+        self,
+        client: AsyncClient,
+        agent_headers: dict[str, str],
+        uow: UnitOfWork,
+    ):
+        """TZ §10.5: deleted_at is not in the PATCH allow-list and not in
+        ItemUpdateRequest — Pydantic strips it silently. The entity must
+        remain undeleted after the PATCH."""
+        unit = await _create_unit(uow)
+        category = await _create_category(uow)
+        item = await _create_item(uow, unit=unit, category=category)
+
+        resp = await client.patch(
+            f"/api/v1/catalog/admin/items/{item.id}",
+            headers=agent_headers,
+            json={"name": "Renamed Item", "deleted_at": "2025-01-01T00:00:00Z"},
+        )
+        assert resp.status_code == 200, resp.text
+        item_after = await uow.catalog.get_item_by_id(item.id)
+        assert item_after.name == "Renamed Item"
+        assert item_after.deleted_at is None
+
+    @pytest.mark.asyncio
+    async def test_agent_patch_deleted_at_ignored_on_category(
+        self,
+        client: AsyncClient,
+        agent_headers: dict[str, str],
+        uow: UnitOfWork,
+    ):
+        """TZ §10.5: deleted_at is not in the PATCH allow-list — silently ignored."""
+        category = await _create_category(uow)
+
+        resp = await client.patch(
+            f"/api/v1/catalog/admin/categories/{category.id}",
+            headers=agent_headers,
+            json={"name": "Renamed Cat", "deleted_at": "2025-01-01T00:00:00Z"},
+        )
+        assert resp.status_code == 200, resp.text
+        cat_after = await uow.catalog.get_category_by_id(category.id)
+        assert cat_after.name == "Renamed Cat"
+        assert cat_after.deleted_at is None
+
+    @pytest.mark.asyncio
+    async def test_agent_patch_deleted_at_ignored_on_unit(
+        self,
+        client: AsyncClient,
+        agent_headers: dict[str, str],
+        uow: UnitOfWork,
+    ):
+        """TZ §10.5: deleted_at is not in the PATCH allow-list — silently ignored."""
+        unit = await _create_unit(uow)
+
+        resp = await client.patch(
+            f"/api/v1/catalog/admin/units/{unit.id}",
+            headers=agent_headers,
+            json={"name": "Renamed Unit", "deleted_at": "2025-01-01T00:00:00Z"},
+        )
+        assert resp.status_code == 200, resp.text
+        unit_after = await uow.catalog.get_unit_by_id(unit.id)
+        assert unit_after.name == "Renamed Unit"
+        assert unit_after.deleted_at is None
+
 
 # ─── Merge (TZ §10.5 / §5.4) ─────────────────────────────────────────
 

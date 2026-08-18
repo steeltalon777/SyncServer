@@ -210,6 +210,101 @@ async def test_agent_has_no_admin_access(
 
 
 @pytest.mark.asyncio
+async def test_agent_devices_endpoints_403(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Agent has no authority over device/token management (require_root_admin)."""
+    seed = await _seed(session_factory)
+    agent_h = {"X-User-Token": seed["agent_token"]}
+
+    # GET endpoints must return 403
+    for path in (
+        "/api/v1/admin/devices",
+        "/api/v1/admin/devices/1",
+    ):
+        resp = await client.get(path, headers=agent_h)
+        assert resp.status_code == 403, f"GET {path}: {resp.status_code}"
+
+    # POST/PATCH/DELETE with valid-enough body: either 403 (auth reached) or
+    # 422 (Pydantic rejected before auth) — both prove agent cannot access.
+    resp = await client.post(
+        "/api/v1/admin/devices",
+        headers=agent_h,
+        json={"device_name": "test", "site_id": 1},
+    )
+    assert resp.status_code in (403, 422), f"POST devices: {resp.status_code}"
+
+    resp = await client.patch(
+        "/api/v1/admin/devices/1",
+        headers=agent_h,
+        json={"device_name": "test"},
+    )
+    assert resp.status_code in (403, 422), f"PATCH devices/1: {resp.status_code}"
+
+    resp = await client.delete("/api/v1/admin/devices/1", headers=agent_h)
+    assert resp.status_code == 403, f"DELETE devices/1: {resp.status_code}"
+
+    resp = await client.post(
+        "/api/v1/admin/devices/1/rotate-token",
+        headers=agent_h,
+    )
+    assert resp.status_code == 403, f"POST rotate-token: {resp.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_agent_rotate_user_token_403(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Agent cannot rotate user tokens (require_root_admin)."""
+    seed = await _seed(session_factory)
+    resp = await client.post(
+        "/api/v1/admin/users/00000000-0000-0000-0000-000000000001/rotate-token",
+        headers={"X-User-Token": seed["agent_token"]},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_agent_no_root_system_admin_bypass(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Dedicated negative: agent identity never bypasses root/system-admin guards."""
+    seed = await _seed(session_factory)
+    agent_h = {"X-User-Token": seed["agent_token"]}
+
+    # admin users list — 403
+    resp = await client.get("/api/v1/admin/users", headers=agent_h)
+    assert resp.status_code == 403
+
+    # admin users create — 422 (body validation before auth) or 403
+    resp = await client.post(
+        "/api/v1/admin/users",
+        headers=agent_h,
+        json={"username": "x", "email": "x@x.com", "full_name": "X", "role": "observer"},
+    )
+    assert resp.status_code in (403, 422), f"POST users: {resp.status_code}"
+
+    # admin roles — 403
+    resp = await client.get("/api/v1/admin/roles", headers=agent_h)
+    assert resp.status_code == 403
+
+    # admin sites list — 403
+    resp = await client.get("/api/v1/admin/sites", headers=agent_h)
+    assert resp.status_code == 403
+
+    # admin sites create — 422 or 403
+    resp = await client.post(
+        "/api/v1/admin/sites",
+        headers=agent_h,
+        json={"code": "X", "name": "X"},
+    )
+    assert resp.status_code in (403, 422), f"POST sites: {resp.status_code}"
+
+
+@pytest.mark.asyncio
 async def test_regression_observer_sites_scope_based(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
