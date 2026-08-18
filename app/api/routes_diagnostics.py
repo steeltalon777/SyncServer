@@ -32,6 +32,10 @@ ALLOWED_EVENT_TYPES = frozenset({
     "response_processing_failed",
     "navigation_away_with_unsaved",
     "unexpected_error",
+    "draft_autosaved",
+    "draft_restored",
+    "draft_lost",
+    "draft_cleared",
 })
 
 ALLOWED_SEVERITIES = frozenset({"debug", "info", "warning", "error", "critical"})
