@@ -151,3 +151,48 @@ def test_bulk_insert_uses_on_conflict_do_nothing(client):
     r2 = client.post("/api/v1/diagnostics/ui-events/batch", json=batch, headers=headers)
     assert r2.status_code == 204
     # If we got here, ON CONFLICT DO NOTHING is in effect (no DB error).
+
+
+DRAFT_EVENT_TYPES = [
+    "draft_autosaved",
+    "draft_restored",
+    "draft_lost",
+    "draft_cleared",
+]
+
+ANGULAR_EVENT_TYPES = {
+    "form_opened",
+    "form_closed",
+    "submit_clicked",
+    "validation_failed",
+    "request_started",
+    "request_succeeded",
+    "request_failed",
+    "outcome_unknown",
+    "response_processing_failed",
+    "navigation_away_with_unsaved",
+    "unexpected_error",
+    "draft_autosaved",
+    "draft_restored",
+    "draft_lost",
+    "draft_cleared",
+}
+
+
+def test_angular_contract_full_parity():
+    """All Angular DiagnosticEventType values must be accepted by SyncServer."""
+    from app.api.routes_diagnostics import ALLOWED_EVENT_TYPES
+
+    missing = ANGULAR_EVENT_TYPES - ALLOWED_EVENT_TYPES
+    assert not missing, f"missing event types in SyncServer: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("event_type", DRAFT_EVENT_TYPES)
+def test_post_draft_event_types_accepted(client, event_type):
+    batch = _make_batch([_make_event_payload(event_type=event_type)])
+    resp = client.post(
+        "/api/v1/diagnostics/ui-events/batch",
+        json=batch,
+        headers=_auth_headers(client),
+    )
+    assert resp.status_code in (204, 401, 403), f"unexpected {resp.status_code}: {resp.text}"
