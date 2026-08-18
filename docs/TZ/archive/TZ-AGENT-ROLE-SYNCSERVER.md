@@ -4,6 +4,10 @@
 > Проверено по `steeltalon777/SyncServer`, ветка `dev`, commit `88458d667da3ddb97c2d2e1a59122cdefa0b9a58` (`3.3 pre ready`), 2026-08-07.
 > Источник продуктового требования: `steeltalon777/warehouse_solution-#18`.
 > Архитектурное решение: `docs/adr/0030-agent-domain-role.md`.
+>
+> **Статус: АРХИВ (2026-08-18).** Execution checklist 12/12 закрыт, реализация и тесты верифицированы.
+> Связанные задачи: `steeltalon777/warehouse_solution-#18` (реализация роли `agent`),
+> `steeltalon777/warehouse_solution-#21` (добивка тестового покрытия, commit `138bb3b`).
 
 ## 0. Executive summary
 
