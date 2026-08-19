@@ -22,6 +22,7 @@ replaced by their observable behaviour:
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -39,11 +40,14 @@ from app.models.inventory_subject import InventorySubject
 from app.models.issue_object import IssueObject
 from app.models.issue_object_category import IssueObjectCategory
 from app.models.item import Item
-from app.models.operation import Operation
+from app.models.operation import Operation, OperationLine
 from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user import User
 from app.models.user_access_scope import UserAccessScope
+from app.services.operation_submit_errors import InsufficientStockError
+from app.services.operations_service import OperationsService
+from app.services.uow import UnitOfWork
 from main import create_app
 
 app = create_app(enable_startup_migrations=False)
@@ -149,6 +153,7 @@ async def _seed(
             "site_id": site.id,
             "site_name": site.name,
             "root_token": str(root.user_token),
+            "root_id": root.id,
             "items": items,
             "item_id": items[0]["item_id"],
             "item_name": items[0]["item_name"],
@@ -829,6 +834,60 @@ async def test_cancel_aggregate_deficits_multiple_lines(
     data = resp.json()
     _assert_cancel_rejected(data)
     assert len(data["errors"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_cancel_aggregate_deficits_same_subject(session_factory):
+    """Cancel aggregation still sums multiple lines of one subject.
+
+    Create/submit now reject canonical duplicates, so two lines sharing a
+    subject can only reach the cancel balance check from legacy data. The
+    aggregation itself must stay correct: required_qty = sum of the group and
+    operation_line_ids carries every line (original TZ §10.4 scenario).
+    """
+    seed = await _seed(session_factory, item_qty="10.000", second_site=True)
+    src, dst = seed["site_id"], seed["dest_site_id"]
+    subject_id = seed["subject_id"]
+    item_id = seed["item_id"]
+
+    # A destination balance of 0 for the subject, so MOVE rollback is blocked.
+    async with session_factory() as session:
+        session.add(Balance(
+            site_id=dst,
+            inventory_subject_id=subject_id,
+            item_id=item_id,
+            qty=Decimal("0.000"),
+        ))
+        await session.commit()
+
+    async with session_factory() as session:
+        operation = Operation(
+            site_id=src,
+            source_site_id=src,
+            destination_site_id=dst,
+            operation_type="MOVE",
+            status="submitted",
+            acceptance_required=False,
+            created_by_user_id=seed["root_id"],
+            effective_at=datetime.now(UTC),
+        )
+        operation.lines = [
+            OperationLine(line_number=1, item_id=item_id, inventory_subject_id=subject_id, qty=Decimal("2")),
+            OperationLine(line_number=2, item_id=item_id, inventory_subject_id=subject_id, qty=Decimal("3")),
+        ]
+        session.add(operation)
+        await session.flush()
+        line_ids = [line.id for line in operation.lines]
+        await session.commit()
+
+        uow = UnitOfWork(session)
+        loaded = await uow.operations.get_operation_by_id(operation.id)
+        with pytest.raises(InsufficientStockError) as exc_info:
+            await OperationsService._check_cancel_balance_sufficiency(uow, operation=loaded)
+        deficit = exc_info.value.deficits[0]
+        assert deficit.required_qty == Decimal("5.000")
+        assert deficit.available_qty == Decimal("0.000")
+        assert sorted(deficit.operation_line_ids) == sorted(line_ids)
 
 
 @pytest.mark.asyncio

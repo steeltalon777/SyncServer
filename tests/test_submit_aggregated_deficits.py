@@ -10,6 +10,7 @@ Covers the two-phase aggregation algorithm (ADR-0025 §5, TZ §5):
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -25,10 +26,14 @@ from app.models.inventory_subject import InventorySubject
 from app.models.issue_object import IssueObject
 from app.models.issue_object_category import IssueObjectCategory
 from app.models.item import Item
+from app.models.operation import Operation, OperationLine
 from app.models.site import Site
 from app.models.unit import Unit
 from app.models.user import User
 from app.repos.balances_repo import BalancesRepo
+from app.services.operation_submit_errors import InsufficientStockError
+from app.services.operations_service import OperationsService
+from app.services.uow import UnitOfWork
 from main import create_app
 
 app = create_app(enable_startup_migrations=False)
@@ -169,6 +174,7 @@ async def _seed(
         result = {
             "site_id": site.id,
             "root_token": str(root.user_token),
+            "root_id": root.id,
             "observer_token": str(observer.user_token),
             "items": items,
             "issue_object_id": issue_object_id,
@@ -276,8 +282,8 @@ async def test_multiple_items_insufficient_returns_multiple_groups(client, sessi
 
 
 @pytest.mark.asyncio
-async def test_two_lines_same_item_aggregate(client, session_factory):
-    """Duplicate canonical item in two lines is rejected at create time (§2.3)."""
+async def test_two_lines_same_item_duplicate_rejected_at_create(client, session_factory):
+    """§2.3 duplicate invariant: two lines of one canonical item are rejected at create."""
     seed = await _seed(
         session_factory,
         item_balances=[("Кабель ВВГ", "80.000")],
@@ -305,31 +311,48 @@ async def test_two_lines_same_item_aggregate(client, session_factory):
 
 
 @pytest.mark.asyncio
-async def test_two_lines_same_item_one_alone_sufficient_aggregate(client, session_factory):
-    """Duplicate canonical item in two lines is rejected at create time (§2.3)."""
+async def test_aggregated_deficit_sums_two_lines_same_subject(session_factory):
+    """The submit aggregation algorithm still sums multiple lines of one subject.
+
+    Create/update/submit now reject canonical duplicates, so two lines sharing a
+    subject can only reach the balance check from legacy/correction data. The
+    aggregation itself must stay correct: required_qty = sum of the group, and
+    operation_line_ids carries every line of the group (original TZ §5.2 scenario:
+    60 + 60 against an 80 balance → required 120, available 80, both lines reported).
+    """
     seed = await _seed(
         session_factory,
         item_balances=[("Кабель ВВГ", "80.000")],
-        second_site=True,
     )
     item = seed["items"][0]
-    resp = await client.post(
-        "/api/v1/operations",
-        json={
-            "operation_type": "MOVE",
-            "site_id": seed["site_id"],
-            "source_site_id": seed["site_id"],
-            "destination_site_id": seed["second_site_id"],
-            "lines": [
-                _line(item["item_id"], 90, 1),
-                _line(item["item_id"], 20, 2),
-            ],
-        },
-        headers={"X-User-Token": seed["root_token"]},
-    )
-    assert resp.status_code == 409, resp.text
-    body = resp.json()
-    assert body["code"] == "operation_lines_invalid"
+
+    async with session_factory() as session:
+        site = await session.get(Site, seed["site_id"])
+        subject = await session.get(InventorySubject, item["subject_id"])
+        operation = Operation(
+            site_id=site.id,
+            operation_type="EXPENSE",
+            status="draft",
+            created_by_user_id=seed["root_id"],
+            effective_at=datetime.now(UTC),
+        )
+        operation.lines = [
+            OperationLine(line_number=1, item_id=item["item_id"], inventory_subject_id=subject.id, qty=Decimal("60")),
+            OperationLine(line_number=2, item_id=item["item_id"], inventory_subject_id=subject.id, qty=Decimal("60")),
+        ]
+        session.add(operation)
+        await session.flush()
+        line_ids = [line.id for line in operation.lines]
+        await session.commit()
+
+        uow = UnitOfWork(session)
+        loaded = await uow.operations.get_operation_by_id(operation.id)
+        with pytest.raises(InsufficientStockError) as exc_info:
+            await OperationsService._check_submit_balance_sufficiency(uow, loaded)
+        deficit = exc_info.value.deficits[0]
+        assert deficit.required_qty == Decimal("120.000")
+        assert deficit.available_qty == Decimal("80.000")
+        assert sorted(deficit.operation_line_ids) == sorted(line_ids)
 
 
 @pytest.mark.asyncio
