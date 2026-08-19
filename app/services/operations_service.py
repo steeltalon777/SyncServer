@@ -110,16 +110,26 @@ class OperationsService:
 
         requested_ids = list(line_map.keys())
 
-        # Batch resolve via CatalogReadService
-        resolve_result = await CatalogReadService.resolve_items(
-            uow, ItemsResolveRequest(item_ids=requested_ids)
-        )
+        # B4 fix: SyncServer ItemsResolveRequest caps item_ids at 100. Chunk the
+        # batch into <=100 and merge the results so a >100-line operation does
+        # not raise a Pydantic ValidationError (→ HTTP 500). Duplicate detection
+        # and requested_id → canonical correlation below are computed over the
+        # combined set, so canonical collisions across chunk boundaries are still
+        # caught.
+        RESOLVE_CHUNK_SIZE = 100
+        resolved_items: list = []
+        for chunk_start in range(0, len(requested_ids), RESOLVE_CHUNK_SIZE):
+            chunk = requested_ids[chunk_start:chunk_start + RESOLVE_CHUNK_SIZE]
+            chunk_result = await CatalogReadService.resolve_items(
+                uow, ItemsResolveRequest(item_ids=chunk)
+            )
+            resolved_items.extend(chunk_result.items)
 
         errors: list[OperationLineError] = []
         canonical_map: dict[int, int] = {}  # requested_id -> canonical_id
         canonical_to_lines: dict[int, list[int]] = {}  # canonical_id -> [line_numbers]
 
-        for resolved in resolve_result.items:
+        for resolved in resolved_items:
             line_numbers = line_map.get(resolved.requested_id, [])
             first_line = line_numbers[0] if line_numbers else 0
 
