@@ -22,10 +22,13 @@ from app.schemas.catalog import (
     CatalogUnitsResponse,
     CategoryParentChainResponse,
     CategoryTreeNode,
+    IdentityCandidateDto,
+    ItemIdentityCandidatesResponse,
     ItemsResolveRequest,
     ItemsResolveResponse,
 )
 from app.services.catalog_read_service import CatalogReadService
+from app.services.item_identity_service import ItemIdentityService
 from app.services.uow import UnitOfWork
 
 router = APIRouter(prefix="/catalog")
@@ -97,6 +100,34 @@ async def list_items(
     next_updated_after = max((item.updated_at for item in items), default=None)
     logger.info("catalog_items", request_id=get_request_id(request), returned=len(items))
     return CatalogItemsResponse(items=items, server_time=datetime.now(UTC), next_updated_after=next_updated_after)
+
+
+@router.get("/items/identity-candidates", response_model=ItemIdentityCandidatesResponse)
+async def get_item_identity_candidates(
+    request: Request,
+    name: str = Query(...),
+    unit_id: int | None = Query(default=None),
+    category_id: int | None = Query(default=None),
+    identity: Identity = Depends(require_user_identity),
+    uow: UnitOfWork = Depends(get_uow),
+) -> ItemIdentityCandidatesResponse:
+    """ADR-0033 §5.5: live-кандидаты по identity-ключу (ранняя обратная связь)."""
+    async with uow:
+        _require_catalog_read_access(identity)
+        result = await ItemIdentityService(uow).find_candidates(
+            name,
+            unit_id=unit_id,
+            category_id=category_id,
+        )
+
+    logger.info(
+        "catalog_item_identity_candidates",
+        request_id=get_request_id(request),
+        returned=len(result.candidates),
+    )
+    return ItemIdentityCandidatesResponse(
+        candidates=[IdentityCandidateDto(**candidate.to_dict()) for candidate in result.candidates]
+    )
 
 
 @router.get("/categories", response_model=CatalogCategoriesResponse)

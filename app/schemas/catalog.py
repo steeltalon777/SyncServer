@@ -543,4 +543,33 @@ class ItemsResolveResponse(ORMBaseModel):
     items: list[ResolvedItemDto]
 
 
+# --- ADR-0033: Item Identity Guard read-contract ---
+
+
+class IdentityCandidateUnitDto(BaseModel):
+    id: int
+    name: str
+    symbol: str
+
+
+class IdentityCandidateCategoryDto(BaseModel):
+    id: int
+    name: str
+
+
+class IdentityCandidateDto(BaseModel):
+    id: int
+    name: str
+    sku: str | None = None
+    unit: IdentityCandidateUnitDto | None = None
+    category: IdentityCandidateCategoryDto | None = None
+    is_active: bool
+    requires_review: bool
+    match: Literal["exact", "partial"]
+
+
+class ItemIdentityCandidatesResponse(BaseModel):
+    candidates: list[IdentityCandidateDto] = Field(default_factory=list)
+
+
 CategoryTreeNode.model_rebuild()

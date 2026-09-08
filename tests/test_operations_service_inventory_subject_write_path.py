@@ -245,6 +245,8 @@ async def test_submit_receive_materializes_temporary_line_before_balance_update(
     catalog = SimpleNamespace(
         create_item=AsyncMock(return_value=SimpleNamespace(id=7001)),
         get_item_by_id=AsyncMock(return_value=SimpleNamespace(id=7001, is_active=True)),
+        # ADR-0033: materialize pre-check queries identity candidates; mock has none.
+        find_identity_candidates=AsyncMock(return_value=[]),
     )
     uow = _build_uow(
         operation,

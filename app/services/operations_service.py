@@ -1971,8 +1971,22 @@ class OperationsService:
         directly (as per TZ: permanent ТМЦ requiring review).
 
         All changes happen within the current UoW transaction.
+
+        ADR-0033 Item Identity Guard v1: pre-check всех client_key-групп
+        выполняется ДО создания любых Item — при блокировке (>=1 EXACT или
+        intra-batch конфликт) не создаётся ни Item, ни InventorySubject,
+        temporary_draft_payload остаётся неочищенным, транзакция откатывается.
+        Только PARTIAL-кандидаты — CREATE + FLAG (structured log).
         """
         from app.models.item import Item
+        from app.services.item_identity_service import (
+            ItemIdentityConflictError,
+            ItemIdentityService,
+        )
+        from app.services.operation_submit_errors import (
+            IdentityConflict,
+            ItemIdentityDuplicateError,
+        )
 
         deferred_lines = [line for line in operation.lines if line.temporary_draft_payload is not None]
         if not deferred_lines:
@@ -1987,6 +2001,75 @@ class OperationsService:
             if ck not in grouped:
                 grouped[ck] = []
             grouped[ck].append(line)
+
+        # ── ADR-0033 pre-check (до создания каких-либо Item) ────────────
+        identity_service = ItemIdentityService(uow)
+        conflicts: list[IdentityConflict] = []
+        partial_flags: dict[str, list[int]] = {}
+
+        normalized_by_key: dict[str, str | None] = {
+            client_key: normalize_for_storage(
+                str(lines[0].temporary_draft_payload["name"])
+            )
+            for client_key, lines in grouped.items()
+        }
+        norm_to_keys: OrderedDict[str, list[str]] = OrderedDict()
+        for client_key, normalized in normalized_by_key.items():
+            if normalized is not None:
+                norm_to_keys.setdefault(normalized, []).append(client_key)
+
+        intra_batch_norms = {
+            normalized
+            for normalized, client_keys in norm_to_keys.items()
+            if len(client_keys) > 1
+        }
+
+        for client_key, lines in grouped.items():
+            payload = lines[0].temporary_draft_payload
+            name = str(payload["name"])
+            if normalized_by_key[client_key] in intra_batch_norms:
+                continue  # intra-batch конфликт оформляется отдельной записью ниже
+            try:
+                identity_result = await identity_service.assert_can_create(
+                    name,
+                    unit_id=payload["unit_id"],
+                    category_id=payload["category_id"],
+                    entry_point="operation_materialize",
+                )
+            except ItemIdentityConflictError as exc:
+                conflicts.append(
+                    IdentityConflict(
+                        requested_name=name.strip(),
+                        operation_line_ids=[int(line.id) for line in lines],
+                        candidates=[candidate.to_dict() for candidate in exc.candidates],
+                    )
+                )
+                continue
+            if identity_result.has_candidates:
+                partial_flags[client_key] = identity_result.candidate_ids()
+
+        if intra_batch_norms:
+            for normalized in norm_to_keys:
+                if normalized not in intra_batch_norms:
+                    continue
+                conflict_keys = norm_to_keys[normalized]
+                conflicts.append(
+                    IdentityConflict(
+                        requested_name=str(
+                            grouped[conflict_keys[0]][0].temporary_draft_payload["name"]
+                        ).strip(),
+                        operation_line_ids=[
+                            int(line.id)
+                            for ck in conflict_keys
+                            for line in grouped[ck]
+                        ],
+                        candidates=[],
+                        intra_batch=True,
+                    )
+                )
+
+        if conflicts:
+            raise ItemIdentityDuplicateError(conflicts)
 
         materialized_by_key: dict[str, dict[str, object]] = {}
 
@@ -2027,6 +2110,18 @@ class OperationsService:
             review_subject = await uow.inventory_subjects.get_or_create_for_item(
                 item_id=review_item.id,
             )
+
+            if client_key in partial_flags:
+                # ADR-0033 FLAG-ветка: только PARTIAL — создаём и фиксируем
+                # кандидатов structured логом (без блокировки, без audit).
+                logger.info(
+                    "item_identity.flag",
+                    entry_point="operation_materialize",
+                    created_item_id=int(review_item.id),
+                    requested_name=str(payload["name"]).strip(),
+                    candidate_ids=partial_flags[client_key],
+                    operation_id=str(operation.id),
+                )
 
             materialized_by_key[client_key] = {
                 "item_id": review_item.id,

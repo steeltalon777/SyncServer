@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from app.schemas.operation_submit_error import (
+    IdentityCandidateRef,
     InsufficientIssuedBalanceError as InsufficientIssuedBalanceErrorSchema,
     InsufficientStockError as InsufficientStockErrorSchema,
     IssueObjectRef,
+    ItemIdentityDuplicateError as ItemIdentityDuplicateErrorSchema,
     ItemRef,
     OperationInWrongStateError as OperationInWrongStateErrorSchema,
     OperationNotFoundError as OperationNotFoundErrorSchema,
@@ -46,6 +49,18 @@ class IssuedStockDeficit:
     required_qty: Decimal
     available_qty: Decimal
     operation_line_ids: list[int]
+
+
+@dataclass
+class IdentityConflict:
+    """One blocked line_group (ADR-0033). Candidates are IdentityCandidateRef-
+    shaped dicts; an empty list with intra_batch=True means the duplicate was
+    produced between lines of the same operation (different client_key)."""
+
+    requested_name: str
+    operation_line_ids: list[int]
+    candidates: list[dict[str, Any]] = field(default_factory=list)
+    intra_batch: bool = False
 
 
 class OperationSubmitError(Exception):
@@ -154,6 +169,43 @@ class InsufficientIssuedBalanceError(OperationSubmitError):
     def _detail(self) -> str:
         first = self.deficits[0]
         return f"Недостаточно выданного остатка по {first.item_name}."
+
+
+class ItemIdentityDuplicateError(OperationSubmitError):
+    """ADR-0033: детерминированный дубль inline-ТМЦ при submit (BLOCK)."""
+
+    def __init__(self, conflicts: list[IdentityConflict]) -> None:
+        super().__init__()
+        self.conflicts = conflicts
+
+    def _errors(self) -> list[ProblemError]:
+        return [
+            ItemIdentityDuplicateErrorSchema(
+                code="item_identity_duplicate",
+                scope="line_group",
+                operation_line_ids=list(conflict.operation_line_ids),
+                requested_name=conflict.requested_name,
+                candidates=[IdentityCandidateRef(**candidate) for candidate in conflict.candidates],
+            )
+            for conflict in self.conflicts
+        ]
+
+    def _detail(self) -> str:
+        first = self.conflicts[0]
+        if first.intra_batch:
+            return (
+                f"Товар «{first.requested_name}» задан в строках операции под разными client_key. "
+                "Используйте один client_key для одинаковых строк или различите наименования."
+            )
+        candidate_ref = ""
+        if first.candidates:
+            candidate_id = first.candidates[0].get("id")
+            if candidate_id is not None:
+                candidate_ref = f" (id={candidate_id})"
+        return (
+            f"Товар «{first.requested_name}» уже существует в каталоге{candidate_ref}. "
+            "Используйте существующий товар или измените наименование."
+        )
 
 
 class StaleVersionError(OperationSubmitError):

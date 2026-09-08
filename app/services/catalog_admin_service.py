@@ -266,6 +266,32 @@ class CatalogAdminService:
         await self._validate_unit_exists(uow, payload.unit_id)
         await self._ensure_item_sku_unique(uow, payload.sku)
 
+        # ADR-0033 Item Identity Guard: BLOCK при EXACT-дубле, FLAG при PARTIAL.
+        from app.services.item_identity_service import (
+            ItemIdentityConflictError,
+            ItemIdentityService,
+            identity_conflict_detail,
+        )
+
+        try:
+            identity_result = await ItemIdentityService(uow).assert_can_create(
+                payload.name,
+                unit_id=payload.unit_id,
+                category_id=category.id,
+                entry_point="catalog_admin_create",
+            )
+        except ItemIdentityConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=identity_conflict_detail(
+                    exc,
+                    message=(
+                        "Товар с таким наименованием, единицей измерения и категорией "
+                        "уже существует. Используйте существующий товар или измените наименование."
+                    ),
+                ),
+            )
+
         logger.info(
             "catalog_admin_create_item",
             repo_method=getattr(uow.catalog.create_item, "__qualname__", repr(uow.catalog.create_item)),
@@ -293,6 +319,19 @@ class CatalogAdminService:
             created_by_user_id=created_by_user_id,
         )
         created = await uow.catalog.create_item(item)
+        create_changes: dict[str, object] = {}
+        if identity_result.has_candidates:
+            # ADR-0033 FLAG: кандидаты в changes существующего события item.create.
+            logger.info(
+                "item_identity.flag",
+                entry_point="catalog_admin_create",
+                created_item_id=int(created.id),
+                requested_name=identity_result.requested_name,
+                candidate_ids=identity_result.candidate_ids(),
+            )
+            create_changes["identity_candidates"] = [
+                candidate.to_dict() for candidate in identity_result.candidates
+            ]
         await record_audit_event(
             uow,
             event_type="item.create",
@@ -300,6 +339,7 @@ class CatalogAdminService:
             entity_type="item",
             entity_id=str(created.id),
             summary=f"Создан ТМЦ «{created.name}» (категория: {category.name})",
+            changes=create_changes or None,
         )
         return created
 
@@ -334,6 +374,27 @@ class CatalogAdminService:
             item.sku = payload.sku
 
         if payload.name is not None:
+            # ADR-0033: rename в EXACT-совпадение с другим alive-товаром запрещён
+            # (self исключён; SKU-конфликт выше работает как раньше).
+            from app.services.item_identity_service import (
+                ItemIdentityConflictError,
+                ItemIdentityService,
+                identity_conflict_detail,
+            )
+
+            try:
+                await ItemIdentityService(uow).assert_can_create(
+                    payload.name,
+                    unit_id=unit_id,
+                    category_id=category_id,
+                    exclude_item_id=item.id,
+                    entry_point="catalog_admin_rename",
+                )
+            except ItemIdentityConflictError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=identity_conflict_detail(exc),
+                )
             changes["name"] = {"old": item.name, "new": payload.name}
             item.name = payload.name
             item.normalized_name = normalize_for_storage(payload.name)

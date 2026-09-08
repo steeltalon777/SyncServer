@@ -196,6 +196,34 @@ class TemporaryItemsResolutionService:
         )
         new_item = await uow.catalog.create_item(new_item)
 
+        # ADR-0033 §5.4: legacy-поток — flag-only (find_candidates + structured
+        # log), без блокировки: поток отмирает (ADR-0012), логи дают материал
+        # для решения о hard guard в 4.1.
+        from app.services.item_identity_service import IdentityCheckResult, ItemIdentityService
+
+        identity_result = await ItemIdentityService(uow).find_candidates(
+            temp_item.name,
+            unit_id=temp_item.unit_id,
+            category_id=temp_item.category_id,
+            exclude_item_id=new_item.id,
+        )
+        self_ids = {new_item.id, temp_item.item_id} - {None}
+        identity_result = IdentityCheckResult(
+            requested_name=identity_result.requested_name,
+            normalized_name=identity_result.normalized_name,
+            exact=[c for c in identity_result.exact if c.item_id not in self_ids],
+            partial=[c for c in identity_result.partial if c.item_id not in self_ids],
+        )
+        if identity_result.has_candidates:
+            logger.info(
+                "item_identity.flag",
+                entry_point="legacy_approve_as_item",
+                created_item_id=int(new_item.id),
+                requested_name=identity_result.requested_name,
+                candidate_ids=identity_result.candidate_ids(),
+                temporary_item_id=temporary_item_id,
+            )
+
         # Create a new inventory subject for the new permanent item
         new_subject = await uow.inventory_subjects.create_for_item(item_id=new_item.id)
 

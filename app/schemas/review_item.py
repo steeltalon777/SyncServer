@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.catalog import IdentityCandidateDto
 from app.schemas.common import ORMBaseModel
 
 
@@ -63,6 +64,8 @@ class ReviewItemDetailResponse(ORMBaseModel):
     updated_at: datetime
     balances_per_site: list[ReviewItemBalanceDto] = Field(default_factory=list)
     operations_count: int = 0
+    # ADR-0033 §5.5: аддитивное поле — live-кандидаты (self-excluded).
+    identity_candidates: list[IdentityCandidateDto] = Field(default_factory=list)
 
 
 class ReviewItemBalanceDto(ORMBaseModel):

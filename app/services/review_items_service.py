@@ -39,6 +39,13 @@ class ReviewItemsService:
         3. Validate that required catalog fields are filled (name, category_id, unit_id).
         4. Clear requires_review, set review_status='confirmed', audit metadata.
         """
+        from app.core.search_utils import normalize_for_storage
+        from app.services.item_identity_service import (
+            ItemIdentityConflictError,
+            ItemIdentityService,
+            identity_conflict_detail,
+        )
+
         item = await uow.catalog.get_item_by_id(item_id)
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
@@ -61,6 +68,7 @@ class ReviewItemsService:
         # Apply field corrections from payload
         if payload.name is not None:
             item.name = payload.name
+            item.normalized_name = normalize_for_storage(payload.name)
         if payload.sku is not None:
             item.sku = payload.sku
         if payload.category_id is not None:
@@ -85,6 +93,28 @@ class ReviewItemsService:
                 detail="item name is required for confirmation",
             )
 
+        # ADR-0033 Item Identity Guard: проверка по финальным значениям
+        # name/unit/category после применения коррекций, self исключён.
+        try:
+            identity_result = await ItemIdentityService(uow).assert_can_create(
+                item.name,
+                unit_id=item.unit_id,
+                category_id=item.category_id,
+                exclude_item_id=item_id,
+                entry_point="review_confirm",
+            )
+        except ItemIdentityConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=identity_conflict_detail(
+                    exc,
+                    message=(
+                        "Товар с таким наименованием, единицей измерения и категорией "
+                        "уже существует. Подтверждение отклонено — используйте слияние (merge)."
+                    ),
+                ),
+            )
+
         # Clear review state
         item.requires_review = False
         item.review_status = "confirmed"
@@ -92,6 +122,29 @@ class ReviewItemsService:
         item.review_resolved_at = datetime.now(UTC)
 
         await uow.session.flush()
+
+        confirm_changes: dict[str, object] = {
+            "item_id": item_id,
+            "resolution_type": "confirmed",
+            "corrections": {
+                "name": payload.name is not None,
+                "sku": payload.sku is not None,
+                "category_id": payload.category_id is not None,
+                "unit_id": payload.unit_id is not None,
+            },
+        }
+        if identity_result.has_candidates:
+            # ADR-0033 FLAG: кандидаты в changes существующего события.
+            logger.info(
+                "item_identity.flag",
+                entry_point="review_confirm",
+                created_item_id=item_id,
+                requested_name=identity_result.requested_name,
+                candidate_ids=identity_result.candidate_ids(),
+            )
+            confirm_changes["identity_candidates"] = [
+                candidate.to_dict() for candidate in identity_result.candidates
+            ]
 
         # TZ-AUDIT_BACKEND_FOUNDATION §8.3 — record a review_item.confirm
         # audit event so the chronicle distinguishes review confirmations
@@ -104,16 +157,7 @@ class ReviewItemsService:
             entity_type="item",
             entity_id=str(item_id),
             summary=f"ТМЦ #{item_id} подтверждён после проверки",
-            changes={
-                "item_id": item_id,
-                "resolution_type": "confirmed",
-                "corrections": {
-                    "name": payload.name is not None,
-                    "sku": payload.sku is not None,
-                    "category_id": payload.category_id is not None,
-                    "unit_id": payload.unit_id is not None,
-                },
-            },
+            changes=confirm_changes,
             outcome="success",
         )
 

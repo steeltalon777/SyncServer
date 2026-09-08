@@ -409,6 +409,32 @@ class CatalogRepo:
         result = await self.session.execute(select(Item).where(Item.sku == sku))
         return result.scalar_one_or_none()
 
+    async def find_identity_candidates(
+        self,
+        normalized_name: str,
+        *,
+        exclude_item_id: int | None = None,
+    ) -> list[Item]:
+        """ADR-0033: alive-кандидаты по точному совпадению normalized_name.
+
+        Alive = deleted_at IS NULL AND merged_into_id IS NULL.
+        Использует индекс ix_items_normalized_name; fuzzy-логика отсутствует.
+        """
+        stmt = (
+            select(Item)
+            .where(
+                Item.normalized_name == normalized_name,
+                Item.deleted_at.is_(None),
+                Item.merged_into_id.is_(None),
+            )
+            .options(selectinload(Item.category), selectinload(Item.unit))
+            .order_by(Item.id)
+        )
+        if exclude_item_id is not None:
+            stmt = stmt.where(Item.id != exclude_item_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def update_item(self, item: Item) -> Item:
         await self.session.flush()
         await self.session.refresh(item)

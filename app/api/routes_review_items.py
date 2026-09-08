@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.api.deps import get_uow, require_user_identity
 from app.core.identity import Identity
 from app.models.site import Site
+from app.schemas.catalog import IdentityCandidateDto
 from app.schemas.operation import OperationListResponse
 from app.schemas.review_item import (
     ReviewItemConfirmRequest,
@@ -17,6 +18,7 @@ from app.schemas.review_item import (
     ReviewItemResponse,
     ReviewItemBalanceDto,
 )
+from app.services.item_identity_service import ItemIdentityService
 from app.services.operations_policy import OperationsPolicy
 from app.services.review_items_service import ReviewItemsService
 from app.services.uow import UnitOfWork
@@ -128,11 +130,24 @@ async def get_review_item(
         category = await uow.catalog.get_category_by_id(item.category_id)
         unit = await uow.catalog.get_unit_by_id(item.unit_id)
 
+        # ADR-0033 §5.5: аддитивное live-поле identity_candidates (self-excluded).
+        identity_result = await ItemIdentityService(uow).find_candidates(
+            item.name,
+            unit_id=item.unit_id,
+            category_id=item.category_id,
+            exclude_item_id=item_id,
+        )
+        identity_candidates = [
+            IdentityCandidateDto(**candidate.to_dict())
+            for candidate in identity_result.candidates
+        ]
+
     resp = _build_review_item_response(item, category=category, unit=unit)
     return ReviewItemDetailResponse(
         **resp.model_dump(),
         balances_per_site=balances_per_site,
         operations_count=operations_count,
+        identity_candidates=identity_candidates,
     )
 
 

@@ -55,6 +55,31 @@ class InsufficientIssuedBalanceError(ProblemErrorScope):
     unit: UnitRef | None = None
 
 
+# --- line_group codes (ADR-0033) ---
+
+
+class CategoryRef(BaseModel):
+    id: int
+    name: str
+
+
+class IdentityCandidateRef(BaseModel):
+    id: int
+    name: str
+    sku: str | None = None
+    unit: UnitRef | None = None
+    category: CategoryRef | None = None
+    match: Literal["exact", "partial"]
+
+
+class ItemIdentityDuplicateError(ProblemErrorScope):
+    code: Literal["item_identity_duplicate"]
+    scope: Literal["line_group"]
+    operation_line_ids: list[int]
+    requested_name: str
+    candidates: list[IdentityCandidateRef] = Field(default_factory=list)
+
+
 # --- operation codes (обязательные поля) ---
 
 
@@ -87,6 +112,7 @@ class OperationNotFoundError(ProblemErrorScope):
 ProblemError = Annotated[
     InsufficientStockError
     | InsufficientIssuedBalanceError
+    | ItemIdentityDuplicateError
     | StaleVersionError
     | OperationInWrongStateError
     | RoleNotPermittedError
