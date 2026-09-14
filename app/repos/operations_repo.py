@@ -602,7 +602,16 @@ class OperationsRepo:
         stmt = (
             select(Operation)
             .where(Operation.id.in_(select(op_ids_subq)))
-            .options(selectinload(Operation.lines))
+            .options(
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.item)
+                .selectinload(Item.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+                selectinload(Operation.lines)
+                .selectinload(OperationLine.inventory_subject)
+                .selectinload(InventorySubject.temporary_item)
+                .selectinload(TemporaryItem.resolved_item),
+            )
             .order_by(desc(Operation.created_at))
             .offset((page - 1) * page_size)
             .limit(page_size)
