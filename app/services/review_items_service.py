@@ -220,6 +220,20 @@ class ReviewItemsService:
                 detail="review item has no active inventory subject",
             )
 
+        # D3 merge integrity guard: block destructive merge while the source
+        # subject still has active pending/lost/issued registers. Parity with
+        # the legacy TemporaryItemsResolutionService policy and with
+        # delete_review_item. Must run before ANY mutation of the merge flow
+        # (target subject creation, audit events, balance transfers, archiving).
+        if await uow.asset_registers.has_active_registers(int(source_subject.id)):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"review item {item_id} has active pending/lost/issued registers; "
+                    "resolve them before merge"
+                ),
+            )
+
         target_subject = await uow.inventory_subjects.get_or_create_for_item(
             item_id=target_item_id,
         )
