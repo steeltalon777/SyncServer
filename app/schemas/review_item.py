@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -31,6 +32,13 @@ class ReviewItemResponse(ORMBaseModel):
     review_note: str | None = None
     created_at: datetime
     updated_at: datetime
+    # D2 list action-state contract: server-computed balance/register state.
+    # total_balance — authoritative sum over inventory subject balances;
+    # has_pending_acceptance — pending acceptance only (qty > 0);
+    # has_active_registers — backend enforcement predicate pending|lost|issued.
+    total_balance: Decimal = Decimal("0")
+    has_pending_acceptance: bool = False
+    has_active_registers: bool = False
 
 
 class ReviewItemListResponse(ORMBaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -27,7 +28,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 router = APIRouter(prefix="/review-items", tags=["review-items"])
 
 
-def _build_review_item_response(item, category=None, unit=None) -> ReviewItemResponse:
+def _build_review_item_response(
+    item,
+    category=None,
+    unit=None,
+    *,
+    total_balance: Decimal = Decimal("0"),
+    has_pending_acceptance: bool = False,
+    has_active_registers: bool = False,
+) -> ReviewItemResponse:
     """Build a ReviewItemResponse from an Item ORM entity."""
     cat = category or getattr(item, "category", None)
     u = unit or getattr(item, "unit", None)
@@ -51,6 +60,9 @@ def _build_review_item_response(item, category=None, unit=None) -> ReviewItemRes
         review_note=item.review_note,
         created_at=item.created_at,
         updated_at=item.updated_at,
+        total_balance=total_balance,
+        has_pending_acceptance=has_pending_acceptance,
+        has_active_registers=has_active_registers,
     )
 
 
@@ -76,8 +88,28 @@ async def list_review_items(
             page=page,
             page_size=page_size,
         )
+        # D2: batched balance/register aggregates for the whole page (no N+1):
+        # subjects map + balance sums + active register flags = constant queries.
+        subjects_by_item = await uow.inventory_subjects.list_ids_by_item_ids(
+            [item.id for item in items]
+        )
+        subject_ids = list(subjects_by_item.values())
+        balance_by_subject = await uow.balances.sum_by_inventory_subject_ids(subject_ids)
+        register_flags_by_subject = await uow.asset_registers.get_active_register_flags(subject_ids)
+
         # Build response inside UOW context to avoid lazy-load outside session
-        resp_items = [_build_review_item_response(item) for item in items]
+        resp_items: list[ReviewItemResponse] = []
+        for item in items:
+            subject_id = subjects_by_item.get(item.id)
+            flags = register_flags_by_subject.get(subject_id, {}) if subject_id is not None else {}
+            resp_items.append(
+                _build_review_item_response(
+                    item,
+                    total_balance=balance_by_subject.get(subject_id, Decimal("0")),
+                    has_pending_acceptance=bool(flags.get("pending")),
+                    has_active_registers=any(flags.values()),
+                )
+            )
 
     return ReviewItemListResponse(
         items=resp_items,

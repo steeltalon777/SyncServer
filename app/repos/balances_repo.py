@@ -74,6 +74,21 @@ class BalancesRepo:
         stmt = select(Balance).where(Balance.inventory_subject_id == inventory_subject_id)
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def sum_by_inventory_subject_ids(self, subject_ids: list[int]) -> dict[int, Decimal]:
+        """Sum balance quantities per inventory subject (batched, no per-row queries)."""
+        if not subject_ids:
+            return {}
+        stmt = (
+            select(
+                Balance.inventory_subject_id,
+                func.coalesce(func.sum(Balance.qty), 0),
+            )
+            .where(Balance.inventory_subject_id.in_(subject_ids))
+            .group_by(Balance.inventory_subject_id)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return {int(subject_id): Decimal(str(total)) for subject_id, total in rows}
+
     async def list_balances(
         self,
         filter,

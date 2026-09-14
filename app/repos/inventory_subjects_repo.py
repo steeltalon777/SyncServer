@@ -21,6 +21,16 @@ class InventorySubjectsRepo:
         stmt = select(InventorySubject).where(InventorySubject.item_id == item_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def list_ids_by_item_ids(self, item_ids: list[int]) -> dict[int, int]:
+        """Map item_id -> inventory_subject_id for the given items (batched)."""
+        if not item_ids:
+            return {}
+        stmt = select(InventorySubject.item_id, InventorySubject.id).where(
+            InventorySubject.item_id.in_(item_ids)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return {int(item_id): int(subject_id) for item_id, subject_id in rows}
+
     async def get_for_update(self, subject_id: int) -> InventorySubject | None:
         stmt = (
             select(InventorySubject)

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, literal, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.search_utils import build_normalized_like_term, build_raw_like_term
@@ -59,6 +59,43 @@ class AssetRegistersRepo:
             return True
 
         return False
+
+    async def get_active_register_flags(
+        self,
+        subject_ids: list[int],
+    ) -> dict[int, dict[str, bool]]:
+        """Batched register flags per inventory subject for a whole page.
+
+        One query (UNION ALL of pending/lost/issued aggregates) using the same
+        predicate as ``has_active_registers``: qty > 0. Returns
+        ``{subject_id: {"pending"|"lost"|"issued": True}}``.
+        """
+        if not subject_ids:
+            return {}
+
+        def _aggregate(model, register: str):
+            return (
+                select(
+                    literal(register).label("register"),
+                    model.inventory_subject_id.label("subject_id"),
+                    func.sum(model.qty).label("qty"),
+                )
+                .where(model.inventory_subject_id.in_(subject_ids))
+                .group_by(model.inventory_subject_id)
+            )
+
+        stmt = union_all(
+            _aggregate(PendingAcceptanceBalance, "pending"),
+            _aggregate(LostAssetBalance, "lost"),
+            _aggregate(IssuedAssetBalance, "issued"),
+        )
+        rows = (await self.session.execute(stmt)).all()
+
+        flags: dict[int, dict[str, bool]] = {}
+        for register, subject_id, qty in rows:
+            if qty is not None and qty > 0:
+                flags.setdefault(int(subject_id), {})[register] = True
+        return flags
 
     async def _get_pending_for_update(self, operation_line_id: int) -> PendingAcceptanceBalance | None:
         stmt = (
