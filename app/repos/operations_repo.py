@@ -356,9 +356,19 @@ class OperationsRepo:
         if filter.client_request_id is not None:
             where_clauses.append(Operation.client_request_id == filter.client_request_id)
         if filter.effective_after is not None:
-            where_clauses.append(Operation.effective_at >= filter.effective_after)
+            # Business-time period filter uses the same fallback as the
+            # canonical list ordering: legacy rows without `effective_at`
+            # are filtered by their `created_at` so the visible "Дата",
+            # the default ordering and the period filter stay consistent.
+            where_clauses.append(
+                func.coalesce(Operation.effective_at, Operation.created_at)
+                >= filter.effective_after
+            )
         if filter.effective_before is not None:
-            where_clauses.append(Operation.effective_at <= filter.effective_before)
+            where_clauses.append(
+                func.coalesce(Operation.effective_at, Operation.created_at)
+                <= filter.effective_before
+            )
         if filter.created_after is not None:
             where_clauses.append(Operation.created_at >= filter.created_after)
         if filter.created_before is not None:
@@ -412,8 +422,18 @@ class OperationsRepo:
         )
 
         total_count = (await self.session.execute(count_stmt)).scalar_one()
+        # Canonical operations-list chronology is business time, not ingestion
+        # time: `effective_at DESC` so backdated imports land among their
+        # historical peers. `effective_at` is nullable (legacy rows); fall back
+        # to `created_at` via COALESCE so such rows keep a deterministic
+        # position. `created_at DESC` and the unique `id DESC` are stable,
+        # non-null tie-breakers that keep pagination free of duplicates/skips.
         stmt = (
-            stmt.order_by(desc(Operation.created_at))
+            stmt.order_by(
+                desc(func.coalesce(Operation.effective_at, Operation.created_at)),
+                desc(Operation.created_at),
+                desc(Operation.id),
+            )
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
